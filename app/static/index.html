@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Agent</title>
+<style>
+  :root {
+    --bg:#f6f5f1; --surface:#fcfcfb; --fg:#1d1d1b; --muted:#6b6b66; --faint:#8d8c85; --line:#e4e3dc;
+    --accent:#b4531c; --accent-ink:#fff;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b; --neutral:#8d8c85;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#121211; --surface:#1a1a19; --fg:#ecebe6; --muted:#a09f98; --faint:#7d7c76; --line:#2f2f2b;
+    --accent:#e58a4f; --accent-ink:#1a1a19;
+  } }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+
+  header.top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px; }
+  header.top h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing:-.01em; }
+  header.top .sub { color: var(--muted); font-size: 13px; }
+  header.top .right { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+
+  section.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .card-head h2 { font-size: 14px; margin: 0; font-weight: 650; }
+  .card-head .right { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  /* ---- badges: colour never carries meaning alone; every badge has an icon and a label ---- */
+  .badge { display:inline-flex; align-items:center; gap:6px; padding: 3px 10px 3px 8px; border-radius: 999px;
+           font-size: 12.5px; font-weight: 550; line-height: 1.5; color: var(--fg); white-space: nowrap;
+           background: color-mix(in srgb, var(--c, var(--neutral)) 14%, var(--surface));
+           border: 1px solid color-mix(in srgb, var(--c, var(--neutral)) 45%, var(--surface)); }
+  .badge .ico { width: 15px; height: 15px; flex: 0 0 15px; color: var(--c, var(--neutral)); }
+  .badge.good { --c: var(--good); } .badge.warning { --c: var(--warning); }
+  .badge.serious { --c: var(--serious); } .badge.critical { --c: var(--critical); }
+  .badge.accent { --c: var(--accent); }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background: var(--c, var(--neutral)); flex:0 0 8px; }
+  .badge.pulse .dot { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
+                     50% { box-shadow: 0 0 0 6px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .badge.pulse .dot, .bars i { animation: none !important; } }
+
+  /* ---- stat tiles ---- */
+  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border:1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width:0; }
+  .tile .label { color: var(--muted); font-size: 12.5px; display:flex; align-items:center; gap:6px; }
+  .tile .label .ico { width:14px; height:14px; color: var(--c, var(--neutral)); }
+  .tile .value { font-size: 26px; font-weight: 650; letter-spacing:-.02em; margin-top: 2px; line-height:1.2; }
+  .tile .note { color: var(--faint); font-size: 12px; min-height: 18px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius: 8px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; padding:5px 12px; font-size:13px; background:transparent; color:var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--fg); color: var(--surface); }
+
+  /* ---- live calls ---- */
+  .live-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .live { border:1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--bg); min-width:0; }
+  .live .who { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .live .who b { font-size: 15px; }
+  .live .timer { margin-left:auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .live .meta { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .live .say { font-size: 13px; color: var(--muted); margin-top: 8px; border-top:1px dashed var(--line); padding-top:8px; max-height: 84px; overflow:hidden; }
+  .live .say div { white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+  .live .say .a { color: var(--fg); }
+  .bars { display:inline-flex; gap:2px; align-items:flex-end; height:12px; margin-left:2px; }
+  .bars i { width:3px; background: var(--c); border-radius:2px; animation: bars 0.9s ease-in-out infinite; transform-origin: bottom; }
+  .bars i:nth-child(1){height:40%} .bars i:nth-child(2){height:100%;animation-delay:.15s} .bars i:nth-child(3){height:65%;animation-delay:.3s}
+  @keyframes bars { 0%,100% { transform: scaleY(.4);} 50% { transform: scaleY(1);} }
+  .empty { color: var(--muted); font-size: 13.5px; padding: 6px 2px; }
+
+  /* ---- controls ---- */
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.call { background: var(--fg); color: var(--surface); border-color: var(--fg); font-weight: 600; display:inline-flex; align-items:center; gap:6px; }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input[type=file], .fld { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); max-width: 100%; }
+  select { min-width: 300px; flex: 1; } .fld { flex: 1; min-width: 140px; }
+  #status { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  #transcript { height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 10px; font-size: 14px; background: var(--bg); }
+  .line { margin: 4px 0; white-space: pre-wrap; } .agent { color: var(--accent); } .customer { color: var(--fg); }
+  .line.meta { color: var(--muted); font-size: 13px; } .line.error { color: var(--critical); font-size: 13px; }
+  details.sub > summary { cursor:pointer; font-size: 14px; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align:left; font-weight: 550; color: var(--muted); font-size: 12.5px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td small { color: var(--muted); }
+  pre { white-space: pre-wrap; margin: 6px 0 0; font: 12.5px/1.5 ui-monospace, Consolas, monospace; color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Voice Agent</h1>
+      <div class="sub">Order confirmation calls · Vedic Vaibhav</div>
+    </div>
+    <div class="right">
+      <span id="livecount"></span>
+      <span id="linebadge"></span>
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="card-head" style="margin-bottom:8px">
+    <h2>Overview</h2>
+    <div class="right">
+      <div class="seg" role="group" aria-label="Period">
+        <button id="p_today" aria-pressed="true">Today</button><button id="p_all" aria-pressed="false">All time</button>
+      </div>
+    </div>
+  </div>
+  <div class="tiles" id="tiles" style="margin-bottom:16px"></div>
+
+  <!-- Live -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Live calls</h2>
+      <span class="hint">Ringing and in-progress calls appear here and update every second.</span>
+    </div>
+    <div id="live" class="live-grid"></div>
+  </section>
+
+  <!-- Make a call -->
+  <section class="card">
+    <div class="card-head"><h2>Make a call</h2><span class="hint" id="model"></span></div>
+    <div class="row">
+      <select id="contact"></select>
+      <select id="voice" style="min-width:150px;flex:0" title="Agent voice"></select>
+      <select id="modelSel" style="min-width:170px;flex:0" title="Gemini model"></select>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="hint">Phone call to</span>
+      <input class="fld" id="dialto" placeholder="10-digit mobile number" inputmode="tel" style="max-width:200px">
+      <button id="dial" class="call" disabled title="Places a real, paid phone call">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>
+        Call this number</button>
+      <span class="hint" style="margin-left:auto">or</span>
+      <button id="start" class="primary">Test in browser</button>
+      <button id="hangup" disabled>Hang up</button>
+    </div>
+    <div id="plivoinfo" class="hint" style="margin-top:10px"></div>
+
+    <details class="sub" id="browserpanel" style="margin-top:12px">
+      <summary>Browser test console</summary>
+      <div id="status">Pick a contact and press Test in browser. Use headphones so the mic does not hear the speaker.</div>
+      <div class="row" style="margin-top:8px">
+        <span class="hint">Mic</span>
+        <div style="flex:0 0 160px;height:8px;border:1px solid var(--line);border-radius:4px;overflow:hidden"><div id="meter" style="height:100%;width:0;background:var(--accent)"></div></div>
+        <span id="micinfo" class="hint">not started</span>
+        <label class="hint" style="margin-left:auto;cursor:pointer"><input type="checkbox" id="mute"> Mute mic (I will type the replies)</label>
+      </div>
+      <div id="transcript"></div>
+      <div class="row" style="margin-top:8px">
+        <input id="typed" class="fld" type="text" placeholder="Or type what the customer says and press Enter" disabled>
+        <button id="send" disabled>Send</button>
+      </div>
+    </details>
+  </section>
+
+  <!-- History -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Call history</h2>
+      <div class="right"><button id="clearcalls">Clear history</button><button id="refresh">Refresh</button></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Type</th><th>Started</th><th>Customer</th><th>Length</th><th>Outcome</th><th>Est. cost</th><th>Transcript</th></tr></thead>
+        <tbody id="calls"></tbody>
+      </table>
+    </div>
+    <div id="nocalls" class="empty" hidden>No calls yet.</div>
+  </section>
+
+  <!-- Contacts -->
+  <section class="card">
+    <div class="card-head"><h2>Contacts</h2><span class="hint" id="contactcount"></span></div>
+    <div class="row">
+      <input type="file" id="file" accept=".xlsx">
+      <button id="upload">Upload Excel</button>
+      <a href="/api/contacts/template">Download template</a>
+      <button id="clear" style="margin-left:auto">Clear all contacts</button>
+    </div>
+    <details class="sub" style="margin-top:12px">
+      <summary>Add one contact by hand</summary>
+      <div class="row" style="margin-top:10px">
+        <input class="fld" id="m_name" placeholder="Customer name *">
+        <input class="fld" id="m_phone" placeholder="Phone (10 digits) *" inputmode="tel">
+        <input class="fld" id="m_order" placeholder="Order ID">
+        <input class="fld" id="m_product" placeholder="Product">
+        <input class="fld" id="m_qty" placeholder="Qty" style="max-width:70px">
+        <input class="fld" id="m_amount" placeholder="Amount Rs" style="max-width:110px">
+        <select id="m_pay" style="min-width:110px;flex:0"><option>COD</option><option>Prepaid</option></select>
+        <select id="m_lang" style="min-width:110px;flex:0"><option>hinglish</option><option>hindi</option><option>english</option></select>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input class="fld" id="m_address" placeholder="Delivery address" style="flex:2">
+        <input class="fld" id="m_date" placeholder="Delivery date, e.g. 25 September 2026">
+        <button id="m_add">Add contact</button>
+      </div>
+    </details>
+  </section>
+</main>
+<script src="/static/dashboard.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
