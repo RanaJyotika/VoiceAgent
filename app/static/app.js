@@ -32,6 +32,8 @@ function log(text, cls = '') {
 }
 
 function setStatus(text) { $('status').textContent = text; }
+// For results of one-off actions: the status line sits inside the console sheet, so also show a toast.
+function notify(text) { setStatus(text); if (window.toast) window.toast(text); }
 
 let contactRows = [];
 function syncDialTo() {
@@ -73,7 +75,9 @@ async function upload() {
   const r = await fetch('/api/contacts/upload', { method: 'POST', body: fd });
   const j = await r.json();
   if (!r.ok) return alert(j.detail || 'Upload failed');
-  setStatus(`Imported ${j.imported} contacts`);
+  notify(`Imported ${j.imported} contacts`);
+  $('file').value = '';
+  $('filename').textContent = 'Choose an Excel file';
   await loadContacts();
 }
 
@@ -111,7 +115,7 @@ async function startCall() {
   if (!contactId) return alert('Pick a contact');
   $('start').disabled = true;
   $('hangup').disabled = false;
-  $('browserpanel').open = true;
+  if (window.openSheet) window.openSheet('console');
   $('transcript').innerHTML = '';
   agentLine = customerLine = null;
 
@@ -192,9 +196,15 @@ async function startCall() {
   ws.onerror = () => { log('WebSocket error', 'error'); cleanup(); };
 }
 
-function hangup() {
+function hangupBrowserCall() {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'hangup' }));
   cleanup();
+}
+window.hangupBrowserCall = hangupBrowserCall;
+// Dock button: ends the browser test if one is running, otherwise the newest live phone call.
+function hangup() {
+  if (ws) return hangupBrowserCall();
+  if (window.hangupNewestLive) window.hangupNewestLive();
 }
 
 function cleanup() {
@@ -275,7 +285,8 @@ Only call numbers of people who expect it.`)) return;
   const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, to });
   const r = await fetch(`/api/calls/dial/${contactId}?${qs}`, { method: 'POST' });
   const j = await r.json();
-  setStatus(r.ok ? `Dialing ${j.dialed}… Watch the Live calls panel above.` : 'Could not dial: ' + (j.detail || r.status));
+  notify(r.ok ? `Dialing ${j.dialed}… Watch the Live calls panel.` : 'Could not dial: ' + (j.detail || r.status));
+  if (r.ok && window.openSheet) window.openSheet(null);
 };
 $('m_add').onclick = async () => {
   const row = {
@@ -288,7 +299,7 @@ $('m_add').onclick = async () => {
   const j = await r.json();
   if (!r.ok) return alert(j.detail || 'Could not add the contact');
   for (const id of ['m_name', 'm_phone', 'm_order', 'm_product', 'm_qty', 'm_amount', 'm_address', 'm_date']) $(id).value = '';
-  setStatus('Contact added.');
+  notify('Contact added.');
   await loadContacts();
 };
 loadPlivo();

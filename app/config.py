@@ -12,7 +12,7 @@ PHONE_NUMBER = os.getenv("PHONE_NUMBER", "")
 
 GEMINI_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Aoede")
-AGENT_NAME = os.getenv("AGENT_NAME", "Priya")            # used with female voices
+AGENT_NAME = os.getenv("AGENT_NAME", "Gauri")            # used with female voices
 AGENT_NAME_MALE = os.getenv("AGENT_NAME_MALE", "Arjun")  # used with male voices
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "Vedic Vaibhav")
 AFFECTIVE_DIALOG = os.getenv("AFFECTIVE_DIALOG", "true").lower() == "true"
@@ -63,6 +63,18 @@ def plivo_missing() -> list[str]:
 # customer has finished speaking only when it hears a pause, so we turn low-level sound into
 # true silence before sending it on. Set NOISE_GATE=false to switch this off.
 NOISE_GATE = os.getenv("NOISE_GATE", "true").lower() != "false"
+# Languages the customer is expected to speak, as a hint for the written transcript only
+# (e.g. "hi-IN,en-IN"). Off by default: on a real call it changed nothing (Hindi was still written
+# in Urdu and Gurmukhi script), and that call was the first to hit Gemini "1011 internal error".
+TRANSCRIPT_LANGUAGES = [c.strip() for c in os.getenv("TRANSCRIPT_LANGUAGES", "").split(",") if c.strip()]
+
+# Who decides when the customer starts and stops speaking on a phone call.
+# "manual": we do, from the loudness of the line, and tell Gemini explicitly. Gemini's own
+# detector kept missing short phone replies ("haan ji"), so the customer had to repeat themselves.
+# "auto": leave it to Gemini, as the browser test does.
+PHONE_VAD = os.getenv("PHONE_VAD", "manual").lower()
+# Manual mode: this much quiet after speech means the customer has finished their sentence.
+PHONE_END_SILENCE_MS = int(os.getenv("PHONE_END_SILENCE_MS", "600"))
 # If the customer has clearly spoken and the agent still has not replied after this many
 # seconds, we tell Gemini "the customer paused" so it answers instead of waiting forever.
 REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "6"))
@@ -71,6 +83,7 @@ REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "6"))
 # Add your own products here; matching ignores upper/lower case.
 PRONUNCIATION = {
     "Vedic Vaibhav": "वैदिक वैभव",
+    "Gauri": "गौरी",
     "Shri Yantra": "श्री यंत्र",
     "Sri Yantra": "श्री यंत्र",
     "Rudraksha": "रुद्राक्ष",

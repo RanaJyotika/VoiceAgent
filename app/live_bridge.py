@@ -9,6 +9,7 @@ import audioop
 import contextlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -18,13 +19,32 @@ from google.genai import types
 
 from . import db
 from .config import (AFFECTIVE_DIALOG, GEMINI_LIVE_MODEL, GEMINI_THINKING_BUDGET, GEMINI_VOICE,
-                     GOOGLE_API_KEY, REPLY_WATCHDOG_SECONDS)
+                     GOOGLE_API_KEY, REPLY_WATCHDOG_SECONDS, TRANSCRIPT_LANGUAGES)
 from .tools import TOOLS
 
 log = logging.getLogger("bridge")
 
 # Calls that are ringing or in progress right now, for the dashboard's live panel.
 ACTIVE: dict[int, dict] = {}
+
+# Markers an audio source can put on the incoming queue when it does its own speech detection
+# (manual_vad): "the customer started talking" / "the customer stopped talking".
+# With affective dialog on, the model's private mood notes sometimes leak into the written
+# transcript: "emotion_user\ncalmness<ctrl95>emotion_model\ncalmness<ctrl95>". They are not spoken.
+_MOOD_NOTE = re.compile(r"emotion_(?:user|model)\s*[a-zA-Z_]*\s*(?:<ctrl\d+>)?")
+
+
+def clean_agent_text(text: str) -> str:
+    return re.sub(r"<ctrl\d+>", "", _MOOD_NOTE.sub("", text)).strip()
+
+
+MAX_RECONNECTS = 3
+_refused_models: set[str] = set()   # models that closed a session with "1007 invalid argument"
+
+_hints_ok = True # set to False once a model refuses the transcript language hint
+
+ACTIVITY_START = object()
+ACTIVITY_END = object()
 
 SendAudio = Callable[[bytes], Awaitable[None]]
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
@@ -43,6 +63,7 @@ class CallState:
     idle_since: float | None = None     # when the agent last finished a turn
     loud_since: float | None = None     # first clear customer sound after that
     nudges: int = 0
+    address_checked: bool = False       # mark_outcome was already sent back once for a missing PIN code
     reconnects: int = 0
     error: str | None = None
     _in_buf: str = ""
@@ -57,15 +78,31 @@ class CallState:
     def flush_turn(self) -> None:
         if self._in_buf.strip():
             self.transcript.append({"role": "customer", "text": self._in_buf.strip()})
-        if self._out_buf.strip():
-            self.transcript.append({"role": "agent", "text": self._out_buf.strip()})
+        if clean_agent_text(self._out_buf):
+            self.transcript.append({"role": "agent", "text": clean_agent_text(self._out_buf)})
         self._in_buf = ""
         self._out_buf = ""
 
 
 def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
-                 sensitive_listening: bool = False, fast: bool = True) -> types.LiveConnectConfig:
+                 sensitive_listening: bool = False, fast: bool = True,
+                 manual_vad: bool = False, language_hints: bool = False) -> types.LiveConnectConfig:
     extra: dict[str, Any] = {}
+    heard = types.AudioTranscriptionConfig(language_codes=TRANSCRIPT_LANGUAGES) if language_hints \
+        else types.AudioTranscriptionConfig()
+    if manual_vad:
+        # The audio source marks speech itself with ACTIVITY_START / ACTIVITY_END.
+        detection = types.AutomaticActivityDetection(disabled=True)
+    else:
+        detection = types.AutomaticActivityDetection(
+            disabled=False,
+            # LOW = a sound must be clearly speech before it counts as the customer talking.
+            # HIGH made line noise interrupt the agent mid-sentence on real phone calls.
+            start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+            end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+            prefix_padding_ms=200,
+            silence_duration_ms=500 if sensitive_listening else 600,
+        )
     if AFFECTIVE_DIALOG:
         # Lets the model match the caller's tone and emotion instead of a flat read.
         extra["enable_affective_dialog"] = True
@@ -83,19 +120,9 @@ def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
             )
         ),
         tools=TOOLS,
-        input_audio_transcription=types.AudioTranscriptionConfig(),
+        input_audio_transcription=heard,
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        realtime_input_config=types.RealtimeInputConfig(
-            automatic_activity_detection=types.AutomaticActivityDetection(
-                disabled=False,
-                # LOW = a sound must be clearly speech before it counts as the customer talking.
-                # HIGH made line noise interrupt the agent mid-sentence on real phone calls.
-                start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
-                end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                prefix_padding_ms=200,
-                silence_duration_ms=500 if sensitive_listening else 600,
-            )
-        ),
+        realtime_input_config=types.RealtimeInputConfig(automatic_activity_detection=detection),
     )
 
 
@@ -110,6 +137,7 @@ async def run_call(
     model: str = GEMINI_LIVE_MODEL,
     voice: str = GEMINI_VOICE,
     sensitive_listening: bool = False,
+    manual_vad: bool = False,
     start_gate: "asyncio.Event | None" = None,
     meta: dict | None = None,
 ) -> CallState:
@@ -119,6 +147,8 @@ async def run_call(
     only start the greeting when the gate opens (the customer picked up), so the greeting
     is not delayed by connection setup. Waiting connected costs nothing.
     """
+    if model in _refused_models:
+        model = GEMINI_LIVE_MODEL
     call_id = db.start_call(contact["id"] if contact else None, channel)
     state = CallState(call_id=call_id)
     ACTIVE[call_id] = {"state": state, "contact": contact or {}, "channel": channel, "gate": start_gate,
@@ -131,17 +161,26 @@ async def run_call(
 
     async def session_once(prompt: str, opening: str, first: bool) -> None:
         async with contextlib.AsyncExitStack() as stack:
+            global _hints_ok
             session = None
-            for fast in fast_modes:
+            # Optional settings a model may refuse. Try the full set first, then drop them one by one.
+            attempts = [(fast, hints) for fast in fast_modes
+                        for hints in ([True, False] if TRANSCRIPT_LANGUAGES and _hints_ok else [False])]
+            for n, (fast, hints) in enumerate(attempts):
                 try:
                     session = await stack.enter_async_context(client.aio.live.connect(
-                        model=model, config=build_config(prompt, voice, sensitive_listening, fast)))
-                    log.info("call %s: connected to %s (fast replies %s)", call_id, model, "on" if fast else "off")
+                        model=model, config=build_config(prompt, voice, sensitive_listening, fast, manual_vad, hints)))
+                    log.info("call %s: connected to %s (fast replies %s, transcript language hint %s)",
+                             call_id, model, "on" if fast else "off", "on" if hints else "off")
                     break
                 except Exception as exc:  # noqa: BLE001
-                    if fast is False:
+                    if n == len(attempts) - 1:
                         raise
-                    log.warning("call %s: fast mode was refused (%s); retrying with model defaults", call_id, exc)
+                    if hints:
+                        _hints_ok = False   # do not waste a connection attempt on every later call
+                        log.warning("call %s: transcript language hint was refused (%s); retrying without it", call_id, exc)
+                    else:
+                        log.warning("call %s: fast mode was refused (%s); retrying with model defaults", call_id, exc)
             await send_event({"type": "status", "text": "connected"})
 
             if start_gate is not None and first:
@@ -151,17 +190,44 @@ async def run_call(
             # Ask the agent to open the call. Phone calls start with the agent speaking.
             # A completed turn makes the agent greet at once. (A realtime text message would
             # wait for the microphone to go quiet first, which never happens in a noisy room.)
-            await session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(text=opening)]),
-                turn_complete=True,
-            )
+            if model.startswith("gemini-2."):
+                await session.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part(text=opening)]),
+                    turn_complete=True,
+                )
+            else:
+                # Newer live models close the session with "1007 invalid argument" on a
+                # client_content turn. They take text on the realtime channel instead; with our own
+                # speech detection the text has to sit inside a start/end pair to count as a turn.
+                if manual_vad:
+                    await session.send_realtime_input(activity_start=types.ActivityStart())
+                await session.send_realtime_input(text=opening)
+                if manual_vad:
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
             log.info("call %s: opening sent, voice=%s model=%s", call_id, voice, model)
 
             async def pump_in() -> None:
+                in_activity = False   # manual_vad: between ACTIVITY_START and ACTIVITY_END
                 while True:
                     chunk = await incoming_audio.get()
                     if chunk is None or state.ended:
                         return
+                    if chunk is ACTIVITY_START:
+                        in_activity = True
+                        log.info("call %s: customer started talking at %.1fs", call_id, time.monotonic() - state.started)
+                        await session.send_realtime_input(activity_start=types.ActivityStart())
+                        continue
+                    if chunk is ACTIVITY_END:
+                        if in_activity:   # a marker left over from before a reconnect has no start
+                            in_activity = False
+                            log.info("call %s: customer stopped talking at %.1fs", call_id, time.monotonic() - state.started)
+                            await session.send_realtime_input(activity_end=types.ActivityEnd())
+                        continue
+                    if manual_vad and isinstance(chunk, bytes):
+                        if in_activity:
+                            await session.send_realtime_input(
+                                audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000"))
+                        continue
                     if isinstance(chunk, str):
                         # Typed customer reply from the test page (no microphone needed).
                         state.transcript.append({"role": "customer", "text": chunk})
@@ -270,21 +336,35 @@ async def run_call(
         return alive
 
     try:
-        try:
-            await session_once(system_prompt, OPENING, True)
-        except Exception as exc:  # noqa: BLE001
-            # The connection to Gemini dropped (network blip, server reset). The customer is still
-            # on the line, so reconnect once and carry on instead of going silent and hanging up.
-            if state.ended or not drain_stale_audio():
-                raise
-            state.flush_turn()
-            state.reconnects += 1
-            log.warning("call %s: connection to Gemini dropped (%s: %s); reconnecting once", call_id, type(exc).__name__, exc)
-            so_far = "\n".join(f"{'You' if t['role'] == 'agent' else 'Customer'}: {t['text']}" for t in state.transcript) or "(nothing yet)"
-            resume_prompt = (system_prompt + "\n\nTHE LINE DROPPED FOR A MOMENT AND IS BACK. Conversation so far:\n" + so_far +
-                             "\nDo not greet or introduce yourself again. Say one short apology for the break "
-                             "(for example: 'sorry ji, awaaz cut gayi thi') and continue from where you stopped.")
-            await session_once(resume_prompt, "[The line is back. Apologise briefly for the break and continue.]", False)
+        prompt, opening = system_prompt, OPENING
+        while True:
+            try:
+                await session_once(prompt, opening, state.reconnects == 0)
+                break
+            except Exception as exc:  # noqa: BLE001
+                # The connection to Gemini dropped (network blip, Gemini "1011 internal error"). The
+                # customer is still on the line, so reconnect and carry on instead of going silent
+                # and hanging up. Gemini has failed twice in one call, so allow a few tries.
+                if state.ended or state.reconnects >= MAX_RECONNECTS or not drain_stale_audio():
+                    raise
+                state.flush_turn()
+                state.reconnects += 1
+                log.warning("call %s: connection to Gemini dropped (%s: %s); reconnecting (%s of %s)",
+                            call_id, type(exc).__name__, exc, state.reconnects, MAX_RECONNECTS)
+                if "1007" in str(exc) and model != GEMINI_LIVE_MODEL:
+                    # "Invalid argument" is not a blip: this model refuses how we talk to it, and
+                    # would refuse again. Carry the call on the default model instead of dropping it.
+                    log.warning("call %s: %s refused the session; switching to %s", call_id, model, GEMINI_LIVE_MODEL)
+                    _refused_models.add(model)   # later calls skip it at once instead of greeting 3 s late
+                    model = GEMINI_LIVE_MODEL
+                if not state.transcript:
+                    continue   # nothing was said yet: greet normally, there is no break to apologise for
+                so_far = "\n".join(f"{'You' if t['role'] == 'agent' else 'Customer'}: {t['text']}" for t in state.transcript) or "(nothing yet)"
+                prompt = (system_prompt + "\n\nTHE LINE DROPPED FOR A MOMENT AND IS BACK. Conversation so far:\n" + so_far +
+                          "\nDo not greet or introduce yourself again. Say one short apology for the break "
+                          "(for example: 'sorry ji, awaaz cut gayi thi') and continue from where you stopped. "
+                          "If the conversation above was already finished, just say a short goodbye, then call mark_outcome and end_call.")
+                opening = "[The line is back. Apologise briefly for the break and continue.]"
     except Exception as exc:  # noqa: BLE001
         log.exception("call %s failed", call_id)
         state.error = f"{type(exc).__name__}: {exc}"
@@ -314,11 +394,27 @@ async def run_call(
 async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_event: SendEvent) -> dict[str, Any]:
     log.info("tool %s %s", name, json.dumps(args, ensure_ascii=False))
     if name == "mark_outcome":
+        address = str(args.get("new_address") or "")
+        if address and not re.search(r"(?<!\d)\d{3}\s?\d{3}(?!\d)", address) and not state.address_checked:
+            # Refused once only, so a customer who truly cannot give a PIN code does not trap the call.
+            state.address_checked = True
+            log.info("call %s: new address has no 6-digit PIN code; asking the agent to complete it", state.call_id)
+            return {"status": "not recorded", "reason": "new_address has no valid 6-digit PIN code. Do not end the call yet. "
+                    "Ask the customer for the PIN code digit by digit, read the full address back, then call mark_outcome again. "
+                    "If they cannot give it, call mark_outcome again and say in notes that the team will take the address on WhatsApp."}
         state.outcome = args.get("outcome", "unclear")
         state.outcome_details = args
         await send_event({"type": "outcome", "outcome": state.outcome, "details": args})
         return {"status": "recorded"}
     if name == "end_call":
+        # A call that the agent ends within seconds of pick-up, before the customer has said
+        # anything we could write down, is a mistake (it once hung up on a customer's "hello").
+        heard = any(t["role"] == "customer" for t in state.transcript) or state._in_buf.strip()
+        if time.monotonic() - state.started < 12 and not heard:
+            log.warning("call %s: agent tried to hang up %.1fs after pick-up; refused", state.call_id, time.monotonic() - state.started)
+            state.outcome = state.outcome_details = None
+            return {"status": "refused", "reason": "The customer has only just picked up and is on the line. "
+                    "Do not hang up. Greet them and run the call."}
         state.ended = True
         return {"status": "ending"}
     return {"error": f"unknown tool {name}"}
@@ -342,8 +438,8 @@ def live_snapshot() -> list[dict]:
         lines = list(state.transcript[-3:])
         if state._in_buf.strip():
             lines.append({"role": "customer", "text": state._in_buf.strip()})
-        if state._out_buf.strip():
-            lines.append({"role": "agent", "text": state._out_buf.strip()})
+        if clean_agent_text(state._out_buf):
+            lines.append({"role": "agent", "text": clean_agent_text(state._out_buf)})
         c = a["contact"]
         out.append({
             "call_id": call_id, "channel": a["channel"], "status": status, "seconds": round(seconds),

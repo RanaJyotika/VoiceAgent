@@ -20,12 +20,13 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
-from . import db
-from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS, PHONE_NUMBER,
+from . import db, vad
+from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
+                     PHONE_END_SILENCE_MS, PHONE_NUMBER, PHONE_VAD,
                      PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER, PUBLIC_BASE_URL,
                      VOICES, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
-from .live_bridge import run_call
+from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, run_call
 from .prompts import get_prompt
 
 log = logging.getLogger("plivo")
@@ -99,6 +100,8 @@ class PendingCall:
 
     def __init__(self, contact: dict, voice: str, model: str = GEMINI_LIVE_MODEL, to: str = "") -> None:
         self.to = to
+        self.token = ""
+        self.request_uuid = ""
         self.contact = contact
         self.voice = voice
         self.model = model
@@ -108,6 +111,21 @@ class PendingCall:
         self.echo_sum = 0.0                   # loudness of the line while ONLY the agent talks
         self.echo_n = 0
         self.gate_open_until = 0.0
+        self.vad = vad.SpeechDetector() if vad.available() else None   # None = judge by loudness
+        self.voice_level = 0.0                # running loudness of this customer's voice, for boost()
+        # --- manual speech detection state (PHONE_VAD=manual) ---
+        self.greeting_generated = False       # the agent's first turn is complete (still playing)
+        self.greeted = False                  # ...and has finished playing on the phone
+        self.listen_from = 0.0                # safety: listen anyway from this moment
+        self.in_speech = False
+        self.voiced_run = 0                   # loud frames in a row while waiting for speech
+        self.quiet_run = 0                    # quiet frames since the last loud one
+        self.reply_pending = False            # the customer finished; the agent's reply is on its way
+        self.reply_due = 0.0
+        self.preroll: deque = deque(maxlen=30)  # last 600 ms, replayed when speech starts
+        self.speech_started = 0.0
+        self.last_voiced = 0.0
+        self.seg_peak, self.seg_voiced, self.seg_over_agent = 0, 0, False   # for the log line per reply
         self.stats = {"frames": 0, "silenced": 0, "bargein": 0}
         self.incoming: asyncio.Queue = asyncio.Queue()
         self.answered = asyncio.Event()
@@ -123,6 +141,7 @@ class PendingCall:
     async def send_audio(self, pcm24k: bytes) -> None:
         """Called by the agent. Only queues: it must never wait on the phone network, because a
         slow phone line would then stall the Gemini connection until it times out."""
+        self.reply_pending = False
         pcm16k, self.resample_state = audioop.ratecv(pcm24k, 2, 1, 24000, 16000, self.resample_state)
         for i in range(0, len(pcm16k), CHUNK_BYTES):
             self.outbox.put_nowait(pcm16k[i:i + CHUNK_BYTES])
@@ -161,17 +180,16 @@ class PendingCall:
     def on_answered(self) -> None:
         if not self.answered.is_set():
             self.answered.set()
-            self.silence = asyncio.create_task(self._silence_loop())
+            if PHONE_VAD != "manual":      # manual mode sends audio only while the customer talks
+                self.silence = asyncio.create_task(self._silence_loop())
 
     def stop_tasks(self) -> None:
         for t in (self.sender, self.silence):
             if t:
                 t.cancel()
 
-    def clean(self, pcm: bytes) -> bytes:
-        """Turn line noise and the agent's own echo into true silence; let real speech through."""
-        if not NOISE_GATE or not pcm:
-            return pcm
+    def is_speech(self, pcm: bytes) -> bool:
+        """Is this frame the customer talking, as opposed to line noise or the agent's own echo?"""
         now = time.monotonic()
         level = audioop.rms(pcm, 2)
         self.levels.append(level)
@@ -180,25 +198,126 @@ class PendingCall:
         floor = ordered[len(ordered) // 5]                 # 20th percentile = the background level
         threshold = max(300.0, floor * 2.2)
 
-        agent_talking = now < self.play_until + 0.3
-        if agent_talking:
+        echo = self.echo_sum / max(1, self.echo_n)
+        agent_talking = self.agent_talking(now)
+        if agent_talking and self.echo_n < 150:
             # Learn how loud the agent's own voice comes back on this line (first ~3 s of it).
-            if self.echo_n < 150:
-                self.echo_sum += level
-                self.echo_n += 1
-            echo = self.echo_sum / max(1, self.echo_n)
-            # To interrupt the agent, the customer must be clearly louder than that echo.
-            threshold = max(threshold, echo * 2.5, 900.0)
+            self.echo_sum += level
+            self.echo_n += 1
 
-        if level >= threshold:
+        if self.vad is not None:
+            # Voice pattern, not loudness: a soft voice counts, a loud knock does not.
+            prob = self.vad.feed(pcm)
+            if agent_talking:
+                # The agent's own echo IS a voice, so over the agent loudness still has to clear it.
+                speech = prob >= 0.6 and level >= max(echo * 2.5, 500.0)
+            else:
+                speech = prob >= 0.5 and level >= 60
+        else:
+            if agent_talking:
+                # To interrupt the agent, the customer must be clearly louder than that echo.
+                threshold = max(threshold, echo * 2.5, 900.0)
+            speech = level >= threshold
+
+        if speech:
+            self.voice_level = level if not self.voice_level else 0.9 * self.voice_level + 0.1 * level
             if agent_talking:
                 self.stats["bargein"] += 1
+        return speech
+
+    def agent_talking(self, now: float) -> bool:
+        """Is the agent's voice still coming out of the customer's phone? On a line with echo
+        (speakerphone) the tail arrives late, so allow longer before trusting the line again."""
+        echo = self.echo_sum / max(1, self.echo_n)
+        return now < self.play_until + (0.8 if echo > 100 else 0.3)
+
+    def boost(self, pcm: bytes) -> bytes:
+        """Bring a soft or distant voice up to a normal level before the agent hears it."""
+        if not self.voice_level or self.voice_level >= 2000:
+            return pcm
+        return audioop.mul(pcm, 2, min(6.0, 2000 / self.voice_level))
+
+    def clean(self, pcm: bytes) -> bytes:
+        """Turn line noise and the agent's own echo into true silence; let real speech through."""
+        if not NOISE_GATE or not pcm:
+            return pcm
+        now = time.monotonic()
+        if self.is_speech(pcm):
             self.gate_open_until = now + 0.35              # keep word endings
             return pcm
         if now < self.gate_open_until:
             return pcm
         self.stats["silenced"] += 1
         return b"\x00" * len(pcm)
+
+    def listen(self, pcm: bytes) -> list:
+        """What to pass to the agent for one frame from the phone.
+
+        Manual mode: nothing while the line is quiet. When the customer starts talking we send a
+        start marker plus the last moments of audio (so the first syllable is not lost), then the
+        live audio, then an end marker once they have been quiet for PHONE_END_SILENCE_MS.
+        """
+        if PHONE_VAD != "manual":
+            return [self.clean(pcm)]
+        now = time.monotonic()
+        voiced = self.is_speech(pcm)
+        if not self.greeted:
+            # People say "hello" as they pick up. Passing that on cut the greeting off before it
+            # began, and the agent then hung up thinking nobody was there. So the customer is only
+            # listened to once the greeting has been fully played (or 20 s, if it never comes).
+            self.listen_from = self.listen_from or now + 20
+            played = self.greeting_generated and self.outbox.empty() and now >= self.play_until
+            if played or now >= self.listen_from:
+                self.greeted = True
+                log.info("greeting finished; now listening to the customer")
+            else:
+                return []
+        if not self.in_speech:
+            self.preroll.append(pcm)
+            # Count loud frames, forgiving the tiny dips inside a word (up to 60 ms).
+            if voiced:
+                self.voiced_run, self.quiet_run = self.voiced_run + 1, 0
+            else:
+                self.quiet_run += 1
+                if self.quiet_run > 3:
+                    self.voiced_run = 0
+            # How much sound counts as "the customer is talking":
+            # - 120 ms normally: rules out clicks, pops and knocks.
+            # - 240 ms over the agent: a cough or a "hmm" must not cut the agent off mid-sentence.
+            # - 400 ms while the agent is preparing its reply. Any start marker in that gap throws
+            #   the reply away; on real calls a breath or a bump there cost 4 to 8 s of silence.
+            #   A customer who really carries on talking easily passes 400 ms.
+            # The pre-roll is replayed when speech starts, so waiting loses no audio.
+            self.seg_over_agent = self.agent_talking(now)
+            if now > self.reply_due:
+                self.reply_pending = False
+            need = 12 if self.seg_over_agent else 20 if self.reply_pending else 6
+            if self.voiced_run < need:
+                self.stats["silenced"] += 1
+                return []
+            self.in_speech, self.voiced_run, self.quiet_run = True, 0, 0
+            self.speech_started = self.last_voiced = now
+            self.seg_peak, self.seg_voiced = 0, 0
+            out = [ACTIVITY_START, *(self.boost(f) for f in self.preroll)]
+            self.preroll.clear()
+            return out
+        if voiced:
+            self.last_voiced = now
+            self.seg_voiced += 1
+            self.seg_peak = max(self.seg_peak, self.levels[-1])
+        # 20 s cap: a line that never goes quiet must not keep the agent waiting forever.
+        if now - self.last_voiced >= PHONE_END_SILENCE_MS / 1000 or now - self.speech_started > 20:
+            self.in_speech = False
+            self.reply_pending, self.reply_due = True, now + 8   # cleared when the agent's audio arrives
+            # Real replies are long and loud; a knock or a clatter is short. Used to tune the detector.
+            log.info("customer sound: %.1fs of voice, loudest level %s, usual voice level %.0f, over the agent: %s",
+                     self.seg_voiced * 0.02, self.seg_peak, self.voice_level, "yes" if self.seg_over_agent else "no")
+            return [self.boost(pcm), ACTIVITY_END]
+        if self.vad is not None and now - self.last_voiced > 0.2:
+            # A gap between the customer's words: turn the room noise down so the agent hears
+            # mostly voice. (Turned down, not cut, so the audio still sounds natural to it.)
+            return [audioop.mul(pcm, 2, 0.15)]
+        return [self.boost(pcm)]
 
     async def attach(self, ws: WebSocket) -> None:
         self.ws = ws
@@ -207,6 +326,8 @@ class PendingCall:
         log.info("audio line attached; %s prepared audio chunks waiting", waiting)
 
     async def send_event(self, evt: dict) -> None:
+        if evt.get("type") == "turn_complete":
+            self.greeting_generated = True
         # The customer talked over the agent: drop whatever audio Plivo still has queued.
         if evt.get("type") == "interrupted":
             while not self.outbox.empty():
@@ -233,8 +354,9 @@ def _start_agent(pc: PendingCall) -> None:
         voice=pc.voice,
         model=pc.model,
         sensitive_listening=True,   # phone channel tuning
+        manual_vad=PHONE_VAD == "manual",
         start_gate=pc.answered,
-        meta={"to": pc.to},
+        meta={"to": pc.to, "token": pc.token},
     ))
 
 
@@ -287,6 +409,8 @@ async def dial(contact_id: int, voice: str = GEMINI_VOICE, to: str = "", model: 
 
     # Get the agent ready while the phone rings, so it can greet the moment they pick up.
     pc = PendingCall(contact, voice, model if model in ALLOWED_MODELS else GEMINI_LIVE_MODEL, to_number)
+    pc.token = token
+    pc.request_uuid = str(r.json().get("request_uuid") or "")   # lets us cancel while it is still ringing
     PENDING[token] = pc
     _start_agent(pc)
     asyncio.create_task(_expire(token, RING_SECONDS + 20))
@@ -339,6 +463,39 @@ async def _hangup_call(call_uuid: str) -> None:
         log.exception("failed to hang up %s", call_uuid)
 
 
+@router.post("/api/calls/{call_id}/hangup")
+async def hangup_from_dashboard(call_id: int) -> dict:
+    """The owner pressed Hang up on a live phone call. Works while ringing and while talking."""
+    active = ACTIVE.get(call_id)
+    if not active:
+        raise HTTPException(404, "That call has already ended.")
+    if active["channel"] != "plivo":
+        raise HTTPException(400, "Browser test calls are ended from the browser test itself.")
+    pc = PENDING.get(active["meta"].get("token", ""))
+    if pc is None:
+        raise HTTPException(404, "That call has already ended.")
+    state = active["state"]
+    if not pc.answered.is_set():
+        # Still ringing: cancel the dial request, then release the waiting agent.
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.delete(f"{PLIVO_API}/{PLIVO_AUTH_ID}/Request/{pc.request_uuid}/", auth=_auth())
+        except Exception:  # noqa: BLE001
+            log.exception("failed to cancel ringing call %s", call_id)
+        PENDING.pop(pc.token, None)
+        if pc.task:
+            pc.task.cancel()
+        pc.stop_tasks()
+        log.info("call %s cancelled from the dashboard while ringing", call_id)
+        return {"ok": True, "was": "ringing"}
+    if not state.outcome:
+        state.outcome_details = {"notes": "Hung up from the dashboard."}
+    log.info("call %s hung up from the dashboard", call_id)
+    await _hangup_call(pc.ids["call"])
+    await pc.incoming.put(None)   # ends the conversation; the audio line then closes itself
+    return {"ok": True, "was": "in progress"}
+
+
 @router.websocket("/ws/plivo/{token}")
 async def plivo_stream(ws: WebSocket, token: str) -> None:
     await ws.accept()
@@ -363,7 +520,8 @@ async def plivo_stream(ws: WebSocket, token: str) -> None:
                     media = msg.get("media", {})
                     pcm = to_gemini_pcm(base64.b64decode(media.get("payload", "")), media, pc.fmt)
                     if pcm:
-                        await pc.incoming.put(pc.clean(pcm))
+                        for item in pc.listen(pcm):
+                            await pc.incoming.put(item)
                 elif event == "stop":
                     break
         except (WebSocketDisconnect, RuntimeError):

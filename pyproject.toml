@@ -11,6 +11,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "openpyxl>=3.1",
     "websockets>=13",
+    "onnxruntime>=1.20",   # runs the Silero speech detector (app/models/silero_vad.onnx)
+    "numpy>=2.0",
 ]
 
 [tool.uv]

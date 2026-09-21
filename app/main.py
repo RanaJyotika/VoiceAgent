@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -9,14 +10,33 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .config import GEMINI_LIVE_MODEL, GEMINI_VOICE, VOICES
+from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, VOICES
 from .contacts import build_template, is_valid_phone, normalise_phone, parse_excel
 from .live_bridge import live_snapshot, run_call
 from .plivo_bridge import router as plivo_router
 from .prompts import get_prompt
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# Keep call events on disk too, so a call can be diagnosed after the console window is closed.
+_file_log = RotatingFileHandler(DATA_DIR / "server.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8")
+_file_log.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+logging.getLogger().addHandler(_file_log)
 log = logging.getLogger("app")
+
+
+class _QuietPolling(logging.Filter):
+    """The dashboard polls these every 1 to 5 seconds; logging each hit buries the call events."""
+    NOISY = ("/api/live", "/api/calls", "/api/stats")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn access records carry (client, method, path, http_version, status). Failures still log.
+        a = record.args
+        if not isinstance(a, tuple) or len(a) < 5:
+            return True
+        return not (a[1] == "GET" and str(a[2]).split("?")[0] in self.NOISY and a[4] == 200)
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPolling())
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Voice Agent MVP")
