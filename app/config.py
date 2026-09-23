@@ -126,6 +126,38 @@ GEMINI_PRICE_PER_M = {
 }
 USD_INR = float(os.getenv("USD_INR", "90"))
 
+# --- OpenAI Realtime, the fallback voice agent (app/openai_bridge.py) ---
+# Used when Gemini cannot take the call at all: credits gone, key refused, repeated failure to
+# connect. Those are the cases a reconnect cannot fix (22 Sep 2026: calls 46, 47 and 48 all died
+# on "prepayment credits are depleted"). A transient 1011 still just reconnects to Gemini.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# gpt-realtime-2.1-mini costs about the same per call as Gemini 2.5 Flash native audio once its
+# cached-prompt discount is counted; the full gpt-realtime-2.1 is roughly four times dearer.
+OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1-mini")
+# Writes the customer's words. Everything that guards the call reads this text (the spoken-digit
+# check on an address, the clear-yes check, the inaudible-reply counter), so a change here
+# changes how those behave.
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+OPENAI_FALLBACK = os.getenv("OPENAI_FALLBACK", "true").lower() != "false" and bool(OPENAI_API_KEY)
+# After Gemini fails for a reason a retry cannot fix, later calls go straight to OpenAI for this
+# long instead of spending three seconds each rediscovering it.
+PROVIDER_COOLDOWN_SECONDS = float(os.getenv("PROVIDER_COOLDOWN_SECONDS", "900"))
+# OpenAI voices, by the gender of the agent name they have to carry (Gauri / Arjun).
+OPENAI_VOICES = {
+    "marin": "female", "coral": "female", "shimmer": "female", "sage": "female", "alloy": "female",
+    "cedar": "male", "ash": "male", "echo": "male", "verse": "male", "ballad": "male",
+}
+# USD per million tokens for OPENAI_REALTIME_MODEL. Cached input is billed at a tenth, which is
+# why it is counted separately: on these calls the repeated prompt is most of the bill.
+OPENAI_PRICE_PER_M = {
+    "text_in": float(os.getenv("OPENAI_PRICE_TEXT_IN", "0.60")),
+    "audio_in": float(os.getenv("OPENAI_PRICE_AUDIO_IN", "10.00")),
+    "text_out": float(os.getenv("OPENAI_PRICE_TEXT_OUT", "2.40")),
+    "audio_out": float(os.getenv("OPENAI_PRICE_AUDIO_OUT", "20.00")),
+    "cached_text_in": float(os.getenv("OPENAI_PRICE_CACHED_TEXT_IN", "0.06")),
+    "cached_audio_in": float(os.getenv("OPENAI_PRICE_CACHED_AUDIO_IN", "0.30")),
+}
+
 # How to pronounce names. Key = how it appears in your Excel sheet, value = Hindi spelling.
 # Add your own products here; matching ignores upper/lower case.
 PRONUNCIATION = {

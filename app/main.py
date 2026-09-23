@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .campaign import router as campaign_router
-from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, RECORDINGS_DIR, VOICES
+from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OPENAI_REALTIME_MODEL, RECORDINGS_DIR, VOICES
 from .contacts import build_results, build_template, check_rows, inspect_excel, is_valid_phone, normalise_phone
 from .live_bridge import live_snapshot, run_call
 from .plivo_bridge import router as plivo_router
@@ -71,7 +71,8 @@ async def index() -> FileResponse:
 @app.get("/api/config")
 async def get_config() -> dict:
     return {"model": GEMINI_LIVE_MODEL, "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
-            "models": ["gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live"]}
+            "models": ["gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live",
+                       OPENAI_REALTIME_MODEL]}
 
 
 @app.get("/api/contacts")

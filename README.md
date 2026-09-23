@@ -79,4 +79,24 @@ Gemini Live bills every model turn for the whole conversation so far, so the cos
 
 Phone calls are recorded (customer's side only) to `data/recordings/call_<id>.wav`; the transcript view has a Listen link. Set `PHONE_RECORD=false` to turn this off.
 
+## Two voice agents
+
+Calls normally run on Gemini Live. OpenAI's Realtime API is wired in as a second agent
+(`app/openai_bridge.py`) and can run a call on its own, so the two can be compared.
+
+- Pick the model per call from the dashboard dropdown, or set `GEMINI_LIVE_MODEL`.
+- Set `OPENAI_API_KEY` in `.env` to switch it on. Without it the fallback stays off.
+- A call falls back to OpenAI automatically only when Gemini cannot take the call at all:
+  credits gone, key refused. A transient error still just reconnects to Gemini, because that
+  works and a mid-call provider switch changes the agent's voice.
+- After such a failure, later calls skip Gemini for `PROVIDER_COOLDOWN_SECONDS` (15 minutes by
+  default) instead of losing three seconds each rediscovering it.
+- The voice is matched by gender, so Gauri stays a woman and Arjun a man on either provider.
+- Each call's stored usage records which `provider` and `model` answered it, and the cost is
+  priced with that provider's own rates.
+
+`gpt-realtime-2.1-mini` costs about the same per call as Gemini 2.5 Flash native audio, because
+OpenAI bills repeated prompt text at a tenth. The full `gpt-realtime-2.1` is roughly four times
+dearer. Both numbers come from replaying real calls 53 to 58 through each price list.
+
 While Gemini prepares each reply (about 3 s) the phone plays a short "hmm" or "achha" in the agent's voice. The clips are made once per voice with Gemini text-to-speech on the first call that uses the voice (a few paise) and kept in `data/fillers/<voice>/`; until they exist a soft keyboard tap is played. `FILLERS=false` turns the sounds off, `FILLER_GENERATE=false` forbids the text-to-speech call.

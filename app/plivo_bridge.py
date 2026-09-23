@@ -23,6 +23,7 @@ from fastapi.responses import Response
 
 from . import db, fillers, vad
 from .config import (DIAL_ONLY_MY_NUMBER, FILLERS, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
+                     OPENAI_REALTIME_MODEL,
                      PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
                      PHONE_STUCK_SECONDS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
                      PUBLIC_BASE_URL, RECORDINGS_DIR, VOICES, plivo_missing)
@@ -36,7 +37,8 @@ router = APIRouter()
 PLIVO_API = "https://api.plivo.com/v1/Account"
 RING_SECONDS = 30
 SEND_LEAD_SECONDS = 1.2   # how far ahead of real time we feed audio to the phone
-ALLOWED_MODELS = {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live"}
+ALLOWED_MODELS = {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live",
+                  OPENAI_REALTIME_MODEL, "gpt-realtime-2.1", "gpt-realtime-2.1-mini"}
 CHUNK_BYTES = 6400  # 200 ms of 16 kHz 16-bit audio; well under Plivo's 16 KB base64 advice
 
 

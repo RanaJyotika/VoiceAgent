@@ -19,10 +19,11 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import db
+from . import db, openai_bridge
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
-                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, REPLY_WATCHDOG_SECONDS,
+                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
+                     OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
                      TRANSCRIPT_LANGUAGES)
 from .tools import TOOLS
 
@@ -195,11 +196,33 @@ def turn_usage(um: Any) -> dict[str, int]:
             modality = str(getattr(d, "modality", "") or "").upper()
             key = ("audio" if "AUDIO" in modality else "text") + "_" + kind
             out[key] += d.token_count or 0
+    # Repeated prompt text that the provider billed at its cheap cached rate (OpenAI only;
+    # Gemini Live has no such discount, which is why its text input dominates a call's cost).
+    out["cached_text_in"] = int(getattr(um, "cached_text_in", 0) or 0)
+    out["cached_audio_in"] = int(getattr(um, "cached_audio_in", 0) or 0)
     return out
 
 
-def usage_cost_usd(usage: dict[str, Any]) -> float:
-    return sum(usage.get(k, 0) * price / 1_000_000 for k, price in GEMINI_PRICE_PER_M.items())
+def usage_cost_usd(usage: dict[str, Any], prices: dict[str, float] | None = None) -> float:
+    return sum(usage.get(k, 0) * price / 1_000_000 for k, price in (prices or GEMINI_PRICE_PER_M).items())
+
+
+# Providers that just failed for a reason retrying cannot fix, and the moment they may be tried
+# again. Shared by every call on this server run.
+_provider_down: dict[str, float] = {}
+
+
+def gemini_is_down() -> bool:
+    return time.monotonic() < _provider_down.get("gemini", 0.0)
+
+
+def can_fall_back(model: str, exc: BaseException) -> bool:
+    """Should this call leave Gemini for OpenAI? Only when Gemini cannot take the call at all:
+    out of credit, key refused, or it has already failed to reconnect the allowed number of
+    times. A single internal error is a blip and reconnecting to Gemini fixes it."""
+    if not OPENAI_FALLBACK or openai_bridge.is_openai_model(model):
+        return False
+    return is_billing_error(exc) or "api key" in str(exc).lower() or "permission" in str(exc).lower()
 
 
 SendAudio = Callable[[bytes], Awaitable[None]]
@@ -229,6 +252,8 @@ class CallState:
     error: str | None = None
     _in_buf: str = ""
     _out_buf: str = ""
+    provider: str = "gemini"                        # which voice agent answered this call
+    prices: dict[str, float] = field(default_factory=lambda: GEMINI_PRICE_PER_M)
 
     def add_input_text(self, text: str) -> None:
         self._in_buf += text
@@ -250,7 +275,7 @@ class CallState:
         for k, v in self._turn_usage.items():
             total[k] = total.get(k, 0) + v
         total["total_tokens"] = total["prompt_tokens"] + total["response_tokens"]
-        total["cost_usd"] = round(usage_cost_usd(total), 5)
+        total["cost_usd"] = round(usage_cost_usd(total, self.prices), 5)
         self.usage = total
         self._turn_usage = None
 
@@ -337,8 +362,15 @@ async def run_call(
     if model in _refused_models:
         log.warning("%s refused an earlier session on this run; using %s for this call instead", model, GEMINI_LIVE_MODEL)
         model = GEMINI_LIVE_MODEL
+    if gemini_is_down() and not openai_bridge.is_openai_model(model):
+        left = _provider_down["gemini"] - time.monotonic()
+        log.warning("Gemini failed recently; this call goes straight to %s (retrying Gemini in %.0f min)",
+                    OPENAI_REALTIME_MODEL, left / 60)
+        model = OPENAI_REALTIME_MODEL
     call_id = db.start_call(contact["id"] if contact else None, channel)
     state = CallState(call_id=call_id)
+    if openai_bridge.is_openai_model(model):
+        state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
     ACTIVE[call_id] = {"state": state, "contact": contact or {}, "channel": channel, "gate": start_gate,
                        "meta": meta or {}, "dialed_at": time.monotonic(), "voice": voice}
     client = make_client()
@@ -354,6 +386,12 @@ async def run_call(
             # Optional settings a model may refuse. Try the full set first, then drop them one by one.
             attempts = [(fast, hints) for fast in fast_modes
                         for hints in ([True, False] if TRANSCRIPT_LANGUAGES and _hints_ok else [False])]
+            if openai_bridge.is_openai_model(model):
+                # OpenAI Realtime wearing the same session interface (app/openai_bridge.py), so
+                # everything below this line is shared with Gemini.
+                session = await stack.enter_async_context(openai_bridge.connect(
+                    model=model, prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad))
+                attempts = []
             for n, (fast, hints) in enumerate(attempts):
                 try:
                     session = await stack.enter_async_context(client.aio.live.connect(
@@ -379,7 +417,7 @@ async def run_call(
             # Ask the agent to open the call. Phone calls start with the agent speaking.
             # A completed turn makes the agent greet at once. (A realtime text message would
             # wait for the microphone to go quiet first, which never happens in a noisy room.)
-            if model.startswith("gemini-2."):
+            if model.startswith("gemini-2.") or openai_bridge.is_openai_model(model):
                 await session.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text=opening)]),
                     turn_complete=True,
@@ -557,18 +595,29 @@ async def run_call(
                 # The connection to Gemini dropped (network blip, Gemini "1011 internal error"). The
                 # customer is still on the line, so reconnect and carry on instead of going silent
                 # and hanging up. Gemini has failed twice in one call, so allow a few tries.
-                if state.ended or state.reconnects >= MAX_RECONNECTS or is_billing_error(exc) or not drain_stale_audio():
+                alive = drain_stale_audio()
+                switching = alive and not state.ended and can_fall_back(model, exc)
+                if switching:
+                    # Gemini cannot take this call at all. Rather than hang up on a customer who
+                    # is still holding the phone, carry on with the other provider.
+                    _provider_down["gemini"] = time.monotonic() + PROVIDER_COOLDOWN_SECONDS
+                    log.warning("call %s: Gemini cannot take this call (%s); switching to %s",
+                                call_id, exc, OPENAI_REALTIME_MODEL)
+                    model = OPENAI_REALTIME_MODEL
+                    state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
+                elif state.ended or state.reconnects >= MAX_RECONNECTS or is_billing_error(exc) or not alive:
                     raise
+                else:
+                    state.reconnects += 1
+                    log.warning("call %s: connection to Gemini dropped (%s: %s); reconnecting (%s of %s)",
+                                call_id, type(exc).__name__, exc, state.reconnects, MAX_RECONNECTS)
+                    if "1007" in str(exc) and model != GEMINI_LIVE_MODEL:
+                        # "Invalid argument" is not a blip: this model refuses how we talk to it, and
+                        # would refuse again. Carry the call on the default model instead of dropping it.
+                        log.warning("call %s: %s refused the session; switching to %s", call_id, model, GEMINI_LIVE_MODEL)
+                        _refused_models.add(model)   # later calls skip it at once instead of greeting 3 s late
+                        model = GEMINI_LIVE_MODEL
                 state.flush_turn()
-                state.reconnects += 1
-                log.warning("call %s: connection to Gemini dropped (%s: %s); reconnecting (%s of %s)",
-                            call_id, type(exc).__name__, exc, state.reconnects, MAX_RECONNECTS)
-                if "1007" in str(exc) and model != GEMINI_LIVE_MODEL:
-                    # "Invalid argument" is not a blip: this model refuses how we talk to it, and
-                    # would refuse again. Carry the call on the default model instead of dropping it.
-                    log.warning("call %s: %s refused the session; switching to %s", call_id, model, GEMINI_LIVE_MODEL)
-                    _refused_models.add(model)   # later calls skip it at once instead of greeting 3 s late
-                    model = GEMINI_LIVE_MODEL
                 if not state.transcript:
                     continue   # nothing was said yet: greet normally, there is no break to apologise for
                 so_far = "\n".join(f"{'You' if t['role'] == 'agent' else 'Customer'}: {t['text']}" for t in state.transcript) or "(nothing yet)"
@@ -589,8 +638,12 @@ async def run_call(
         ACTIVE.pop(call_id, None)
         state.flush_turn()
         duration = time.monotonic() - state.started
-        log.info("call %s ended: %.0fs, outcome=%s, watchdog nudges=%s, reconnects=%s", call_id, duration, state.outcome, state.nudges, state.reconnects)
+        log.info("call %s ended: %.0fs, outcome=%s, agent=%s (%s), watchdog nudges=%s, reconnects=%s",
+                 call_id, duration, state.outcome, state.provider, model, state.nudges, state.reconnects)
         if state.usage:
+            # Kept with the call so the two agents can be compared later from the database
+            # alone, without digging through the log.
+            state.usage["provider"], state.usage["model"] = state.provider, model
             u = state.usage
             log.info("call %s usage: %s turns, in: %s audio + %s text tokens, out: %s audio + %s text tokens, about $%.4f",
                      call_id, u.get("turns"), u.get("audio_in"), u.get("text_in"), u.get("audio_out"), u.get("text_out"),
