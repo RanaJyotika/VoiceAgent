@@ -7,3 +7,8 @@ data/uploads/
 data/recordings/
 .uv-cache/
 tools/
+data/*.log
+data/public_url.txt
+data/*.wav
+data/fillers/
+=
