@@ -321,6 +321,9 @@
       <button data-page="history" id="gohistory">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
         Call history</button>
+      <button data-page="spend">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3a5 5 0 0 0 0-10"/></svg>
+        Spending <span class="n" id="nav-spend"></span></button>
       <a class="navlink" href="/api/contacts/export" style="display:block;padding:10px 12px;font-size:14px;color:var(--plum-ink);text-decoration:none;border-radius:12px">
         <span style="display:inline-flex;align-items:center;gap:11px"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.85"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Download results</span></a>
     </nav>
@@ -557,6 +560,52 @@
             </table>
           </div>
           <div id="nocalls" class="empty" hidden>No calls yet.</div>
+        </section>
+      </section>
+
+      <!-- ===== Spending ===== -->
+      <section class="page" id="page-spend">
+        <div class="page-head">
+          <h2>Spending</h2>
+          <span class="hint">What the calls cost, per day, per agent and per call.</span>
+          <div class="right">
+            <button id="sp_7" aria-pressed="true">7 days</button>
+            <button id="sp_30" aria-pressed="false">30 days</button>
+            <button id="sp_refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="tiles" id="spend-tiles"></div>
+
+        <section class="card">
+          <h3 style="margin:0 0 10px">Day by day</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Day</th><th>Calls</th><th>Talk time</th><th>Agent</th><th>Phone line</th><th>Total</th><th>Per call</th></tr></thead>
+              <tbody id="spend-days"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h3 style="margin:0 0 10px">By agent</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Model</th><th>Calls</th><th>Talk time</th><th>Agent</th><th>Phone line</th><th>Total</th><th>Per call</th></tr></thead>
+              <tbody id="spend-models"></tbody>
+            </table>
+          </div>
+          <div class="hint" style="margin-top:8px">Calls made before the agent was recorded against each call show as "not recorded".</div>
+        </section>
+
+        <section class="card">
+          <h3 style="margin:0 0 10px">Every call</h3>
+          <div class="table-wrap" style="max-height:60vh; overflow:auto">
+            <table>
+              <thead><tr><th>#</th><th>When</th><th>Customer</th><th>Agent</th><th>Length</th><th>Outcome</th><th>Agent</th><th>Phone</th><th>Total</th></tr></thead>
+              <tbody id="spend-calls"></tbody>
+            </table>
+          </div>
+          <div id="spend-empty" class="empty" hidden>No calls in this period.</div>
         </section>
       </section>
     </div>

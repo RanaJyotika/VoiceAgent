@@ -70,9 +70,14 @@ async def index() -> FileResponse:
 
 @app.get("/api/config")
 async def get_config() -> dict:
-    return {"model": GEMINI_LIVE_MODEL, "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
-            "models": ["gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live",
-                       OPENAI_REALTIME_MODEL]}
+    # While the OpenAI agent is being tested it is the only one offered, so a call cannot go to
+    # Gemini by accident (calls 61 and 62 did exactly that). Put the two Gemini lines back to
+    # have the choice again; nothing else needs changing.
+    return {"model": OPENAI_REALTIME_MODEL, "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
+            "models": [OPENAI_REALTIME_MODEL,
+                       # "gemini-2.5-flash-native-audio-preview-12-2025",
+                       # "gemini-3.8-live",
+                       ]}
 
 
 @app.get("/api/contacts")
@@ -194,6 +199,11 @@ async def live() -> list[dict]:
 @app.get("/api/stats")
 async def get_stats(period: str = "today") -> dict:
     return db.stats("all" if period == "all" else "today")
+
+
+@app.get("/api/spend")
+async def get_spend(days: int = 7) -> dict:
+    return db.spend(max(1, min(90, days)))
 
 
 @app.delete("/api/calls")

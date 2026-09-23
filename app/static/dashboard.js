@@ -51,7 +51,7 @@
   const talk = (s) => s >= 3600 ? `${(s / 3600).toFixed(1)} h` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 
   // ---------------- sidebar pages, phone drawer, transcript modal ----------------
-  const PAGES = ['overview', 'callback', 'call', 'upload', 'history'];
+  const PAGES = ['overview', 'callback', 'call', 'upload', 'history', 'spend'];
   const navButtons = [...document.querySelectorAll('.nav [data-page], .dock [data-page]')];
   window.showPage = (name) => {
     if (!PAGES.includes(name)) name = 'overview';
@@ -60,6 +60,7 @@
     closeDrawer();
     window.scrollTo({ top: 0 });
     if (name === 'callback' && window.loadCallbacks) window.loadCallbacks();
+    if (name === 'spend' && window.loadSpend) window.loadSpend();
     try { localStorage.setItem('page', name); } catch (e) { /* ignore */ }
   };
   const FOCUS = { console: 'sheet-console', board: 'board' };
@@ -125,6 +126,59 @@
       tile('', 'rupee', 'Cost', `Rs ${s.cost_rs.toFixed(2)}`, s.answered ? `about Rs ${(s.cost_rs / s.answered).toFixed(2)} per answered call` : ''),
     ].join('');
   };
+  // ---------------- spending ----------------
+  let spendDays = 7;
+  const rs = (n) => `Rs ${Number(n || 0).toFixed(2)}`;
+  const agentChip = (provider, model) => {
+    const tone = provider === 'openai' ? 'good' : provider === 'gemini' ? 'accent' : 'muted';
+    const short = model === 'not recorded' ? 'not recorded'
+      : model.startsWith('gpt') ? model.replace('gpt-', '') : model.replace(/^gemini-/, '').replace(/-native-audio.*$/, '');
+    return `<span class="badge-like ${tone}" style="--c:var(--${tone === 'muted' ? 'faint' : tone})" title="${esc(model)}">${esc(short)}</span>`;
+  };
+
+  window.loadSpend = async () => {
+    const s = await fetch(`/api/spend?days=${spendDays}`).then((r) => r.json());
+    const t = s.today, week = s.days.reduce((a, d) => a + d.total_rs, 0);
+    const tile = (tone, ico, label, value, note = '') =>
+      `<div class="tile"><div class="label badge-like ${tone}" style="--c:var(--${tone || 'accent'})">${icon(ico)}${esc(label)}</div><div class="value">${value}</div><div class="note">${esc(note)}</div></div>`;
+    el('spend-tiles').innerHTML = [
+      tile('', 'phone', 'Calls today', t.calls, t.answered ? `${t.answered} answered` : ''),
+      tile('', 'rupee', 'Spent today', rs(t.total_rs), t.calls ? `about ${rs(t.per_call_rs)} per call` : ''),
+      tile('', 'timer', 'Talk time today', talk(Math.round(t.seconds || 0)), ''),
+      tile('', 'rupee', `Last ${s.window_days} days`, rs(week), `${s.days.reduce((a, d) => a + d.calls, 0)} calls`),
+    ].join('');
+
+    el('spend-days').innerHTML = s.days.map((d) => `<tr>
+        <td>${esc(d.label)}</td><td class="num">${d.calls}</td><td class="num">${talk(Math.round(d.seconds))}</td>
+        <td class="num">${rs(d.agent_rs)}</td><td class="num">${rs(d.phone_rs)}</td>
+        <td class="num"><b>${rs(d.total_rs)}</b></td><td class="num">${rs(d.per_call_rs)}</td></tr>`).join('');
+
+    el('spend-models').innerHTML = s.models.map((m) => `<tr>
+        <td>${agentChip(m.provider, m.model)}</td><td class="num">${m.calls}</td><td class="num">${talk(Math.round(m.seconds))}</td>
+        <td class="num">${rs(m.agent_rs)}</td><td class="num">${rs(m.phone_rs)}</td>
+        <td class="num"><b>${rs(m.total_rs)}</b></td><td class="num">${rs(m.per_call_rs)}</td></tr>`).join('');
+
+    el('spend-calls').innerHTML = s.calls.map((c) => `<tr>
+        <td class="num">${c.id}</td><td>${esc(c.date)} ${esc(c.time)}</td><td>${esc(c.customer || '-')}</td>
+        <td>${agentChip(c.provider, c.model)}</td><td class="num">${mmss(c.seconds)}</td>
+        <td>${esc((c.outcome || '-').replace(/_/g, ' '))}</td>
+        <td class="num">${c.estimated ? '~' : ''}${rs(c.agent_rs)}</td>
+        <td class="num">${rs(c.phone_rs)}</td><td class="num"><b>${rs(c.total_rs)}</b></td></tr>`).join('');
+    el('spend-empty').hidden = s.calls.length > 0;
+    el('nav-spend').textContent = t.calls ? rs(t.total_rs).replace('Rs ', '₹') : '';
+  };
+
+  for (const [id, d] of [['sp_7', 7], ['sp_30', 30]]) {
+    el(id).onclick = () => {
+      spendDays = d;
+      el('sp_7').setAttribute('aria-pressed', d === 7);
+      el('sp_30').setAttribute('aria-pressed', d === 30);
+      window.loadSpend();
+    };
+  }
+  el('sp_refresh').onclick = () => window.loadSpend();
+  setInterval(() => { if (el('page-spend').classList.contains('on')) window.loadSpend(); }, 15000);
+
   for (const [id, p] of [['p_today', 'today'], ['p_all', 'all']]) {
     el(id).onclick = () => {
       period = p;

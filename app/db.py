@@ -354,20 +354,102 @@ def _has_cost(usage) -> bool:
     return isinstance(usage, dict) and usage.get("cost_usd") is not None
 
 
-def call_cost(channel: str, seconds: float, usage=None) -> float:
-    """Rupees for one call. Real token cost when Gemini reported usage, else a per-minute guess."""
+def _as_usage(usage):
     if isinstance(usage, str):
         try:
-            usage = json.loads(usage)
+            return json.loads(usage)
         except json.JSONDecodeError:
-            usage = None
-    if _has_cost(usage):
-        cost = usage["cost_usd"] * USD_INR
-    else:
-        cost = (seconds or 0) / 60 * GEMINI_RS_PER_MIN
-    if channel == "plivo" and seconds:
-        cost += math.ceil(seconds / 30) * PLIVO_RS_PER_PULSE
-    return cost
+            return None
+    return usage
+
+
+def cost_parts(channel: str, seconds: float, usage=None) -> tuple[float, float]:
+    """Rupees for one call, split into the voice agent and the phone line. The agent's figure is
+    the real token cost when the model reported one, else a per-minute guess."""
+    usage = _as_usage(usage)
+    agent = usage["cost_usd"] * USD_INR if _has_cost(usage) else (seconds or 0) / 60 * GEMINI_RS_PER_MIN
+    phone = math.ceil(seconds / 30) * PLIVO_RS_PER_PULSE if channel == "plivo" and seconds else 0.0
+    return agent, phone
+
+
+def call_cost(channel: str, seconds: float, usage=None) -> float:
+    """Rupees for one call, agent plus phone line."""
+    return sum(cost_parts(channel, seconds, usage))
+
+
+def call_agent(usage) -> tuple[str, str]:
+    """(model, provider) that answered a call. Calls made before this was recorded say so."""
+    usage = _as_usage(usage)
+    if not isinstance(usage, dict):
+        return "not recorded", "unknown"
+    model = usage.get("model") or ""
+    provider = usage.get("provider") or ("openai" if "gpt" in model else "gemini" if "gemini" in model else "")
+    return model or "not recorded", provider or "unknown"
+
+
+def spend(days: int = 7) -> dict:
+    """What the calling actually cost: today's total, a day by day list, a split per model, and
+    every call with the agent that answered it and its own price."""
+    start = (datetime.now(IST) - timedelta(days=max(1, days) - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT c.id, c.channel, c.started_at, c.duration_sec, c.outcome, c.usage, k.customer_name "
+            "FROM calls c LEFT JOIN contacts k ON k.id = c.contact_id "
+            "WHERE c.started_at >= ? ORDER BY c.id DESC",
+            (start.astimezone(timezone.utc).isoformat(),)).fetchall()
+
+    today_key = datetime.now(IST).strftime("%Y-%m-%d")
+    calls, per_day, per_model = [], {}, {}
+    for r in rows:
+        started = datetime.fromisoformat(r["started_at"]).astimezone(IST) if r["started_at"] else None
+        seconds = r["duration_sec"] or 0
+        agent_rs, phone_rs = cost_parts(r["channel"] or "", seconds, r["usage"])
+        model, provider = call_agent(r["usage"])
+        usage = _as_usage(r["usage"]) or {}
+        calls.append({
+            "id": r["id"], "day": started.strftime("%Y-%m-%d") if started else "",
+            "time": started.strftime("%H:%M") if started else "", "date": started.strftime("%d %b") if started else "",
+            "customer": r["customer_name"] or "", "channel": r["channel"] or "",
+            "seconds": round(seconds), "outcome": r["outcome"] or "",
+            "model": model, "provider": provider, "turns": usage.get("turns"),
+            "agent_rs": round(agent_rs, 2), "phone_rs": round(phone_rs, 2),
+            "total_rs": round(agent_rs + phone_rs, 2), "estimated": not _has_cost(usage),
+        })
+        key = started.strftime("%Y-%m-%d") if started else "unknown"
+        day = per_day.setdefault(key, {"day": key, "label": started.strftime("%a %d %b") if started else "unknown",
+                                       "calls": 0, "answered": 0, "seconds": 0,
+                                       "agent_rs": 0.0, "phone_rs": 0.0, "total_rs": 0.0})
+        day["calls"] += 1
+        day["seconds"] += seconds
+        day["answered"] += 1 if seconds > 0 else 0
+        day["agent_rs"] += agent_rs
+        day["phone_rs"] += phone_rs
+        day["total_rs"] += agent_rs + phone_rs
+
+        m = per_model.setdefault(model, {"model": model, "provider": provider, "calls": 0, "seconds": 0,
+                                         "agent_rs": 0.0, "phone_rs": 0.0, "total_rs": 0.0})
+        m["calls"] += 1
+        m["seconds"] += seconds
+        m["agent_rs"] += agent_rs
+        m["phone_rs"] += phone_rs
+        m["total_rs"] += agent_rs + phone_rs
+
+    def tidy(d):
+        out = dict(d)
+        for k in ("agent_rs", "phone_rs", "total_rs"):
+            out[k] = round(out[k], 2)
+        out["minutes"] = round(out["seconds"] / 60, 1)
+        if out.get("calls"):
+            out["per_call_rs"] = round(out["total_rs"] / out["calls"], 2)
+        return out
+
+    days_list = [tidy(d) for d in sorted(per_day.values(), key=lambda x: x["day"], reverse=True)]
+    models_list = [tidy(m) for m in sorted(per_model.values(), key=lambda x: -x["total_rs"])]
+    today = next((d for d in days_list if d["day"] == today_key), None) or {
+        "day": today_key, "label": "today", "calls": 0, "answered": 0, "seconds": 0, "minutes": 0.0,
+        "agent_rs": 0.0, "phone_rs": 0.0, "total_rs": 0.0}
+    return {"today": today, "days": days_list, "models": models_list, "calls": calls,
+            "window_days": days, "usd_inr": USD_INR}
 
 
 def stats(period: str = "today") -> dict:
