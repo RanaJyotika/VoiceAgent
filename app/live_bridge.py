@@ -245,6 +245,7 @@ class CallState:
     loud_since: float | None = None     # first clear customer sound after that
     nudges: int = 0
     address_checked: bool = False       # mark_outcome was already sent back once for a missing PIN code
+    address_refusals: int = 0           # record_address sent back because the digits did not match
     address: dict[str, str] | None = None   # what record_address accepted
     inaudible_streak: int = 0           # customer replies in a row that carried no words
     inaudible_total: int = 0
@@ -799,20 +800,35 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": "House number, area and city are all needed, as the customer said them; never write "
                     "'unknown' or 'not given'. Ask for the missing part, then call record_address again."}
         # The numbers must have come out of the customer's mouth on this call, not out of the model.
+        # Only a transcript we actually have can say that. OpenAI writes the customer's words down
+        # in a separate pass that often lands after the reply, so an empty result here means "not
+        # transcribed yet", not "never said" (call 60 refused a correct PIN three times on that).
         said = spoken_digits(" ".join(state.recent_customer_turns(10)))
-        if pin not in said:
-            log.info("call %s: record_address refused; PIN %s was never said (customer digits so far: %r)", state.call_id, pin, said)
-            return {"status": "not recorded", "reason": f"The customer has NOT said the PIN code {pin} on this call; never fill in a PIN "
-                    "yourself. Ask 'PIN code kya hai ji?', wait for their answer, then call record_address again with the digits they say."}
-        # Same for the house number, but only when the transcriber writes numbers as numerals on this
-        # call: "teen sau do" (302) as words is beyond the digit-word list above.
-        house_numbers = [n for n in re.findall(r"\d+", spoken_digits_spaced(parts["house"])) if len(n) >= 2]
-        unsaid = [n for n in house_numbers if n not in said]
-        if unsaid and re.search(r"\d", " ".join(state.recent_customer_turns(10))):
-            log.info("call %s: record_address refused; house number %s was never said (customer digits so far: %r)", state.call_id, parts["house"], said)
-            return {"status": "not recorded", "reason": f"The customer has NOT said house number {parts['house']} on this call; never fill it in "
-                    "yourself. Ask 'house number kya hai ji?', wait for their answer, then call record_address again."}
+        wrong = []
+        if said:
+            if pin not in said:
+                wrong.append(f"PIN code {pin}")
+            # House numbers of two digits or more; a lone digit is a floor or a wing, not a number
+            # the customer had to say ("Tower No 10, 502, 5th Floor" on call 58).
+            wrong += [f"house number {n}" for n in
+                      (n for n in re.findall(r"\d+", spoken_digits_spaced(parts["house"])) if len(n) >= 2)
+                      if n not in said]
+        if wrong:
+            state.address_refusals += 1
+            log.info("call %s: record_address refused (%s of 3); %s never said (customer digits heard: %r)",
+                     state.call_id, state.address_refusals, " and ".join(wrong), said)
+            if state.address_refusals >= 3:
+                # Three refusals in a row is a loop the customer is sitting through. Stop asking.
+                return {"status": "not recorded", "reason": "The address still does not match what the customer said, and they have "
+                        "been asked enough times. Do not ask again and do not read any address back. Say 'koi baat nahi ji, team "
+                        "aapse address le legi', put that in mark_outcome notes, and carry on to the close."}
+            return {"status": "not recorded", "reason": f"The customer has NOT said {' and '.join(wrong)} on this call. The digits they "
+                    f"were actually heard to say, in order, are '{said}'. Never fill a number in yourself. Ask for the part you are "
+                    "missing, wait for their answer, then call record_address again."}
+        if not said:
+            log.info("call %s: record_address taken unchecked; nothing of the customer's has been transcribed yet", state.call_id)
         state.address = parts
+        state.address_refusals = 0   # a good one clears the slate; a later correction gets its own tries
         log.info("call %s: address recorded %s", state.call_id, json.dumps(parts, ensure_ascii=False))
         return {"status": "recorded", "next": f"Now read it back ONCE and get a yes: 'toh address hai: house number {parts['house']}, "
                 f"{parts['area']}, {parts['city']}, PIN {' '.join(pin)}. Sahi hai?' If they correct a part, call record_address again with the corrected part."}

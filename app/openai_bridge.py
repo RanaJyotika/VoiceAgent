@@ -172,6 +172,7 @@ class OpenAISession:
         self.manual_vad = manual_vad    # we mark the turns (phone) rather than the server (browser)
         self._tool_buf: list = []       # function calls of the response being read
         self._warned_vad = False
+        self._delta_items: set = set()  # customer turns whose transcript already arrived in pieces
         self._q: asyncio.Queue = asyncio.Queue()
         self._send_lock = asyncio.Lock()
         self._resample = None           # 16 kHz -> 24 kHz state, kept across chunks
@@ -299,11 +300,17 @@ class OpenAISession:
 
         elif kind == "conversation.item.input_audio_transcription.delta":
             if evt.get("delta"):
+                self._delta_items.add(evt.get("item_id") or "")
                 out.append(_Message(server_content=_ServerContent(input_transcription=_Text(evt["delta"]))))
 
         elif kind == "conversation.item.input_audio_transcription.completed":
-            # Some builds send only the finished transcript, with no deltas at all.
-            if evt.get("transcript"):
+            # The finished transcript repeats everything the deltas already carried. Adding both
+            # wrote every customer turn down twice ("160036160036" on call 60), which doubled the
+            # tokens and left the agent reading digits that were never said.
+            item = evt.get("item_id") or ""
+            if item in self._delta_items:
+                self._delta_items.discard(item)
+            elif evt.get("transcript"):
                 out.append(_Message(server_content=_ServerContent(input_transcription=_Text(evt["transcript"]))))
 
         elif kind == "input_audio_buffer.speech_started":
