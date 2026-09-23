@@ -56,6 +56,11 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")  # https://xxxx.t
 # the number on screen. Off by default: the number comes from the Excel row or what you type.
 DIAL_ONLY_MY_NUMBER = os.getenv("DIAL_ONLY_MY_NUMBER", "false").lower() == "true" and bool(PHONE_NUMBER)
 MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "240"))
+# How long the phone is allowed to ring before Plivo gives up. This is also how long the dashboard
+# can sit on "Ringing" when nobody picks up: on 21-23 Sep the answer came back 31 s after dialling
+# with this at 30. A rejected call is reported by the carrier when it chooses (26 s on call 51),
+# and nothing here can make that quicker.
+RING_SECONDS = int(os.getenv("RING_SECONDS", "25"))
 # Most calls the campaign may run at the same time. Each call is its own Plivo call, Gemini
 # session and ~0.7 Mbps each way through the tunnel; Gemini and Plivo also cap concurrent
 # calls per account, and the campaign pauses itself when calls start failing.

@@ -26,7 +26,7 @@ from .config import (DIAL_ONLY_MY_NUMBER, FILLERS, GEMINI_LIVE_MODEL, GEMINI_VOI
                      OPENAI_REALTIME_MODEL,
                      PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
                      PHONE_STUCK_SECONDS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
-                     PUBLIC_BASE_URL, RECORDINGS_DIR, VOICES, plivo_missing)
+                     PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, Nudge, run_call
 from .openai_bridge import is_openai_model
@@ -36,7 +36,6 @@ log = logging.getLogger("plivo")
 router = APIRouter()
 
 PLIVO_API = "https://api.plivo.com/v1/Account"
-RING_SECONDS = 30
 SEND_LEAD_SECONDS = 1.2   # how far ahead of real time we feed audio to the phone
 ALLOWED_MODELS = {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live",
                   OPENAI_REALTIME_MODEL, "gpt-realtime-2.1", "gpt-realtime-2.1-mini"}
@@ -612,7 +611,10 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
     _start_agent(pc)
     if FILLERS and not is_openai_model(pc.model):
         asyncio.create_task(fillers.ensure(voice))   # clips for this voice, made once while the phone rings
-    asyncio.create_task(_expire(token, RING_SECONDS + 20))
+    # Plivo's hang-up webhook normally lands a second after the ring times out. The margin is for
+    # a slow tunnel, not for a slow carrier, so it is short: a call stuck on "Ringing" with the
+    # customer long gone is worse than releasing the agent a little early.
+    asyncio.create_task(_expire(token, RING_SECONDS + 10))
     log.info("dialing %s for contact %s (voice %s) token=%s", to_number, contact["id"], voice, token)
     return pc
 

@@ -243,8 +243,12 @@
     hadLive = true;
     el('live').innerHTML = rows.map((c) => {
       const l = LIVE[c.status] || LIVE.listening;
+      // A ringing call says how much longer it can ring, so a customer who never picks up does
+      // not look like a call that has hung.
+      const label = c.status === 'ringing' && c.ring_left != null
+        ? (c.ring_left > 0 ? `Ringing · ${c.ring_left}s left` : 'Ringing · giving up') : l[2];
       const bars = c.status === 'agent_speaking' ? '<span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>' : '';
-      const st = `<span class="badge ${l[0]} ${l[3] ? 'pulse' : ''}">${l[3] ? '<span class="dot"></span>' : icon(l[1])}${esc(l[2])}${bars}</span>`;
+      const st = `<span class="badge ${l[0]} ${l[3] ? 'pulse' : ''}">${l[3] ? '<span class="dot"></span>' : icon(l[1])}${esc(label)}${bars}</span>`;
       const channel = c.channel === 'plivo' ? badge('', 'phone', 'Phone') : badge('', 'monitor', 'Browser test');
       const said = (c.lines || []).map((t) => `<div class="${t.role === 'agent' ? 'a' : ''}"><b>${t.role === 'agent' ? 'Agent' : 'Customer'}:</b> ${esc(t.text)}</div>`).join('');
       return `<div class="live">

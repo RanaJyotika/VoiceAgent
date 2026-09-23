@@ -22,7 +22,7 @@ from google.genai import types
 from . import db, openai_bridge
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
-                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE,
+                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
                      TRANSCRIPT_LANGUAGES)
@@ -894,8 +894,12 @@ def live_snapshot() -> list[dict]:
     for call_id, a in list(ACTIVE.items()):
         state: CallState = a["state"]
         gate = a["gate"]
+        ring_left = None
         if gate is not None and not gate.is_set():
             status, seconds = "ringing", now - a["dialed_at"]
+            # So the dashboard can say how much longer this can go on, instead of a timer that
+            # counts up with no end in sight.
+            ring_left = max(0, round(RING_SECONDS - seconds))
         elif state.ended:
             status, seconds = "ending", now - state.started
         elif state.speaking:
@@ -910,6 +914,7 @@ def live_snapshot() -> list[dict]:
         c = a["contact"]
         out.append({
             "call_id": call_id, "channel": a["channel"], "status": status, "seconds": round(seconds),
+            "ring_left": ring_left,
             "customer_name": c.get("customer_name", ""), "order_id": c.get("order_id", ""),
             "product": c.get("product", ""), "to": a["meta"].get("to") or c.get("phone", ""),
             "voice": a["voice"], "outcome": state.outcome, "lines": lines[-3:],
