@@ -213,7 +213,7 @@
   // Older records still carry the model's leaked mood notes; never show them.
   const tidy = (s) => String(s || '').replace(/emotion_(?:user|model)\s*[a-zA-Z_]*\s*(?:<ctrl\d+>)?/g, '').replace(/<ctrl\d+>/g, '').trim();
 
-  // "~" marks a per-minute guess; without it the figure comes from the tokens Gemini reported.
+  // "~" marks a per-minute guess; without it the figure comes from the tokens the model reported.
   const costText = (c) => `${c.cost_estimated ? '~' : ''}Rs ${(c.cost_rs ?? 0).toFixed(2)}`;
 
   // Transcript as a chat: our agent on the right, the customer on the left.
@@ -268,7 +268,7 @@
         <td>${esc(c.customer_name || '')}<br><small>${esc(c.order_id || '')}</small></td>
         <td class="num">${mmss(c.duration_sec)}</td>
         <td>${outcomeBadge(key)}${details ? `<br><small>${esc(details)}</small>` : ''}</td>
-        <td class="num" title="${c.cost_estimated ? 'estimated from call length' : 'from the tokens Gemini reported'}">${esc(costText(c))}</td>
+        <td class="num" title="${c.cost_estimated ? 'estimated from call length' : 'from the tokens the model reported'}">${esc(costText(c))}</td>
         <td>${said || c.error ? `<button class="viewbtn" data-call="${c.id}">${icon('chat')}View</button>` : '<small>none</small>'}</td>
       </tr>`;
     }).join('');

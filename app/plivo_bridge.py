@@ -29,6 +29,7 @@ from .config import (DIAL_ONLY_MY_NUMBER, FILLERS, GEMINI_LIVE_MODEL, GEMINI_VOI
                      PUBLIC_BASE_URL, RECORDINGS_DIR, VOICES, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, Nudge, run_call
+from .openai_bridge import is_openai_model
 from .prompts import get_prompt, with_language
 
 log = logging.getLogger("plivo")
@@ -427,9 +428,10 @@ class PendingCall:
         self.sender = asyncio.create_task(self._send_loop(ws))
         if FILLERS:
             # Loaded now, not at dial time: the clips may still be generating while the phone rings.
-            self.filler = fillers.Picker(self.voice)
+            own_voice = not is_openai_model(self.model)
+            self.filler = fillers.Picker(self.voice, clips_ok=own_voice)
             log.info("filler sounds: %s", f"{len(self.filler.clips)} clips in voice {self.voice}" if self.filler.clips
-                     else "no clips for this voice yet; using the keyboard tap")
+                     else "keyboard tap" + ("" if own_voice else " (the agent is not speaking in a Gemini voice)"))
         log.info("audio line attached; %s prepared audio chunks waiting", waiting)
 
     def play_filler(self) -> None:
@@ -605,7 +607,7 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
     pc.request_uuid = str(r.json().get("request_uuid") or "")   # lets us cancel while it is still ringing
     PENDING[token] = pc
     _start_agent(pc)
-    if FILLERS:
+    if FILLERS and not is_openai_model(pc.model):
         asyncio.create_task(fillers.ensure(voice))   # clips for this voice, made once while the phone rings
     asyncio.create_task(_expire(token, RING_SECONDS + 20))
     log.info("dialing %s for contact %s (voice %s) token=%s", to_number, contact["id"], voice, token)

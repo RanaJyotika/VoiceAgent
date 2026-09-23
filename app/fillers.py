@@ -144,8 +144,10 @@ async def ensure(voice: str) -> None:
 class Picker:
     """Hands out one clip at a time for a call, never the same one twice in a row."""
 
-    def __init__(self, voice: str) -> None:
-        self.clips = load(voice) if FILLERS else []
+    def __init__(self, voice: str, clips_ok: bool = True) -> None:
+        # clips_ok is False when the agent is not speaking in this voice (an OpenAI call uses an
+        # OpenAI voice), and two different voices on one call sound broken. The tap fits any voice.
+        self.clips = load(voice) if FILLERS and clips_ok else []
         self.tap = tap()
         self.last = -1
 

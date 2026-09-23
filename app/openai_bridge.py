@@ -33,8 +33,8 @@ from typing import Any
 
 from websockets.asyncio.client import connect as ws_connect
 
-from .config import (OPENAI_API_KEY, OPENAI_REALTIME_MODEL, OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICES,
-                     VOICES)
+from .config import (OPENAI_API_KEY, OPENAI_REALTIME_MODEL, OPENAI_TRANSCRIBE_LANGUAGE,
+                     OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICES, VOICES)
 from .tools import TOOLS
 
 log = logging.getLogger("openai")
@@ -211,6 +211,11 @@ class OpenAISession:
     async def _commit_and_reply(self) -> None:
         """Close the customer's turn and ask for the reply. A commit with almost nothing in the
         buffer is rejected by the API, so a stray end marker is dropped instead of raising."""
+        if self._responding:
+            # The reply watchdog fired while the answer was already on its way. Asking for a
+            # second one is an error ("conversation already has an active response").
+            log.info("%s: a reply is already coming; not asking for another", self.label)
+            return
         if self._appended_ms < MIN_COMMIT_MS:
             if self._appended_ms:
                 log.info("%s: only %.0f ms of audio, not committing a turn", self.label, self._appended_ms)
@@ -370,6 +375,15 @@ class OpenAISession:
 
 # --- opening a session --------------------------------------------------------------------
 
+def _transcription() -> dict:
+    """How the customer's words get written down. Everything that guards the call reads this
+    text, so the language hint is worth having when a call is known to be in one language."""
+    cfg = {"model": OPENAI_TRANSCRIBE_MODEL}
+    if OPENAI_TRANSCRIBE_LANGUAGE:
+        cfg["language"] = OPENAI_TRANSCRIBE_LANGUAGE
+    return cfg
+
+
 def _turn_detection(manual_vad: bool) -> dict | None:
     """None when we mark the turns ourselves (phone calls). On the browser test there is no such
     marking, so the server listens for the pause itself, as Gemini does there."""
@@ -389,7 +403,7 @@ def _session_payload(dialect: str, prompt: str, voice: str, tools: list[dict], m
             "audio": {
                 "input": {"format": {"type": "audio/pcm", "rate": RATE},
                           "turn_detection": _turn_detection(manual_vad),
-                          "transcription": {"model": OPENAI_TRANSCRIBE_MODEL}},
+                          "transcription": _transcription()},
                 "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": voice},
             },
             "tools": tools, "tool_choice": "auto",
@@ -400,7 +414,7 @@ def _session_payload(dialect: str, prompt: str, voice: str, tools: list[dict], m
         "voice": voice,
         "input_audio_format": "pcm16",
         "output_audio_format": "pcm16",
-        "input_audio_transcription": {"model": OPENAI_TRANSCRIBE_MODEL},
+        "input_audio_transcription": _transcription(),
         "turn_detection": _turn_detection(manual_vad),
         "tools": tools, "tool_choice": "auto",
     }}
@@ -446,8 +460,10 @@ async def connect(*, model: str = "", prompt: str, voice: str, label: str = "", 
     for dialect in ("ga", "beta"):
         try:
             session = await _try_dialect(model, dialect, prompt, voice=oa_voice, label=label, manual_vad=manual_vad)
-            log.info("%s: connected to %s (%s wire format, voice %s, transcriber %s)",
-                     label, model, dialect, oa_voice, OPENAI_TRANSCRIBE_MODEL)
+            log.info("%s: connected to %s (%s wire format, voice %s, transcriber %s%s, turns marked %s)",
+                     label, model, dialect, oa_voice, OPENAI_TRANSCRIBE_MODEL,
+                     f"/{OPENAI_TRANSCRIBE_LANGUAGE}" if OPENAI_TRANSCRIBE_LANGUAGE else "",
+                     "by us" if manual_vad else "by the server")
             break
         except Exception as exc:  # noqa: BLE001
             last = exc

@@ -138,6 +138,9 @@ OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1-min
 # check on an address, the clear-yes check, the inaudible-reply counter), so a change here
 # changes how those behave.
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+# Optional ISO code for that transcriber ("hi" for Hindi). Empty means let it decide, which is
+# safer when a customer answers in Punjabi or Urdu, as they have on these calls.
+OPENAI_TRANSCRIBE_LANGUAGE = os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "").strip()
 OPENAI_FALLBACK = os.getenv("OPENAI_FALLBACK", "true").lower() != "false" and bool(OPENAI_API_KEY)
 # After Gemini fails for a reason a retry cannot fix, later calls go straight to OpenAI for this
 # long instead of spending three seconds each rediscovering it.
