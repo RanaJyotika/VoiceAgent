@@ -2595,3 +2595,1124 @@ google.genai.errors.APIError: 1007 None. Request contains an invalid argument.
 2026-09-21 16:33:27,781 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/66e971b7-ed03-4e17-b91a-f379c6040219/ "HTTP/1.1 404 Not Found"
 2026-09-21 16:33:27,782 plivo INFO call 66e971b7-ed03-4e17-b91a-f379c6040219 had already ended
 2026-09-21 16:33:28,607 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=189 bill=0.01662 to=918196851335
+2026-09-21 16:41:57,488 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-21 16:41:57,627 vad INFO Silero speech detector loaded
+2026-09-21 16:41:57,629 plivo INFO dialing +918196851335 for contact 5 (voice Aoede) token=fdad9ae311434f5a
+2026-09-21 16:41:58,366 bridge INFO call 43: connected to gemini-2.5-flash-native-audio-preview-12-2025 (fast replies on, transcript language hint off)
+2026-09-21 16:42:05,386 plivo INFO call fdad9ae311434f5a answered; greeting started
+2026-09-21 16:42:05,389 bridge INFO call 43: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-21 16:42:06,356 plivo INFO plivo stream started call=1d3e7420-5e62-4dc9-8620-3afedbd0dd6f stream=46a51443-a33d-4647-9de3-e44a1cbd111d
+2026-09-21 16:42:06,356 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-21 16:42:06,367 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-21 16:42:06,427 plivo INFO plivo audio byte order: loudness as-is=97 swapped=9640 -> little-endian, no change
+2026-09-21 16:42:06,569 bridge INFO call 43: agent started speaking at 1.2s
+2026-09-21 16:42:10,428 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 2293 (speech is usually above 500)
+2026-09-21 16:42:15,046 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:42:15,126 plivo INFO greeting finished; now listening to the customer
+2026-09-21 16:42:15,426 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 1812 (speech is usually above 500)
+2026-09-21 16:42:16,346 bridge INFO call 43: customer started talking at 11.0s
+2026-09-21 16:42:17,466 plivo INFO customer sound: 0.5s of voice, loudest level 2446, usual voice level 918, over the agent: no
+2026-09-21 16:42:17,469 bridge INFO call 43: customer stopped talking at 12.1s
+2026-09-21 16:42:18,943 bridge INFO call 43: customer speech detected
+2026-09-21 16:42:20,426 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 2446 (speech is usually above 500)
+2026-09-21 16:42:20,758 bridge INFO call 43: agent started speaking at 15.4s
+2026-09-21 16:42:25,426 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 2363 (speech is usually above 500)
+2026-09-21 16:42:27,418 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:42:28,606 bridge INFO call 43: customer started talking at 23.2s
+2026-09-21 16:42:30,426 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 10786 (speech is usually above 500)
+2026-09-21 16:42:31,185 plivo INFO customer sound: 1.9s of voice, loudest level 10786, usual voice level 1654, over the agent: no
+2026-09-21 16:42:31,187 bridge INFO call 43: customer stopped talking at 25.8s
+2026-09-21 16:42:31,770 bridge INFO call 43: customer speech detected
+2026-09-21 16:42:32,526 bridge INFO call 43: customer started talking at 27.1s
+2026-09-21 16:42:33,090 bridge INFO call 43: customer interrupted
+2026-09-21 16:42:33,097 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:42:35,426 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 9363 (speech is usually above 500)
+2026-09-21 16:42:36,668 plivo INFO customer sound: 1.4s of voice, loudest level 9363, usual voice level 1292, over the agent: no
+2026-09-21 16:42:36,668 bridge INFO call 43: customer stopped talking at 31.3s
+2026-09-21 16:42:39,667 bridge INFO call 43: customer speech detected
+2026-09-21 16:42:40,425 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 4949 (speech is usually above 500)
+2026-09-21 16:42:41,158 bridge INFO call 43: agent started speaking at 35.8s
+2026-09-21 16:42:44,937 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:42:45,426 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 4269 (speech is usually above 500)
+2026-09-21 16:42:46,110 bridge INFO call 43: customer started talking at 40.7s
+2026-09-21 16:42:48,966 plivo INFO customer sound: 1.9s of voice, loudest level 4335, usual voice level 991, over the agent: no
+2026-09-21 16:42:48,967 bridge INFO call 43: customer stopped talking at 43.6s
+2026-09-21 16:42:49,645 bridge INFO call 43: customer speech detected
+2026-09-21 16:42:50,425 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 4335 (speech is usually above 500)
+2026-09-21 16:42:52,476 bridge INFO call 43: agent started speaking at 47.1s
+2026-09-21 16:42:52,966 bridge INFO call 43: customer started talking at 47.6s
+2026-09-21 16:42:53,067 bridge INFO call 43: customer interrupted
+2026-09-21 16:42:53,069 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:42:54,345 plivo INFO customer sound: 0.4s of voice, loudest level 3959, usual voice level 1525, over the agent: yes
+2026-09-21 16:42:54,347 bridge INFO call 43: customer stopped talking at 49.0s
+2026-09-21 16:42:55,425 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 4255 (speech is usually above 500)
+2026-09-21 16:42:56,700 bridge INFO call 43: customer speech detected
+2026-09-21 16:42:57,774 bridge INFO call 43: agent started speaking at 52.4s
+2026-09-21 16:43:00,426 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 1682 (speech is usually above 500)
+2026-09-21 16:43:05,425 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 1023 (speech is usually above 500)
+2026-09-21 16:43:06,816 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:43:08,973 bridge INFO call 43: customer started talking at 63.6s
+2026-09-21 16:43:10,425 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 4595 (speech is usually above 500)
+2026-09-21 16:43:10,685 plivo INFO customer sound: 1.0s of voice, loudest level 4595, usual voice level 821, over the agent: no
+2026-09-21 16:43:10,685 bridge INFO call 43: customer stopped talking at 65.3s
+2026-09-21 16:43:12,030 bridge INFO call 43: customer speech detected
+2026-09-21 16:43:13,868 bridge INFO call 43: agent started speaking at 68.5s
+2026-09-21 16:43:15,454 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 290 (speech is usually above 500)
+2026-09-21 16:43:20,425 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 907 (speech is usually above 500)
+2026-09-21 16:43:23,767 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:43:24,966 bridge INFO call 43: customer started talking at 79.6s
+2026-09-21 16:43:25,425 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 2920 (speech is usually above 500)
+2026-09-21 16:43:26,165 plivo INFO customer sound: 0.4s of voice, loudest level 2920, usual voice level 1187, over the agent: no
+2026-09-21 16:43:26,165 bridge INFO call 43: customer stopped talking at 80.8s
+2026-09-21 16:43:27,480 bridge INFO call 43: customer speech detected
+2026-09-21 16:43:28,517 bridge INFO call 43: agent started speaking at 83.1s
+2026-09-21 16:43:30,425 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 2399 (speech is usually above 500)
+2026-09-21 16:43:32,335 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:43:33,607 bridge INFO call 43: customer started talking at 88.2s
+2026-09-21 16:43:35,426 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 3678 (speech is usually above 500)
+2026-09-21 16:43:36,045 plivo INFO customer sound: 1.2s of voice, loudest level 3678, usual voice level 445, over the agent: no
+2026-09-21 16:43:36,047 bridge INFO call 43: customer stopped talking at 90.7s
+2026-09-21 16:43:36,768 bridge INFO call 43: customer speech detected
+2026-09-21 16:43:38,664 bridge INFO call 43: agent started speaking at 93.3s
+2026-09-21 16:43:40,426 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 2854 (speech is usually above 500)
+2026-09-21 16:43:40,796 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:43:41,686 bridge INFO call 43: customer started talking at 96.3s
+2026-09-21 16:43:45,425 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 4740 (speech is usually above 500)
+2026-09-21 16:43:45,961 bridge INFO call 43: customer speech detected
+2026-09-21 16:43:47,546 plivo INFO customer sound: 3.7s of voice, loudest level 4740, usual voice level 1130, over the agent: no
+2026-09-21 16:43:47,546 bridge INFO call 43: customer stopped talking at 102.2s
+2026-09-21 16:43:50,425 plivo INFO plivo inbound audio: 5250 frames so far, loudest recent level 2826 (speech is usually above 500)
+2026-09-21 16:43:50,773 bridge INFO call 43: agent started speaking at 105.4s
+2026-09-21 16:43:55,425 plivo INFO plivo inbound audio: 5500 frames so far, loudest recent level 621 (speech is usually above 500)
+2026-09-21 16:43:57,120 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:43:58,405 bridge INFO call 43: customer started talking at 113.0s
+2026-09-21 16:44:00,425 plivo INFO plivo inbound audio: 5750 frames so far, loudest recent level 4426 (speech is usually above 500)
+2026-09-21 16:44:02,186 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:03,045 plivo INFO customer sound: 2.1s of voice, loudest level 4426, usual voice level 355, over the agent: no
+2026-09-21 16:44:03,045 bridge INFO call 43: customer stopped talking at 117.7s
+2026-09-21 16:44:05,424 plivo INFO plivo inbound audio: 6000 frames so far, loudest recent level 2249 (speech is usually above 500)
+2026-09-21 16:44:06,534 bridge INFO call 43: agent started speaking at 121.2s
+2026-09-21 16:44:08,357 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:09,764 bridge INFO call 43: customer started talking at 124.4s
+2026-09-21 16:44:10,425 plivo INFO plivo inbound audio: 6250 frames so far, loudest recent level 3372 (speech is usually above 500)
+2026-09-21 16:44:13,124 plivo INFO customer sound: 2.2s of voice, loudest level 3372, usual voice level 440, over the agent: no
+2026-09-21 16:44:13,125 bridge INFO call 43: customer stopped talking at 127.8s
+2026-09-21 16:44:14,834 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:15,424 plivo INFO plivo inbound audio: 6500 frames so far, loudest recent level 2597 (speech is usually above 500)
+2026-09-21 16:44:15,948 bridge INFO call 43: agent started speaking at 130.6s
+2026-09-21 16:44:18,112 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:19,455 bridge INFO call 43: customer started talking at 134.1s
+2026-09-21 16:44:20,424 plivo INFO plivo inbound audio: 6750 frames so far, loudest recent level 4283 (speech is usually above 500)
+2026-09-21 16:44:21,284 plivo INFO customer sound: 1.1s of voice, loudest level 4283, usual voice level 1016, over the agent: no
+2026-09-21 16:44:21,284 bridge INFO call 43: customer stopped talking at 135.9s
+2026-09-21 16:44:22,568 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:24,172 bridge INFO call 43: agent started speaking at 138.8s
+2026-09-21 16:44:25,423 plivo INFO plivo inbound audio: 7000 frames so far, loudest recent level 1521 (speech is usually above 500)
+2026-09-21 16:44:30,424 plivo INFO plivo inbound audio: 7250 frames so far, loudest recent level 5148 (speech is usually above 500)
+2026-09-21 16:44:30,792 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:31,648 bridge INFO call 43: customer started talking at 146.3s
+2026-09-21 16:44:35,064 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:35,445 plivo INFO plivo inbound audio: 7500 frames so far, loudest recent level 11628 (speech is usually above 500)
+2026-09-21 16:44:35,499 plivo INFO customer sound: 2.3s of voice, loudest level 11628, usual voice level 947, over the agent: no
+2026-09-21 16:44:35,499 bridge INFO call 43: customer stopped talking at 150.1s
+2026-09-21 16:44:38,302 bridge INFO call 43: agent started speaking at 152.9s
+2026-09-21 16:44:40,466 plivo INFO plivo inbound audio: 7750 frames so far, loudest recent level 1441 (speech is usually above 500)
+2026-09-21 16:44:44,726 bridge INFO call 43: customer started talking at 159.3s
+2026-09-21 16:44:44,802 bridge INFO call 43: customer interrupted
+2026-09-21 16:44:44,804 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:45,423 plivo INFO plivo inbound audio: 8000 frames so far, loudest recent level 5663 (speech is usually above 500)
+2026-09-21 16:44:47,584 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:48,785 plivo INFO customer sound: 2.2s of voice, loudest level 5542, usual voice level 1680, over the agent: yes
+2026-09-21 16:44:48,785 bridge INFO call 43: customer stopped talking at 163.4s
+2026-09-21 16:44:50,323 bridge INFO call 43: customer started talking at 164.9s
+2026-09-21 16:44:50,407 bridge INFO call 43: customer interrupted
+2026-09-21 16:44:50,409 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:50,423 plivo INFO plivo inbound audio: 8250 frames so far, loudest recent level 5542 (speech is usually above 500)
+2026-09-21 16:44:51,103 plivo INFO customer sound: 0.1s of voice, loudest level 1048, usual voice level 626, over the agent: no
+2026-09-21 16:44:51,103 bridge INFO call 43: customer stopped talking at 165.7s
+2026-09-21 16:44:52,381 bridge INFO call 43: customer speech detected
+2026-09-21 16:44:54,451 bridge INFO call 43: agent started speaking at 169.1s
+2026-09-21 16:44:55,422 plivo INFO plivo inbound audio: 8500 frames so far, loudest recent level 1048 (speech is usually above 500)
+2026-09-21 16:44:58,150 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:44:59,043 bridge INFO call 43: customer started talking at 173.7s
+2026-09-21 16:45:00,422 plivo INFO plivo inbound audio: 8750 frames so far, loudest recent level 7480 (speech is usually above 500)
+2026-09-21 16:45:00,686 plivo INFO customer sound: 1.0s of voice, loudest level 7480, usual voice level 1095, over the agent: no
+2026-09-21 16:45:00,687 bridge INFO call 43: customer stopped talking at 175.3s
+2026-09-21 16:45:02,191 bridge INFO call 43: customer speech detected
+2026-09-21 16:45:04,103 bridge INFO call 43: customer started talking at 178.7s
+2026-09-21 16:45:04,186 bridge INFO call 43: customer interrupted
+2026-09-21 16:45:04,188 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:45:05,403 plivo INFO customer sound: 0.6s of voice, loudest level 10013, usual voice level 2596, over the agent: no
+2026-09-21 16:45:05,404 bridge INFO call 43: customer stopped talking at 180.0s
+2026-09-21 16:45:05,423 plivo INFO plivo inbound audio: 9000 frames so far, loudest recent level 10013 (speech is usually above 500)
+2026-09-21 16:45:06,860 bridge INFO call 43: customer speech detected
+2026-09-21 16:45:07,910 bridge INFO call 43: agent started speaking at 182.5s
+2026-09-21 16:45:10,423 plivo INFO plivo inbound audio: 9250 frames so far, loudest recent level 1777 (speech is usually above 500)
+2026-09-21 16:45:11,610 bridge INFO call 43: agent turn complete, now waiting for the customer
+2026-09-21 16:45:12,603 bridge INFO call 43: customer started talking at 187.2s
+2026-09-21 16:45:13,748 plivo INFO customer sound: 0.5s of voice, loudest level 3029, usual voice level 676, over the agent: no
+2026-09-21 16:45:13,750 bridge INFO call 43: customer stopped talking at 188.4s
+2026-09-21 16:45:15,166 bridge INFO call 43: customer speech detected
+2026-09-21 16:45:15,422 plivo INFO plivo inbound audio: 9500 frames so far, loudest recent level 3029 (speech is usually above 500)
+2026-09-21 16:45:17,370 bridge INFO call 43: agent started speaking at 192.0s
+2026-09-21 16:45:19,590 bridge INFO tool mark_outcome {"new_address": "house number 103, Chandigarh, PIN 160004", "notes": "customer says power bank but record shows om bracelet, raised for verification", "outcome": "unclear"}
+2026-09-21 16:45:19,910 bridge INFO tool end_call {}
+2026-09-21 16:45:20,422 plivo INFO plivo inbound audio: 9750 frames so far, loudest recent level 1342 (speech is usually above 500)
+2026-09-21 16:45:21,505 bridge INFO call 43 ended: 196s, outcome=unclear, watchdog nudges=0, reconnects=0
+2026-09-21 16:45:22,143 plivo INFO line report: background level 0, agent echo level 221, 71% of frames silenced, 197 loud-enough-to-interrupt frames
+2026-09-21 16:45:22,504 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/1d3e7420-5e62-4dc9-8620-3afedbd0dd6f/ "HTTP/1.1 204 No Content"
+2026-09-21 16:45:23,978 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=198 bill=0.01662 to=918196851335
+2026-09-21 16:48:11,622 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-21 16:48:11,622 plivo INFO dialing +919660000146 for contact 4 (voice Aoede) token=ee70265e50a547aa
+2026-09-21 16:48:12,352 bridge INFO call 44: connected to gemini-2.5-flash-native-audio-preview-12-2025 (fast replies on, transcript language hint off)
+2026-09-21 16:48:21,945 plivo INFO call ee70265e50a547aa answered; greeting started
+2026-09-21 16:48:21,947 bridge INFO call 44: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-21 16:48:22,583 plivo INFO plivo stream started call=22981985-28d7-4e19-b1cb-d4f05f18d607 stream=ac453868-c553-4cb2-ab25-c4b7367a8d1f
+2026-09-21 16:48:22,584 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-21 16:48:22,594 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-21 16:48:22,993 plivo INFO plivo audio byte order: loudness as-is=1463 swapped=7067 -> little-endian, no change
+2026-09-21 16:48:23,424 bridge INFO call 44: agent started speaking at 1.5s
+2026-09-21 16:48:26,982 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 6542 (speech is usually above 500)
+2026-09-21 16:48:30,751 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:48:30,781 plivo INFO greeting finished; now listening to the customer
+2026-09-21 16:48:31,661 bridge INFO call 44: customer started talking at 9.7s
+2026-09-21 16:48:31,995 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 2456 (speech is usually above 500)
+2026-09-21 16:48:32,556 plivo INFO customer sound: 0.3s of voice, loudest level 2456, usual voice level 1113, over the agent: no
+2026-09-21 16:48:32,556 bridge INFO call 44: customer stopped talking at 10.6s
+2026-09-21 16:48:34,000 bridge INFO call 44: customer speech detected
+2026-09-21 16:48:35,801 bridge INFO call 44: agent started speaking at 13.9s
+2026-09-21 16:48:36,980 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 7 (speech is usually above 500)
+2026-09-21 16:48:41,981 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 586 (speech is usually above 500)
+2026-09-21 16:48:42,770 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:48:43,221 bridge INFO call 44: customer started talking at 21.3s
+2026-09-21 16:48:46,285 bridge INFO call 44: customer speech detected
+2026-09-21 16:48:46,980 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 8144 (speech is usually above 500)
+2026-09-21 16:48:47,782 plivo INFO customer sound: 3.4s of voice, loudest level 8144, usual voice level 1460, over the agent: no
+2026-09-21 16:48:47,782 bridge INFO call 44: customer stopped talking at 25.8s
+2026-09-21 16:48:50,485 bridge INFO call 44: agent started speaking at 28.5s
+2026-09-21 16:48:51,980 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 2418 (speech is usually above 500)
+2026-09-21 16:48:56,016 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:48:56,979 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 78 (speech is usually above 500)
+2026-09-21 16:48:57,421 bridge INFO call 44: customer started talking at 35.5s
+2026-09-21 16:48:58,940 plivo INFO customer sound: 0.9s of voice, loudest level 9679, usual voice level 1108, over the agent: no
+2026-09-21 16:48:58,940 bridge INFO call 44: customer stopped talking at 37.0s
+2026-09-21 16:49:00,420 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:01,980 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 9679 (speech is usually above 500)
+2026-09-21 16:49:02,940 bridge INFO call 44: agent started speaking at 41.0s
+2026-09-21 16:49:04,261 bridge INFO call 44: customer started talking at 42.3s
+2026-09-21 16:49:04,360 bridge INFO call 44: customer interrupted
+2026-09-21 16:49:04,360 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:06,980 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 2138 (speech is usually above 500)
+2026-09-21 16:49:08,780 plivo INFO customer sound: 2.7s of voice, loudest level 2138, usual voice level 420, over the agent: yes
+2026-09-21 16:49:08,780 bridge INFO call 44: customer stopped talking at 46.8s
+2026-09-21 16:49:10,269 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:11,968 bridge INFO call 44: agent started speaking at 50.0s
+2026-09-21 16:49:11,980 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 1788 (speech is usually above 500)
+2026-09-21 16:49:15,632 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:16,480 bridge INFO call 44: customer started talking at 54.5s
+2026-09-21 16:49:16,980 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 5584 (speech is usually above 500)
+2026-09-21 16:49:19,639 plivo INFO customer sound: 2.5s of voice, loudest level 7139, usual voice level 947, over the agent: no
+2026-09-21 16:49:19,639 bridge INFO call 44: customer stopped talking at 57.7s
+2026-09-21 16:49:21,099 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:21,979 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 7139 (speech is usually above 500)
+2026-09-21 16:49:22,493 bridge INFO call 44: agent started speaking at 60.5s
+2026-09-21 16:49:26,979 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 4 (speech is usually above 500)
+2026-09-21 16:49:30,508 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:31,600 bridge INFO call 44: customer started talking at 69.7s
+2026-09-21 16:49:31,978 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 6617 (speech is usually above 500)
+2026-09-21 16:49:32,419 plivo INFO customer sound: 0.1s of voice, loudest level 2555, usual voice level 1438, over the agent: no
+2026-09-21 16:49:32,419 bridge INFO call 44: customer stopped talking at 70.5s
+2026-09-21 16:49:33,785 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:33,939 bridge INFO call 44: customer started talking at 72.0s
+2026-09-21 16:49:34,027 bridge INFO call 44: customer interrupted
+2026-09-21 16:49:34,029 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:35,139 plivo INFO customer sound: 0.6s of voice, loudest level 6843, usual voice level 1231, over the agent: no
+2026-09-21 16:49:35,139 bridge INFO call 44: customer stopped talking at 73.2s
+2026-09-21 16:49:36,397 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:36,978 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 7457 (speech is usually above 500)
+2026-09-21 16:49:38,126 bridge INFO call 44: agent started speaking at 76.2s
+2026-09-21 16:49:41,978 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 11 (speech is usually above 500)
+2026-09-21 16:49:42,548 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:43,479 bridge INFO call 44: customer started talking at 81.5s
+2026-09-21 16:49:44,479 plivo INFO customer sound: 0.4s of voice, loudest level 2684, usual voice level 727, over the agent: no
+2026-09-21 16:49:44,479 bridge INFO call 44: customer stopped talking at 82.5s
+2026-09-21 16:49:45,917 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:46,946 bridge INFO call 44: agent started speaking at 85.0s
+2026-09-21 16:49:46,979 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 5275 (speech is usually above 500)
+2026-09-21 16:49:51,992 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 324 (speech is usually above 500)
+2026-09-21 16:49:54,137 bridge INFO call 44: agent turn complete, now waiting for the customer
+2026-09-21 16:49:54,898 bridge INFO call 44: customer started talking at 93.0s
+2026-09-21 16:49:55,920 plivo INFO customer sound: 0.4s of voice, loudest level 3596, usual voice level 825, over the agent: no
+2026-09-21 16:49:55,920 bridge INFO call 44: customer stopped talking at 94.0s
+2026-09-21 16:49:56,989 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 6062 (speech is usually above 500)
+2026-09-21 16:49:57,210 bridge INFO call 44: customer speech detected
+2026-09-21 16:49:58,427 bridge INFO call 44: agent started speaking at 96.5s
+2026-09-21 16:49:59,451 bridge INFO tool mark_outcome {"outcome": "confirmed", "new_product": "om bracelet, 1 quantity"}
+2026-09-21 16:49:59,757 bridge INFO tool end_call {}
+2026-09-21 16:50:01,327 bridge INFO call 44 ended: 99s, outcome=confirmed, watchdog nudges=0, reconnects=0
+2026-09-21 16:50:01,980 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 122 (speech is usually above 500)
+2026-09-21 16:50:01,982 plivo INFO line report: background level 0, agent echo level 1, 72% of frames silenced, 53 loud-enough-to-interrupt frames
+2026-09-21 16:50:02,344 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/22981985-28d7-4e19-b1cb-d4f05f18d607/ "HTTP/1.1 204 No Content"
+2026-09-21 16:50:04,357 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=102 bill=0.00950 to=919660000146
+2026-09-21 16:52:19,666 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-21 16:52:19,666 plivo INFO dialing +919888838048 for contact 6 (voice Aoede) token=eb3c7c6bd83f46ed
+2026-09-21 16:52:20,423 bridge INFO call 45: connected to gemini-2.5-flash-native-audio-preview-12-2025 (fast replies on, transcript language hint off)
+2026-09-21 16:52:39,815 plivo INFO call eb3c7c6bd83f46ed answered; greeting started
+2026-09-21 16:52:39,817 bridge INFO call 45: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-21 16:52:40,479 plivo INFO plivo stream started call=05e3d5fb-d962-4707-9094-14b670a62ee2 stream=b3e0a309-5caa-4a81-9094-759c3c24e589
+2026-09-21 16:52:40,479 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-21 16:52:40,482 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-21 16:52:40,862 plivo INFO plivo audio byte order: loudness as-is=407 swapped=18938 -> little-endian, no change
+2026-09-21 16:52:41,758 bridge INFO call 45: agent started speaking at 1.9s
+2026-09-21 16:52:44,857 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 9657 (speech is usually above 500)
+2026-09-21 16:52:46,644 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:52:46,700 plivo INFO greeting finished; now listening to the customer
+2026-09-21 16:52:48,961 bridge INFO call 45: customer started talking at 9.1s
+2026-09-21 16:52:49,841 plivo INFO customer sound: 0.3s of voice, loudest level 9729, usual voice level 2849, over the agent: no
+2026-09-21 16:52:49,841 bridge INFO call 45: customer stopped talking at 10.0s
+2026-09-21 16:52:49,861 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 16623 (speech is usually above 500)
+2026-09-21 16:52:51,321 bridge INFO call 45: customer speech detected
+2026-09-21 16:52:52,509 bridge INFO call 45: agent started speaking at 12.7s
+2026-09-21 16:52:54,860 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 9115 (speech is usually above 500)
+2026-09-21 16:52:59,346 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:52:59,861 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 4493 (speech is usually above 500)
+2026-09-21 16:53:04,860 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 9946 (speech is usually above 500)
+2026-09-21 16:53:09,860 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 2192 (speech is usually above 500)
+2026-09-21 16:53:14,860 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 9688 (speech is usually above 500)
+2026-09-21 16:53:19,860 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 9172 (speech is usually above 500)
+2026-09-21 16:53:23,800 bridge INFO call 45: customer started talking at 44.0s
+2026-09-21 16:53:24,740 plivo INFO customer sound: 0.3s of voice, loudest level 6146, usual voice level 2812, over the agent: no
+2026-09-21 16:53:24,740 bridge INFO call 45: customer stopped talking at 44.9s
+2026-09-21 16:53:24,861 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 10097 (speech is usually above 500)
+2026-09-21 16:53:26,160 bridge INFO call 45: customer speech detected
+2026-09-21 16:53:27,182 bridge INFO call 45: agent started speaking at 47.4s
+2026-09-21 16:53:29,860 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 5685 (speech is usually above 500)
+2026-09-21 16:53:31,756 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:53:34,860 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 12921 (speech is usually above 500)
+2026-09-21 16:53:35,100 bridge INFO call 45: customer started talking at 55.3s
+2026-09-21 16:53:36,456 plivo INFO customer sound: 0.7s of voice, loudest level 5285, usual voice level 1419, over the agent: no
+2026-09-21 16:53:36,457 bridge INFO call 45: customer stopped talking at 56.6s
+2026-09-21 16:53:37,802 bridge INFO call 45: customer speech detected
+2026-09-21 16:53:38,889 bridge INFO call 45: agent started speaking at 59.1s
+2026-09-21 16:53:39,861 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 9936 (speech is usually above 500)
+2026-09-21 16:53:44,859 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 16401 (speech is usually above 500)
+2026-09-21 16:53:44,896 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:53:49,859 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 12669 (speech is usually above 500)
+2026-09-21 16:53:54,860 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 9107 (speech is usually above 500)
+2026-09-21 16:53:59,861 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 2214 (speech is usually above 500)
+2026-09-21 16:54:04,859 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 9939 (speech is usually above 500)
+2026-09-21 16:54:09,860 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 13974 (speech is usually above 500)
+2026-09-21 16:54:14,858 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 9956 (speech is usually above 500)
+2026-09-21 16:54:17,672 bridge INFO call 45: customer started talking at 97.9s
+2026-09-21 16:54:19,299 plivo INFO customer sound: 0.9s of voice, loudest level 9417, usual voice level 2669, over the agent: no
+2026-09-21 16:54:19,299 bridge INFO call 45: customer stopped talking at 99.5s
+2026-09-21 16:54:19,863 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 10489 (speech is usually above 500)
+2026-09-21 16:54:20,742 bridge INFO call 45: customer speech detected
+2026-09-21 16:54:21,673 bridge INFO call 45: agent started speaking at 101.9s
+2026-09-21 16:54:24,859 plivo INFO plivo inbound audio: 5250 frames so far, loudest recent level 20964 (speech is usually above 500)
+2026-09-21 16:54:25,454 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:54:27,999 bridge INFO call 45: customer started talking at 108.2s
+2026-09-21 16:54:29,858 plivo INFO plivo inbound audio: 5500 frames so far, loudest recent level 10468 (speech is usually above 500)
+2026-09-21 16:54:30,019 plivo INFO customer sound: 1.3s of voice, loudest level 10468, usual voice level 1715, over the agent: no
+2026-09-21 16:54:30,020 bridge INFO call 45: customer stopped talking at 110.2s
+2026-09-21 16:54:30,839 bridge INFO call 45: customer started talking at 111.0s
+2026-09-21 16:54:32,438 plivo INFO customer sound: 1.0s of voice, loudest level 10443, usual voice level 2498, over the agent: no
+2026-09-21 16:54:32,438 bridge INFO call 45: customer stopped talking at 112.6s
+2026-09-21 16:54:32,482 bridge INFO call 45: customer speech detected
+2026-09-21 16:54:32,733 bridge INFO call 45: customer interrupted
+2026-09-21 16:54:32,735 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:54:34,860 plivo INFO plivo inbound audio: 5750 frames so far, loudest recent level 10607 (speech is usually above 500)
+2026-09-21 16:54:35,662 bridge INFO call 45: customer speech detected
+2026-09-21 16:54:38,012 bridge INFO call 45: agent started speaking at 118.2s
+2026-09-21 16:54:39,858 plivo INFO plivo inbound audio: 6000 frames so far, loudest recent level 5624 (speech is usually above 500)
+2026-09-21 16:54:44,852 plivo INFO plivo inbound audio: 6250 frames so far, loudest recent level 2855 (speech is usually above 500)
+2026-09-21 16:54:45,798 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:54:49,858 plivo INFO plivo inbound audio: 6500 frames so far, loudest recent level 8981 (speech is usually above 500)
+2026-09-21 16:54:54,858 plivo INFO plivo inbound audio: 6750 frames so far, loudest recent level 1676 (speech is usually above 500)
+2026-09-21 16:54:59,858 plivo INFO plivo inbound audio: 7000 frames so far, loudest recent level 3729 (speech is usually above 500)
+2026-09-21 16:55:04,858 plivo INFO plivo inbound audio: 7250 frames so far, loudest recent level 3539 (speech is usually above 500)
+2026-09-21 16:55:05,541 bridge INFO call 45: customer started talking at 145.7s
+2026-09-21 16:55:06,998 plivo INFO customer sound: 0.8s of voice, loudest level 10261, usual voice level 2980, over the agent: no
+2026-09-21 16:55:06,998 bridge INFO call 45: customer stopped talking at 147.2s
+2026-09-21 16:55:08,342 bridge INFO call 45: customer speech detected
+2026-09-21 16:55:09,398 bridge INFO call 45: agent started speaking at 149.6s
+2026-09-21 16:55:09,858 plivo INFO plivo inbound audio: 7500 frames so far, loudest recent level 10261 (speech is usually above 500)
+2026-09-21 16:55:12,221 bridge INFO call 45: agent turn complete, now waiting for the customer
+2026-09-21 16:55:14,858 plivo INFO plivo inbound audio: 7750 frames so far, loudest recent level 9944 (speech is usually above 500)
+2026-09-21 16:55:19,858 plivo INFO plivo inbound audio: 8000 frames so far, loudest recent level 2871 (speech is usually above 500)
+2026-09-21 16:55:24,857 plivo INFO plivo inbound audio: 8250 frames so far, loudest recent level 576 (speech is usually above 500)
+2026-09-21 16:55:29,857 plivo INFO plivo inbound audio: 8500 frames so far, loudest recent level 10901 (speech is usually above 500)
+2026-09-21 16:55:31,740 bridge INFO call 45 ended: 172s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-21 16:55:32,340 plivo INFO line report: background level 108, agent echo level 449, 90% of frames silenced, 0 loud-enough-to-interrupt frames
+2026-09-21 16:55:32,694 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/05e3d5fb-d962-4707-9094-14b670a62ee2/ "HTTP/1.1 404 Not Found"
+2026-09-21 16:55:32,694 plivo INFO call 05e3d5fb-d962-4707-9094-14b670a62ee2 had already ended
+2026-09-21 16:55:33,687 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=173 bill=0.01425 to=919888838048
+2026-09-22 09:51:47,856 vad INFO Silero speech detector loaded
+2026-09-22 09:52:19,720 vad INFO Silero speech detector loaded
+2026-09-22 09:52:19,778 plivo INFO line loud for 8s (119 loud frames) but no speech recognised; asking the agent to repeat (stuck nudge 1); listening more leniently from now on
+2026-09-22 09:52:19,892 plivo INFO line quiet for 12s; asking the agent to check (silence nudge 1)
+2026-09-22 10:14:12,565 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 10:14:12,761 vad INFO Silero speech detector loaded
+2026-09-22 10:14:12,814 plivo INFO dialing +917668155190 for contact 7 (voice Aoede) token=55a31e023ccb4bc9
+2026-09-22 10:14:13,540 bridge WARNING call 46: fast mode was refused (1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); retrying with model defaults
+2026-09-22 10:14:14,670 bridge WARNING call 46: connection to Gemini dropped (APIError: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); reconnecting (1 of 3)
+2026-09-22 10:14:15,810 bridge WARNING call 46: fast mode was refused (1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); retrying with model defaults
+2026-09-22 10:14:16,440 bridge WARNING call 46: connection to Gemini dropped (APIError: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); reconnecting (2 of 3)
+2026-09-22 10:14:17,050 bridge WARNING call 46: fast mode was refused (1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); retrying with model defaults
+2026-09-22 10:14:17,710 bridge WARNING call 46: connection to Gemini dropped (APIError: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); reconnecting (3 of 3)
+2026-09-22 10:14:18,930 bridge WARNING call 46: fast mode was refused (1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi); retrying with model defaults
+2026-09-22 10:14:19,970 bridge ERROR call 46 failed
+Traceback (most recent call last):
+  File "D:\VedicVaibhav\VoiceAgent\.venv\Lib\site-packages\google\genai\live.py", line 1123, in connect
+    raw_response = await ws.recv(decode=False)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VedicVaibhav\VoiceAgent\.venv\Lib\site-packages\websockets\asyncio\connection.py", line 324, in recv
+    raise self.protocol.close_exc from self.recv_exc
+websockets.exceptions.ConnectionClosedError: received 1011 (internal error) Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi; then sent 1011 (internal error) Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VedicVaibhav\VoiceAgent\app\live_bridge.py", line 342, in run_call
+    state.add_input_text(sc.input_transcription.text)
+  File "D:\VedicVaibhav\VoiceAgent\app\live_bridge.py", line 171, in session_once
+    tools=TOOLS,
+                 
+  File "C:\Users\MY PC\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\Lib\contextlib.py", line 659, in enter_async_context
+    result = await _enter(cm)
+             ^^^^^^^^^^^^^^^^
+  File "C:\Users\MY PC\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\Lib\contextlib.py", line 210, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VedicVaibhav\VoiceAgent\.venv\Lib\site-packages\google\genai\live.py", line 1133, in connect
+    errors.APIError.raise_error(code, reason, None)
+  File "D:\VedicVaibhav\VoiceAgent\.venv\Lib\site-packages\google\genai\errors.py", line 206, in raise_error
+    raise cls(status_code, response_json, response)
+google.genai.errors.APIError: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi
+2026-09-22 10:14:20,059 bridge INFO call 46 ended: 7s, outcome=None, watchdog nudges=0, reconnects=3
+2026-09-22 10:14:24,471 plivo INFO call 55a31e023ccb4bc9 answered; greeting started
+2026-09-22 10:14:25,349 plivo INFO plivo stream started call=e4bd120d-3661-48ce-ad72-2ee5e34f3989 stream=36a8164c-4c20-4736-874d-ec195734327a
+2026-09-22 10:14:25,349 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-22 10:14:25,355 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-22 10:14:25,514 plivo INFO plivo audio byte order: loudness as-is=23 swapped=5172 -> little-endian, no change
+2026-09-22 10:14:25,657 plivo INFO line report: background level 7, agent echo level 0, 0% of frames silenced, 0 loud-enough-to-interrupt frames
+2026-09-22 10:14:26,037 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/e4bd120d-3661-48ce-ad72-2ee5e34f3989/ "HTTP/1.1 204 No Content"
+2026-09-22 10:14:28,030 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=3 bill=0.00238 to=917668155190
+2026-09-22 10:18:04,020 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 10:18:04,152 vad INFO Silero speech detector loaded
+2026-09-22 10:18:04,152 plivo INFO dialing +917668155190 for contact 7 (voice Aoede) token=b080120d25f349d1
+2026-09-22 10:18:05,010 bridge ERROR call 47 failed: Gemini refused for billing reasons: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi
+2026-09-22 10:18:05,010 bridge INFO call 47 ended: 1s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 10:18:05,310 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Request/196beb22-1ef0-437d-ae38-ee3b84949d5e/ "HTTP/1.1 204 No Content"
+2026-09-22 10:18:05,320 plivo INFO call b080120d25f349d1 cancelled while ringing
+2026-09-22 10:18:06,916 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=0 bill=0.00000 to=917668155190
+2026-09-22 10:23:29,592 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 10:23:29,733 vad INFO Silero speech detector loaded
+2026-09-22 10:23:29,733 plivo INFO dialing +917668155190 for contact 7 (voice Aoede) token=9fe99bb85308436e
+2026-09-22 10:23:30,700 bridge ERROR call 48 failed: Gemini refused for billing reasons: 1011 None. Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billi
+2026-09-22 10:23:30,700 bridge INFO call 48 ended: 1s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 10:23:30,900 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Request/574edd38-b254-4479-9f9f-aef4776fb4c5/ "HTTP/1.1 204 No Content"
+2026-09-22 10:23:30,909 plivo INFO call 9fe99bb85308436e cancelled while ringing
+2026-09-22 10:23:32,570 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=0 bill=0.00000 to=917668155190
+2026-09-22 10:37:27,504 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0}
+2026-09-22 10:37:27,522 campaign WARNING campaign skipped contact 9: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 10:37:27,534 campaign INFO campaign: contact 8 busy (attempt 1 of 2); next try at 2026-09-22T05:07:27.532197+00:00
+2026-09-22 10:37:27,536 campaign INFO campaign: contact 8 busy after 2 attempts; giving up
+2026-09-22 10:37:29,541 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 10:49:47,606 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:49:47,636 campaign WARNING campaign skipped contact 9: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 10:49:47,646 campaign INFO campaign: contact 8 busy (attempt 1 of 2); next try at 2026-09-22T05:19:47.644932+00:00
+2026-09-22 10:49:47,651 campaign INFO campaign: contact 8 busy after 2 attempts; giving up
+2026-09-22 10:49:49,663 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 10:49:49,725 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:49:49,747 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:49:49,763 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:49:49,763 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 10:49:49,763 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:49:49,763 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 1}
+2026-09-22 10:49:49,763 campaign INFO campaign ended: paused: today's estimated cost is Rs 5, the budget was Rs 1 (3 calls this run)
+2026-09-22 10:50:14,244 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:50:14,254 campaign WARNING campaign skipped contact 9: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 10:50:14,263 campaign INFO campaign: contact 8 busy (attempt 1 of 2); next try at 2026-09-22T05:20:14.263634+00:00
+2026-09-22 10:50:14,273 campaign INFO campaign: contact 8 busy after 2 attempts; giving up
+2026-09-22 10:50:16,287 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 10:50:16,390 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:50:16,425 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:16,438 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:16,438 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 10:50:16,438 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:16,438 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 1}
+2026-09-22 10:50:16,438 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 10:50:29,398 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:50:29,416 campaign WARNING campaign skipped contact 9: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 10:50:29,426 campaign INFO campaign: contact 8 busy (attempt 1 of 2); next try at 2026-09-22T05:20:29.425091+00:00
+2026-09-22 10:50:29,435 campaign INFO campaign: contact 8 busy after 2 attempts; giving up
+2026-09-22 10:50:31,443 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 10:50:31,503 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 10:50:31,523 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:31,533 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:31,533 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 10:50:31,533 campaign WARNING campaign: call to contact 8 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 10:50:31,533 campaign INFO campaign started: {'voice': 'Aoede', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 1}
+2026-09-22 10:50:31,533 campaign INFO campaign ended: paused: today's estimated cost is Rs 5, the budget was Rs 1 (3 calls this run)
+2026-09-22 12:01:30,127 httpx INFO HTTP Request: POST http://testserver/api/contacts/preview "HTTP/1.1 200 OK"
+2026-09-22 12:01:43,276 httpx INFO HTTP Request: POST http://testserver/api/contacts/preview "HTTP/1.1 200 OK"
+2026-09-22 12:01:43,283 httpx INFO HTTP Request: POST http://testserver/api/contacts/upload "HTTP/1.1 200 OK"
+2026-09-22 12:07:22,007 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 12:07:22,176 vad INFO Silero speech detector loaded
+2026-09-22 12:07:22,176 plivo INFO dialing +918196851335 for contact 11 (voice Aoede) token=27da45409959406f
+2026-09-22 12:07:23,241 bridge INFO call 49: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-22 12:07:39,055 plivo INFO call 27da45409959406f answered; greeting started
+2026-09-22 12:07:39,057 bridge INFO call 49: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-22 12:07:39,800 plivo INFO plivo stream started call=63c98f51-eca5-4062-900f-b022bdba51ed stream=f438a45a-fe78-4d1f-b049-758f267819b7
+2026-09-22 12:07:39,808 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-22 12:07:39,853 plivo INFO recording the customer's audio to data/recordings/call_49.wav
+2026-09-22 12:07:39,853 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-22 12:07:40,158 plivo INFO plivo audio byte order: loudness as-is=9 swapped=2312 -> little-endian, no change
+2026-09-22 12:07:40,280 bridge INFO call 49: agent started speaking at 1.2s
+2026-09-22 12:07:44,145 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 137 (speech is usually above 500), most voice-like frame 0.09, 0 loud frames not taken as speech
+2026-09-22 12:07:48,893 bridge INFO call 49: agent turn complete, now waiting for the customer
+2026-09-22 12:07:48,914 plivo INFO greeting finished; now listening to the customer
+2026-09-22 12:07:49,092 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 9 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:07:50,234 bridge INFO call 49: customer started talking at 11.2s
+2026-09-22 12:07:51,674 plivo INFO customer sound: 0.3s of voice, loudest level 899, usual voice level 374, over the agent: no
+2026-09-22 12:07:51,674 bridge INFO call 49: customer stopped talking at 12.6s
+2026-09-22 12:07:53,273 bridge INFO call 49: customer speech detected
+2026-09-22 12:07:54,093 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 899 (speech is usually above 500), most voice-like frame 0.98, 1 loud frames not taken as speech
+2026-09-22 12:07:54,239 bridge INFO call 49: agent started speaking at 15.2s
+2026-09-22 12:07:59,092 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 754 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-22 12:08:02,009 bridge INFO call 49: agent turn complete, now waiting for the customer
+2026-09-22 12:08:04,092 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 876 (speech is usually above 500), most voice-like frame 0.95, 2 loud frames not taken as speech
+2026-09-22 12:08:04,312 bridge INFO call 49: customer started talking at 25.2s
+2026-09-22 12:08:07,393 plivo INFO customer sound: 0.4s of voice, loudest level 1095, usual voice level 385, over the agent: no
+2026-09-22 12:08:07,395 bridge INFO call 49: customer stopped talking at 28.3s
+2026-09-22 12:08:09,092 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 1095 (speech is usually above 500), most voice-like frame 0.98, 2 loud frames not taken as speech
+2026-09-22 12:08:09,232 bridge INFO call 49: customer speech detected
+2026-09-22 12:08:10,946 bridge INFO call 49: agent started speaking at 31.9s
+2026-09-22 12:08:14,092 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 9 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:08:16,444 bridge INFO call 49: agent turn complete, now waiting for the customer
+2026-09-22 12:08:19,092 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 1349 (speech is usually above 500), most voice-like frame 0.11, 8 loud frames not taken as speech
+2026-09-22 12:08:23,809 bridge INFO call 49 ended: 45s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 12:08:23,809 bridge INFO call 49 usage: 3 turns, in: 67 audio + 12950 text tokens, out: 565 audio + 0 text tokens, about $0.0135
+2026-09-22 12:08:24,409 plivo INFO line report: background level 8, agent echo level 10, customer voice level 568, 67% of frames silenced, 14 loud frames not taken as speech, 0 loud-enough-to-interrupt frames, stuck nudges 0, silence nudges 0
+2026-09-22 12:08:24,798 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/63c98f51-eca5-4062-900f-b022bdba51ed/ "HTTP/1.1 404 Not Found"
+2026-09-22 12:08:24,798 plivo INFO call 63c98f51-eca5-4062-900f-b022bdba51ed had already ended
+2026-09-22 12:08:25,682 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=46 bill=0.00475 to=918196851335
+2026-09-22 12:13:39,296 vad INFO Silero speech detector loaded
+2026-09-22 12:13:39,384 plivo INFO line loud for 8s (119 loud frames) but no speech recognised; asking the agent to repeat (stuck nudge 1); listening more leniently from now on
+2026-09-22 12:13:39,501 plivo INFO line quiet for 12s; asking the agent to check (silence nudge 1)
+2026-09-22 12:28:48,107 httpx INFO HTTP Request: GET http://testserver/api/callbacks "HTTP/1.1 200 OK"
+2026-09-22 12:28:48,153 httpx INFO HTTP Request: POST http://testserver/api/contacts/14/schedule "HTTP/1.1 200 OK"
+2026-09-22 12:28:48,159 httpx INFO HTTP Request: POST http://testserver/api/contacts/14/schedule "HTTP/1.1 200 OK"
+2026-09-22 12:28:55,287 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 12:28:55,288 campaign INFO campaign ended: paused: TypeError: fake_place_call() got an unexpected keyword argument 'language' (0 calls this run)
+2026-09-22 12:29:10,581 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 12:29:10,581 campaign WARNING campaign skipped contact 15: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 12:29:10,597 campaign INFO campaign: contact 14 busy (attempt 1 of 2); next try at 2026-09-22T06:59:10.597286+00:00
+2026-09-22 12:29:10,606 campaign INFO campaign: contact 14 busy after 2 attempts; giving up
+2026-09-22 12:29:12,609 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 12:29:12,670 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 12:29:12,697 campaign WARNING campaign: call to contact 14 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 12:29:12,705 campaign WARNING campaign: call to contact 14 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 12:29:12,705 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 12:29:12,706 campaign WARNING campaign: call to contact 14 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 12:29:12,706 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 1}
+2026-09-22 12:29:12,707 campaign INFO campaign ended: paused: today's estimated cost is Rs 5, the budget was Rs 1 (3 calls this run)
+2026-09-22 12:39:00,401 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 12:39:00,599 vad INFO Silero speech detector loaded
+2026-09-22 12:39:00,599 plivo INFO dialing +918196851335 for contact 11 (voice Aoede) token=9bb73a14c6ed47a3
+2026-09-22 12:39:03,450 bridge INFO call 50: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-22 12:39:13,236 plivo INFO call 9bb73a14c6ed47a3 answered; greeting started
+2026-09-22 12:39:13,238 bridge INFO call 50: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-22 12:39:14,525 plivo INFO plivo stream started call=a06a76d0-e792-4c24-9dd9-762b08190d13 stream=0b9ffdc3-767e-4340-a13d-622cf1896f3a
+2026-09-22 12:39:14,526 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-22 12:39:14,572 plivo INFO recording the customer's audio to data/recordings/call_50.wav
+2026-09-22 12:39:14,573 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-22 12:39:14,784 plivo INFO plivo audio byte order: loudness as-is=563 swapped=13532 -> little-endian, no change
+2026-09-22 12:39:16,609 bridge INFO call 50: agent started speaking at 3.4s
+2026-09-22 12:39:18,269 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 3621 (speech is usually above 500), most voice-like frame 0.91, 20 loud frames not taken as speech
+2026-09-22 12:39:23,270 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 1343 (speech is usually above 500), most voice-like frame 0.18, 0 loud frames not taken as speech
+2026-09-22 12:39:23,718 bridge INFO call 50: agent turn complete, now waiting for the customer
+2026-09-22 12:39:23,871 plivo INFO greeting finished; now listening to the customer
+2026-09-22 12:39:28,280 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 1434 (speech is usually above 500), most voice-like frame 0.01, 22 loud frames not taken as speech
+2026-09-22 12:39:32,653 plivo INFO line loud for 8s (59 loud frames) but no speech recognised; asking the agent to repeat (stuck nudge 1); listening more leniently from now on
+2026-09-22 12:39:32,653 bridge INFO call 50: nudging the agent: [Note from the phone line: for the last 8 seconds there has been loud sound from the customer's side but no words could be made out; they are probably answering you on a noisy line. Do not wait. Say the voice is not clear ('sorry ji, awaaz clear nahi aa rahi') and repeat your last question in fewer words.]
+2026-09-22 12:39:33,270 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 2431 (speech is usually above 500), most voice-like frame 0.37, 49 loud frames not taken as speech
+2026-09-22 12:39:35,314 bridge INFO call 50: agent started speaking at 22.1s
+2026-09-22 12:39:38,270 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 1358 (speech is usually above 500), most voice-like frame 0.00, 21 loud frames not taken as speech
+2026-09-22 12:39:39,350 bridge INFO call 50: agent turn complete, now waiting for the customer
+2026-09-22 12:39:43,270 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 2306 (speech is usually above 500), most voice-like frame 0.12, 24 loud frames not taken as speech
+2026-09-22 12:39:46,909 bridge INFO call 50 ended: 34s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 12:39:46,909 bridge INFO call 50 usage: 2 turns, in: 20 audio + 8680 text tokens, out: 295 audio + 0 text tokens, about $0.0079
+2026-09-22 12:39:47,578 plivo INFO line report: background level 0, agent echo level 180, customer voice level 672, 68% of frames silenced, 142 loud frames not taken as speech, 0 loud-enough-to-interrupt frames, stuck nudges 1, silence nudges 0
+2026-09-22 12:39:47,928 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/a06a76d0-e792-4c24-9dd9-762b08190d13/ "HTTP/1.1 404 Not Found"
+2026-09-22 12:39:47,928 plivo INFO call a06a76d0-e792-4c24-9dd9-762b08190d13 had already ended
+2026-09-22 12:39:48,396 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=35 bill=0.00475 to=918196851335
+2026-09-22 12:40:02,352 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 12:40:02,417 plivo INFO dialing +918196851335 for contact 11 (voice Aoede) token=eebb3eacb0694cf5
+2026-09-22 12:40:03,609 bridge INFO call 51: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-22 12:40:28,136 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Request/a31576f2-3c55-4040-9154-aea258fccb89/ "HTTP/1.1 404 Not Found"
+2026-09-22 12:40:28,136 plivo INFO call eebb3eacb0694cf5 cancelled while ringing
+2026-09-22 12:40:28,136 plivo INFO call 51 cancelled from the dashboard while ringing
+2026-09-22 12:40:28,263 bridge INFO call 51 ended: 26s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 12:40:28,658 plivo INFO plivo hangup: status=busy cause=USER_BUSY duration=0 bill=0.00000 to=918196851335
+2026-09-22 12:57:38,174 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 12:57:38,234 plivo INFO dialing +918196851335 for contact 17 (voice Aoede) token=60fa2b0968b94750
+2026-09-22 12:57:39,370 bridge INFO call 52: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-22 12:58:09,261 plivo INFO plivo hangup: status=no-answer cause=NO_ANSWER duration=0 bill=0.00000 to=918196851335
+2026-09-22 12:58:09,332 bridge INFO call 52 ended: 31s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-22 12:58:36,372 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-22 12:58:36,389 plivo INFO dialing +918196851335 for contact 17 (voice Aoede) token=a4a3955d63e9480d
+2026-09-22 12:58:37,447 bridge INFO call 53: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-22 12:58:45,861 plivo INFO call a4a3955d63e9480d answered; greeting started
+2026-09-22 12:58:45,862 bridge INFO call 53: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-22 12:58:46,689 plivo INFO plivo stream started call=855ff6ed-16ea-4ca7-9314-145250ef4bfd stream=025c784a-2764-44c3-acc0-52b12c70ed06
+2026-09-22 12:58:46,689 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-22 12:58:46,733 plivo INFO recording the customer's audio to data/recordings/call_53.wav
+2026-09-22 12:58:46,734 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-22 12:58:46,903 plivo INFO plivo audio byte order: loudness as-is=0 swapped=0 -> little-endian, no change
+2026-09-22 12:58:47,117 bridge INFO call 53: agent started speaking at 1.2s
+2026-09-22 12:58:50,904 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.03, 0 loud frames not taken as speech
+2026-09-22 12:58:54,308 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:58:54,403 plivo INFO greeting finished; now listening to the customer
+2026-09-22 12:58:55,487 bridge INFO call 53: customer started talking at 9.6s
+2026-09-22 12:58:55,903 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 2949 (speech is usually above 500), most voice-like frame 0.99, 1 loud frames not taken as speech
+2026-09-22 12:58:56,944 plivo INFO customer sound: 0.5s of voice, loudest level 3223, usual voice level 1060, over the agent: no
+2026-09-22 12:58:56,946 bridge INFO call 53: customer stopped talking at 11.1s
+2026-09-22 12:58:58,525 bridge INFO call 53: customer speech detected
+2026-09-22 12:59:00,223 bridge INFO call 53: agent started speaking at 14.4s
+2026-09-22 12:59:00,905 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 3223 (speech is usually above 500), most voice-like frame 0.93, 0 loud frames not taken as speech
+2026-09-22 12:59:05,905 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:59:07,197 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:59:08,665 bridge INFO call 53: customer started talking at 22.8s
+2026-09-22 12:59:09,984 plivo INFO customer sound: 0.2s of voice, loudest level 1325, usual voice level 486, over the agent: no
+2026-09-22 12:59:09,985 bridge INFO call 53: customer stopped talking at 24.1s
+2026-09-22 12:59:10,906 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 1325 (speech is usually above 500), most voice-like frame 0.95, 5 loud frames not taken as speech
+2026-09-22 12:59:11,355 bridge INFO call 53: customer speech detected
+2026-09-22 12:59:13,575 bridge INFO call 53: agent started speaking at 27.7s
+2026-09-22 12:59:15,903 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 8 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:59:18,397 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:59:18,410 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 12:59:18,414 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 12:59:20,007 bridge INFO call 53: agent started speaking at 34.1s
+2026-09-22 12:59:20,905 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 1231 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-22 12:59:24,034 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:59:25,906 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 782 (speech is usually above 500), most voice-like frame 0.96, 0 loud frames not taken as speech
+2026-09-22 12:59:30,942 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 612 (speech is usually above 500), most voice-like frame 0.67, 5 loud frames not taken as speech
+2026-09-22 12:59:35,906 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:59:40,906 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-22 12:59:43,086 bridge INFO call 53: customer started talking at 57.2s
+2026-09-22 12:59:44,767 plivo INFO customer sound: 0.5s of voice, loudest level 1462, usual voice level 478, over the agent: no
+2026-09-22 12:59:44,767 bridge INFO call 53: customer stopped talking at 58.9s
+2026-09-22 12:59:45,905 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 1462 (speech is usually above 500), most voice-like frame 0.99, 0 loud frames not taken as speech
+2026-09-22 12:59:46,265 bridge INFO call 53: customer speech detected
+2026-09-22 12:59:47,314 bridge INFO call 53: agent started speaking at 61.5s
+2026-09-22 12:59:49,014 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:59:49,014 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 12:59:49,014 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 12:59:50,173 bridge INFO call 53: agent started speaking at 64.3s
+2026-09-22 12:59:50,905 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 125 (speech is usually above 500), most voice-like frame 0.10, 0 loud frames not taken as speech
+2026-09-22 12:59:53,874 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 12:59:55,905 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 3171 (speech is usually above 500), most voice-like frame 0.97, 0 loud frames not taken as speech
+2026-09-22 12:59:55,927 bridge INFO call 53: customer started talking at 70.1s
+2026-09-22 12:59:57,906 plivo INFO customer sound: 0.7s of voice, loudest level 1414, usual voice level 271, over the agent: no
+2026-09-22 12:59:57,906 bridge INFO call 53: customer stopped talking at 72.0s
+2026-09-22 12:59:59,483 bridge INFO call 53: customer speech detected
+2026-09-22 13:00:00,695 bridge INFO call 53: agent started speaking at 74.8s
+2026-09-22 13:00:00,908 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 1539 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-22 13:00:02,763 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:02,763 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 13:00:02,763 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 13:00:04,089 bridge INFO call 53: agent started speaking at 78.2s
+2026-09-22 13:00:05,909 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 2 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-22 13:00:08,313 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:10,914 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 1302 (speech is usually above 500), most voice-like frame 0.00, 1 loud frames not taken as speech
+2026-09-22 13:00:11,225 bridge INFO call 53: customer started talking at 85.4s
+2026-09-22 13:00:12,407 plivo INFO customer sound: 0.1s of voice, loudest level 501, usual voice level 336, over the agent: no
+2026-09-22 13:00:12,408 bridge INFO call 53: customer stopped talking at 86.5s
+2026-09-22 13:00:13,943 bridge INFO call 53: customer speech detected
+2026-09-22 13:00:15,014 bridge INFO call 53: agent started speaking at 89.2s
+2026-09-22 13:00:15,905 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 4240 (speech is usually above 500), most voice-like frame 0.99, 2 loud frames not taken as speech
+2026-09-22 13:00:16,608 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:16,608 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 13:00:16,608 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 13:00:17,723 bridge INFO call 53: agent started speaking at 91.9s
+2026-09-22 13:00:20,906 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 4404 (speech is usually above 500), most voice-like frame 0.98, 0 loud frames not taken as speech
+2026-09-22 13:00:21,465 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:22,563 bridge INFO call 53: customer started talking at 96.7s
+2026-09-22 13:00:23,744 plivo INFO customer sound: 0.3s of voice, loudest level 4071, usual voice level 1446, over the agent: no
+2026-09-22 13:00:23,744 bridge INFO call 53: customer stopped talking at 97.9s
+2026-09-22 13:00:25,292 bridge INFO call 53: customer speech detected
+2026-09-22 13:00:25,904 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 4071 (speech is usually above 500), most voice-like frame 0.99, 2 loud frames not taken as speech
+2026-09-22 13:00:26,865 bridge INFO call 53: agent started speaking at 101.0s
+2026-09-22 13:00:29,326 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:29,326 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 13:00:29,326 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 13:00:30,525 bridge INFO call 53: customer started talking at 104.7s
+2026-09-22 13:00:30,920 plivo INFO plivo inbound audio: 5250 frames so far, loudest recent level 1303 (speech is usually above 500), most voice-like frame 0.87, 1 loud frames not taken as speech
+2026-09-22 13:00:30,926 bridge INFO call 53: customer interrupted
+2026-09-22 13:00:30,931 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:33,127 plivo INFO customer sound: 0.5s of voice, loudest level 1313, usual voice level 424, over the agent: no
+2026-09-22 13:00:33,127 bridge INFO call 53: customer stopped talking at 107.3s
+2026-09-22 13:00:34,941 bridge INFO call 53: customer speech detected
+2026-09-22 13:00:35,906 plivo INFO plivo inbound audio: 5500 frames so far, loudest recent level 1313 (speech is usually above 500), most voice-like frame 0.88, 1 loud frames not taken as speech
+2026-09-22 13:00:36,845 bridge INFO call 53: agent started speaking at 111.0s
+2026-09-22 13:00:40,904 plivo INFO plivo inbound audio: 5750 frames so far, loudest recent level 55 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-22 13:00:44,186 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:45,905 plivo INFO plivo inbound audio: 6000 frames so far, loudest recent level 229 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-22 13:00:46,045 bridge INFO call 53: customer started talking at 120.2s
+2026-09-22 13:00:47,064 plivo INFO customer sound: 0.1s of voice, loudest level 1435, usual voice level 578, over the agent: no
+2026-09-22 13:00:47,065 bridge INFO call 53: customer stopped talking at 121.2s
+2026-09-22 13:00:48,381 bridge INFO call 53: customer speech detected
+2026-09-22 13:00:50,140 bridge INFO call 53: agent started speaking at 124.3s
+2026-09-22 13:00:50,906 plivo INFO plivo inbound audio: 6250 frames so far, loudest recent level 1435 (speech is usually above 500), most voice-like frame 0.99, 2 loud frames not taken as speech
+2026-09-22 13:00:55,911 plivo INFO plivo inbound audio: 6500 frames so far, loudest recent level 193 (speech is usually above 500), most voice-like frame 0.40, 0 loud frames not taken as speech
+2026-09-22 13:00:56,006 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:00:56,006 bridge INFO call 53: customer turn was inaudible ('<noise>') and the agent moved on; asking it to repeat the question
+2026-09-22 13:00:56,006 bridge INFO call 53: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-22 13:00:57,173 bridge INFO call 53: agent started speaking at 131.3s
+2026-09-22 13:01:00,906 plivo INFO plivo inbound audio: 6750 frames so far, loudest recent level 1436 (speech is usually above 500), most voice-like frame 0.93, 1 loud frames not taken as speech
+2026-09-22 13:01:01,071 bridge INFO call 53: agent turn complete, now waiting for the customer
+2026-09-22 13:01:02,087 bridge INFO call 53: customer started talking at 136.2s
+2026-09-22 13:01:03,551 plivo INFO customer sound: 0.2s of voice, loudest level 1038, usual voice level 392, over the agent: no
+2026-09-22 13:01:03,560 bridge INFO call 53: customer stopped talking at 137.7s
+2026-09-22 13:01:05,230 bridge INFO call 53: customer speech detected
+2026-09-22 13:01:05,906 plivo INFO plivo inbound audio: 7000 frames so far, loudest recent level 1038 (speech is usually above 500), most voice-like frame 0.99, 0 loud frames not taken as speech
+2026-09-22 13:01:06,511 bridge INFO call 53: agent started speaking at 140.6s
+2026-09-22 13:01:06,970 bridge INFO tool mark_outcome {"outcome": "confirmed", "new_address": "house number 123, sector 60, Chandigarh, PIN 160060"}
+2026-09-22 13:01:07,306 bridge INFO tool end_call {}
+2026-09-22 13:01:08,887 bridge INFO call 53 ended: 143s, outcome=confirmed, watchdog nudges=0, reconnects=0
+2026-09-22 13:01:08,887 bridge INFO call 53 usage: 15 turns, in: 1151 audio + 86692 text tokens, out: 1599 audio + 0 text tokens, about $0.0660
+2026-09-22 13:01:09,891 plivo INFO line report: background level 0, agent echo level 4, customer voice level 392, 84% of frames silenced, 22 loud frames not taken as speech, 24 loud-enough-to-interrupt frames, stuck nudges 0, silence nudges 0
+2026-09-22 13:01:10,286 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/855ff6ed-16ea-4ca7-9314-145250ef4bfd/ "HTTP/1.1 204 No Content"
+2026-09-22 13:01:12,077 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=146 bill=0.01188 to=918196851335
+2026-09-22 13:29:57,120 vad INFO Silero speech detector loaded
+2026-09-22 13:29:57,187 plivo INFO line loud for 8s (119 loud frames) but no speech recognised; asking the agent to repeat (stuck nudge 1); listening more leniently from now on
+2026-09-22 13:29:57,302 plivo INFO line quiet for 12s; asking the agent to check (silence nudge 1)
+2026-09-22 13:29:58,128 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 13:29:58,140 campaign WARNING campaign skipped contact 21: No valid phone number. Type a 10-digit mobile number in the box.
+2026-09-22 13:29:58,140 campaign INFO campaign: contact 20 busy (attempt 1 of 2); next try at 2026-09-22T07:59:58.140679+00:00
+2026-09-22 13:29:58,156 campaign INFO campaign: contact 20 busy after 2 attempts; giving up
+2026-09-22 13:30:00,158 campaign INFO campaign ended: finished: everyone on the list has been called (3 calls this run)
+2026-09-22 13:30:00,181 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 0}
+2026-09-22 13:30:00,197 campaign WARNING campaign: call to contact 20 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 13:30:00,212 campaign WARNING campaign: call to contact 20 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 13:30:00,212 campaign INFO campaign ended: paused: the last calls failed on our side (see the call history); fix that, then start again (3 calls this run)
+2026-09-22 13:30:00,212 campaign WARNING campaign: call to contact 20 failed before pick-up (Plivo never called back: the tunnel is probably down or PUBLIC_BASE_URL is stale)
+2026-09-22 13:30:00,212 campaign INFO campaign started: {'voice': 'Aoede', 'language': 'hinglish', 'max_concurrent': 1, 'max_attempts': 2, 'retry_minutes': 0, 'start_hour': 0, 'end_hour': 24, 'limit': 0, 'budget_rs': 1}
+2026-09-22 13:30:00,212 campaign INFO campaign ended: paused: today's estimated cost is Rs 5, the budget was Rs 1 (3 calls this run)
+2026-09-22 13:30:04,175 httpx INFO HTTP Request: GET http://testserver/api/callbacks "HTTP/1.1 200 OK"
+2026-09-22 13:30:04,182 httpx INFO HTTP Request: POST http://testserver/api/contacts/20/schedule "HTTP/1.1 200 OK"
+2026-09-22 13:30:04,189 httpx INFO HTTP Request: POST http://testserver/api/contacts/20/schedule "HTTP/1.1 200 OK"
+2026-09-22 13:30:05,011 httpx INFO HTTP Request: POST http://testserver/api/contacts/preview "HTTP/1.1 200 OK"
+2026-09-22 13:30:05,011 httpx INFO HTTP Request: POST http://testserver/api/contacts/upload "HTTP/1.1 200 OK"
+2026-09-22 16:13:30,054 app WARNING server stalled for 0.9 s (PC busy or a slow operation)
+2026-09-22 16:18:09,351 app WARNING server stalled for 1.3 s (PC busy or a slow operation)
+2026-09-23 09:05:20,428 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-23 09:05:20,748 vad INFO Silero speech detector loaded
+2026-09-23 09:05:20,748 plivo INFO dialing +918196851335 for contact 20 (voice Aoede) token=b06764ee5a4148df
+2026-09-23 09:05:21,486 bridge INFO call 54: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 09:05:31,110 plivo INFO call b06764ee5a4148df answered; greeting started
+2026-09-23 09:05:31,112 bridge INFO call 54: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 09:05:31,456 plivo INFO plivo stream started call=dc390dfa-0f40-4a0a-8e22-3de694b8bdf4 stream=46501572-3883-487f-8cf9-8fefd2256a61
+2026-09-23 09:05:31,456 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-23 09:05:31,461 plivo INFO recording the customer's audio to data/recordings/call_54.wav
+2026-09-23 09:05:31,462 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-23 09:05:32,138 plivo INFO plivo audio byte order: loudness as-is=445 swapped=10087 -> little-endian, no change
+2026-09-23 09:05:32,345 bridge INFO call 54: agent started speaking at 1.2s
+2026-09-23 09:05:36,138 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 1433 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:05:37,558 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:05:37,619 plivo INFO greeting finished; now listening to the customer
+2026-09-23 09:05:38,258 bridge INFO call 54: customer started talking at 7.2s
+2026-09-23 09:05:39,678 plivo INFO customer sound: 0.5s of voice, loudest level 2508, usual voice level 979, over the agent: no
+2026-09-23 09:05:39,678 bridge INFO call 54: customer stopped talking at 8.6s
+2026-09-23 09:05:41,130 bridge INFO call 54: customer speech detected
+2026-09-23 09:05:41,138 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 2508 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:05:42,325 bridge INFO call 54: agent started speaking at 11.2s
+2026-09-23 09:05:46,138 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:05:48,405 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:05:49,198 bridge INFO call 54: customer started talking at 18.1s
+2026-09-23 09:05:51,138 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 5921 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:05:51,538 plivo INFO customer sound: 1.3s of voice, loudest level 5921, usual voice level 737, over the agent: no
+2026-09-23 09:05:51,538 bridge INFO call 54: customer stopped talking at 20.4s
+2026-09-23 09:05:52,450 bridge INFO call 54: customer speech detected
+2026-09-23 09:05:54,254 bridge INFO call 54: agent started speaking at 23.2s
+2026-09-23 09:05:56,137 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 4 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-23 09:05:59,699 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:06:00,758 bridge INFO call 54: customer started talking at 29.7s
+2026-09-23 09:06:01,134 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 4311 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:06:04,058 plivo INFO customer sound: 2.0s of voice, loudest level 5511, usual voice level 570, over the agent: no
+2026-09-23 09:06:04,098 bridge INFO call 54: customer stopped talking at 33.0s
+2026-09-23 09:06:04,098 bridge INFO call 54: customer speech detected
+2026-09-23 09:06:06,137 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 5511 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:06:07,065 bridge INFO call 54: agent started speaking at 36.0s
+2026-09-23 09:06:11,137 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:06:16,137 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:06:16,644 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:06:17,458 bridge INFO call 54: customer started talking at 46.4s
+2026-09-23 09:06:19,279 plivo INFO customer sound: 0.3s of voice, loudest level 3241, usual voice level 842, over the agent: no
+2026-09-23 09:06:19,279 bridge INFO call 54: customer stopped talking at 48.2s
+2026-09-23 09:06:20,879 bridge INFO call 54: customer speech detected
+2026-09-23 09:06:21,138 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 3241 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:06:21,873 bridge INFO call 54: agent started speaking at 50.8s
+2026-09-23 09:06:25,573 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:06:26,137 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:06:26,438 bridge INFO call 54: customer started talking at 55.3s
+2026-09-23 09:06:29,337 plivo INFO customer sound: 0.5s of voice, loudest level 2795, usual voice level 1176, over the agent: no
+2026-09-23 09:06:29,337 bridge INFO call 54: customer stopped talking at 58.2s
+2026-09-23 09:06:30,557 bridge INFO call 54: customer speech detected
+2026-09-23 09:06:31,137 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 2795 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:06:33,578 bridge INFO call 54: agent started speaking at 62.5s
+2026-09-23 09:06:35,158 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:06:36,137 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 2866 (speech is usually above 500), most voice-like frame 0.99, 2 loud frames not taken as speech
+2026-09-23 09:06:36,178 bridge INFO call 54: customer started talking at 65.1s
+2026-09-23 09:06:39,122 bridge INFO call 54: customer speech detected
+2026-09-23 09:06:40,177 plivo INFO customer sound: 1.2s of voice, loudest level 4195, usual voice level 1767, over the agent: no
+2026-09-23 09:06:40,178 bridge INFO call 54: customer stopped talking at 69.1s
+2026-09-23 09:06:41,137 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 4195 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:06:43,282 bridge INFO call 54: agent started speaking at 72.2s
+2026-09-23 09:06:43,542 bridge INFO tool record_address {"city": "Gurgaon", "pin": "122003", "house": "302", "area": "Sector 45"}
+2026-09-23 09:06:43,542 bridge INFO call 54: address recorded {"house": "302", "area": "Sector 45", "city": "Gurgaon", "pin": "122003", "landmark": ""}
+2026-09-23 09:06:46,137 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 1 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:06:51,137 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:06:53,586 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:06:54,698 bridge INFO call 54: customer started talking at 83.6s
+2026-09-23 09:06:56,137 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 3182 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:06:57,917 plivo INFO customer sound: 0.8s of voice, loudest level 3182, usual voice level 984, over the agent: no
+2026-09-23 09:06:57,917 bridge INFO call 54: customer stopped talking at 86.8s
+2026-09-23 09:06:58,151 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:01,122 bridge INFO call 54: agent started speaking at 90.0s
+2026-09-23 09:07:01,136 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 6 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-23 09:07:03,154 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:07:04,277 bridge INFO call 54: customer started talking at 93.2s
+2026-09-23 09:07:06,137 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 5712 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:07:07,422 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:09,756 plivo INFO customer sound: 2.6s of voice, loudest level 5712, usual voice level 1250, over the agent: no
+2026-09-23 09:07:09,757 bridge INFO call 54: customer stopped talking at 98.7s
+2026-09-23 09:07:11,136 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 3748 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:07:13,491 bridge INFO call 54: agent started speaking at 102.4s
+2026-09-23 09:07:13,551 bridge INFO tool record_address {"pin": "641002", "city": "Tamil Nadu", "area": "Coimbatore", "house": "302"}
+2026-09-23 09:07:13,551 bridge INFO call 54: address recorded {"house": "302", "area": "Coimbatore", "city": "Tamil Nadu", "pin": "641002", "landmark": ""}
+2026-09-23 09:07:15,996 bridge INFO call 54: customer started talking at 104.9s
+2026-09-23 09:07:16,086 bridge INFO call 54: customer interrupted
+2026-09-23 09:07:16,088 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:07:16,136 plivo INFO plivo inbound audio: 5250 frames so far, loudest recent level 5433 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:07:18,670 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:18,836 plivo INFO customer sound: 0.4s of voice, loudest level 4622, usual voice level 2021, over the agent: yes
+2026-09-23 09:07:18,837 bridge INFO call 54: customer stopped talking at 107.7s
+2026-09-23 09:07:19,917 bridge INFO call 54: customer started talking at 108.8s
+2026-09-23 09:07:20,356 bridge INFO call 54: customer interrupted
+2026-09-23 09:07:20,361 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:07:21,136 plivo INFO plivo inbound audio: 5500 frames so far, loudest recent level 5575 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:07:22,336 plivo INFO customer sound: 1.3s of voice, loudest level 5575, usual voice level 1251, over the agent: no
+2026-09-23 09:07:22,336 bridge INFO call 54: customer stopped talking at 111.2s
+2026-09-23 09:07:23,530 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:25,770 bridge INFO call 54: agent started speaking at 114.7s
+2026-09-23 09:07:26,136 plivo INFO plivo inbound audio: 5750 frames so far, loudest recent level 2046 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:07:30,470 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:07:31,136 plivo INFO plivo inbound audio: 6000 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:07:31,636 bridge INFO call 54: customer started talking at 120.5s
+2026-09-23 09:07:34,720 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:35,835 plivo INFO customer sound: 1.7s of voice, loudest level 7439, usual voice level 1652, over the agent: no
+2026-09-23 09:07:35,836 bridge INFO call 54: customer stopped talking at 124.7s
+2026-09-23 09:07:36,136 plivo INFO plivo inbound audio: 6250 frames so far, loudest recent level 7722 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:07:37,916 bridge INFO tool record_address {"area": "Coimbatore", "house": "302", "city": "Tamil Nadu", "pin": "176021"}
+2026-09-23 09:07:37,916 bridge INFO call 54: address recorded {"house": "302", "area": "Coimbatore", "city": "Tamil Nadu", "pin": "176021", "landmark": ""}
+2026-09-23 09:07:38,919 bridge INFO call 54: agent started speaking at 127.8s
+2026-09-23 09:07:41,136 plivo INFO plivo inbound audio: 6500 frames so far, loudest recent level 9 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:07:46,136 plivo INFO plivo inbound audio: 6750 frames so far, loudest recent level 2 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:07:46,659 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:07:47,276 bridge INFO call 54: customer started talking at 136.2s
+2026-09-23 09:07:50,096 bridge INFO call 54: customer speech detected
+2026-09-23 09:07:50,316 plivo INFO customer sound: 0.6s of voice, loudest level 3377, usual voice level 1064, over the agent: no
+2026-09-23 09:07:50,316 bridge INFO call 54: customer stopped talking at 139.2s
+2026-09-23 09:07:51,136 plivo INFO plivo inbound audio: 7000 frames so far, loudest recent level 3377 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:07:53,039 bridge INFO call 54: agent started speaking at 141.9s
+2026-09-23 09:07:56,135 plivo INFO plivo inbound audio: 7250 frames so far, loudest recent level 4 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:08:01,135 plivo INFO plivo inbound audio: 7500 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:08:02,341 bridge INFO call 54: agent turn complete, now waiting for the customer
+2026-09-23 09:08:02,756 bridge INFO call 54: customer started talking at 151.7s
+2026-09-23 09:08:05,916 bridge INFO call 54: customer speech detected
+2026-09-23 09:08:06,135 plivo INFO plivo inbound audio: 7750 frames so far, loudest recent level 3395 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:08:06,256 plivo INFO customer sound: 1.0s of voice, loudest level 3395, usual voice level 588, over the agent: no
+2026-09-23 09:08:06,256 bridge INFO call 54: customer stopped talking at 155.2s
+2026-09-23 09:08:09,258 bridge INFO call 54: agent started speaking at 158.2s
+2026-09-23 09:08:10,168 bridge INFO tool mark_outcome {"new_address": "house number 302, Coimbatore, Tamil Nadu, PIN 176021", "notes": "Customer confirmed new address and raised payment mismatch.", "outcome": "unclear", "mismatch": "customer says prepaid online; record shows COD"}
+2026-09-23 09:08:10,688 bridge INFO tool end_call {}
+2026-09-23 09:08:11,135 plivo INFO plivo inbound audio: 8000 frames so far, loudest recent level 28 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-23 09:08:12,269 bridge INFO call 54 ended: 161s, outcome=unclear, watchdog nudges=0, reconnects=0
+2026-09-23 09:08:12,269 bridge INFO call 54 usage: 13 turns, in: 949 audio + 57794 text tokens, out: 1813 audio + 39 text tokens, about $0.0536
+2026-09-23 09:08:13,716 plivo INFO line report: background level 0, agent echo level 4, customer voice level 588, 70% of frames silenced, 16 loud frames not taken as speech, 0 background-voice frames ignored, 61 loud-enough-to-interrupt frames, gated line: yes, stuck nudges 0, silence nudges 0
+2026-09-23 09:08:14,073 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/dc390dfa-0f40-4a0a-8e22-3de694b8bdf4/ "HTTP/1.1 204 No Content"
+2026-09-23 09:08:15,653 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=164 bill=0.01425 to=918196851335
+2026-09-23 09:56:44,227 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-23 09:56:44,532 vad INFO Silero speech detector loaded
+2026-09-23 09:56:44,534 plivo INFO dialing +919660000146 for contact 19 (voice Aoede) token=3d9a48a86b0140ba
+2026-09-23 09:56:45,413 bridge INFO call 55: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 09:56:54,704 plivo INFO call 3d9a48a86b0140ba answered; greeting started
+2026-09-23 09:56:54,706 bridge INFO call 55: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 09:56:55,698 plivo INFO plivo stream started call=f08809c4-1c6c-43a6-b6fd-2434d1b4746b stream=bc679a25-01f1-4c36-bcd9-9236a864673a
+2026-09-23 09:56:55,699 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-23 09:56:55,766 plivo INFO recording the customer's audio to data/recordings/call_55.wav
+2026-09-23 09:56:55,766 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-23 09:56:55,785 plivo INFO plivo audio byte order: loudness as-is=679 swapped=5377 -> little-endian, no change
+2026-09-23 09:56:55,993 bridge INFO call 55: agent started speaking at 1.3s
+2026-09-23 09:56:59,744 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 3366 (speech is usually above 500), most voice-like frame 0.98, 1 loud frames not taken as speech
+2026-09-23 09:57:02,109 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:57:02,253 plivo INFO greeting finished; now listening to the customer
+2026-09-23 09:57:03,093 bridge INFO call 55: customer started talking at 8.4s
+2026-09-23 09:57:04,394 plivo INFO customer sound: 0.4s of voice, loudest level 3355, usual voice level 1277, over the agent: no
+2026-09-23 09:57:04,394 bridge INFO call 55: customer stopped talking at 9.7s
+2026-09-23 09:57:04,734 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 4504 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:57:05,653 bridge INFO call 55: customer speech detected
+2026-09-23 09:57:06,744 bridge INFO call 55: agent started speaking at 12.0s
+2026-09-23 09:57:09,743 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:57:12,271 bridge INFO call 55: customer started talking at 17.6s
+2026-09-23 09:57:12,373 bridge INFO call 55: customer interrupted
+2026-09-23 09:57:12,375 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:57:14,008 plivo INFO customer sound: 0.5s of voice, loudest level 2864, usual voice level 711, over the agent: yes
+2026-09-23 09:57:14,008 bridge INFO call 55: customer stopped talking at 19.3s
+2026-09-23 09:57:14,731 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 3330 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:57:15,177 bridge INFO call 55: customer speech detected
+2026-09-23 09:57:17,086 bridge INFO call 55: agent started speaking at 22.4s
+2026-09-23 09:57:19,727 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 2 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:57:20,419 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:57:21,349 bridge INFO call 55: customer started talking at 26.7s
+2026-09-23 09:57:23,458 plivo INFO customer sound: 0.6s of voice, loudest level 3405, usual voice level 520, over the agent: no
+2026-09-23 09:57:23,458 bridge INFO call 55: customer stopped talking at 28.8s
+2026-09-23 09:57:24,312 bridge INFO call 55: customer speech detected
+2026-09-23 09:57:24,727 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 7681 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:57:26,082 bridge INFO call 55: agent started speaking at 31.4s
+2026-09-23 09:57:29,728 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 4 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:57:30,677 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:57:31,867 bridge INFO call 55: customer started talking at 37.2s
+2026-09-23 09:57:34,733 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 7697 (speech is usually above 500), most voice-like frame 1.00, 3 loud frames not taken as speech
+2026-09-23 09:57:34,881 bridge INFO call 55: customer speech detected
+2026-09-23 09:57:39,737 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 7875 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 09:57:42,673 plivo INFO customer sound: 6.7s of voice, loudest level 7875, usual voice level 848, over the agent: no
+2026-09-23 09:57:42,674 bridge INFO call 55: customer stopped talking at 48.0s
+2026-09-23 09:57:44,753 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 5995 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:57:45,079 bridge INFO tool record_address {"pin": "140603", "area": "Savirtri Greens, Tower No 10, 502, 5th Floor", "house": "502", "city": "Zirakpur, Punjab"}
+2026-09-23 09:57:45,080 bridge INFO call 55: address recorded {"house": "502", "area": "Savirtri Greens, Tower No 10, 502, 5th Floor", "city": "Zirakpur, Punjab", "pin": "140603", "landmark": ""}
+2026-09-23 09:57:46,141 bridge INFO call 55: agent started speaking at 51.4s
+2026-09-23 09:57:49,891 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:57:54,737 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 4 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 09:57:57,850 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:57:58,685 bridge INFO call 55: customer started talking at 64.0s
+2026-09-23 09:57:59,767 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 6874 (speech is usually above 500), most voice-like frame 1.00, 3 loud frames not taken as speech
+2026-09-23 09:58:01,669 plivo INFO customer sound: 0.5s of voice, loudest level 3308, usual voice level 750, over the agent: no
+2026-09-23 09:58:01,670 bridge INFO call 55: customer stopped talking at 67.0s
+2026-09-23 09:58:01,730 bridge INFO call 55: customer speech detected
+2026-09-23 09:58:04,454 bridge INFO call 55: agent started speaking at 69.8s
+2026-09-23 09:58:04,746 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-23 09:58:09,810 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 423 (speech is usually above 500), most voice-like frame 0.30, 0 loud frames not taken as speech
+2026-09-23 09:58:10,260 bridge INFO call 55: agent turn complete, now waiting for the customer
+2026-09-23 09:58:11,227 bridge INFO call 55: customer started talking at 76.5s
+2026-09-23 09:58:12,770 plivo INFO customer sound: 0.6s of voice, loudest level 3270, usual voice level 616, over the agent: no
+2026-09-23 09:58:12,770 bridge INFO call 55: customer stopped talking at 78.1s
+2026-09-23 09:58:14,740 bridge INFO call 55: customer speech detected
+2026-09-23 09:58:15,019 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 3270 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 09:58:15,820 bridge INFO call 55: agent started speaking at 81.1s
+2026-09-23 09:58:18,049 bridge INFO tool mark_outcome {"outcome": "confirmed"}
+2026-09-23 09:58:18,679 bridge INFO tool end_call {}
+2026-09-23 09:58:20,063 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 3228 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 09:58:20,600 bridge INFO call 55 ended: 86s, outcome=confirmed, watchdog nudges=0, reconnects=0
+2026-09-23 09:58:20,600 bridge INFO call 55 usage: 6 turns, in: 213 audio + 23189 text tokens, out: 1029 audio + 61 text tokens, about $0.0247
+2026-09-23 09:58:22,338 plivo INFO line report: background level 0, agent echo level 95, customer voice level 1132, 67% of frames silenced, 13 loud frames not taken as speech, 0 background-voice frames ignored, 35 loud-enough-to-interrupt frames, gated line: no, stuck nudges 0, silence nudges 0
+2026-09-23 09:58:24,352 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/f08809c4-1c6c-43a6-b6fd-2434d1b4746b/ "HTTP/1.1 404 Not Found"
+2026-09-23 09:58:24,352 plivo INFO call f08809c4-1c6c-43a6-b6fd-2434d1b4746b had already ended
+2026-09-23 09:58:25,951 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=90 bill=0.00712 to=919660000146
+2026-09-23 10:02:32,714 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-23 10:02:32,724 plivo INFO dialing +919660000146 for contact 19 (voice Aoede) token=d7ec243d80024365
+2026-09-23 10:02:33,668 bridge INFO call 56: connected to gemini-3.8-live via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 10:02:43,793 plivo INFO call d7ec243d80024365 answered; greeting started
+2026-09-23 10:02:43,795 bridge INFO call 56: opening sent, voice=Aoede model=gemini-3.8-live
+2026-09-23 10:02:43,959 bridge WARNING call 56: connection to Gemini dropped (APIError: 1007 None. Request contains an invalid argument.); reconnecting (1 of 3)
+2026-09-23 10:02:43,959 bridge WARNING call 56: gemini-3.8-live refused the session; switching to gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 10:02:44,583 plivo INFO plivo stream started call=897b67a7-7509-4fa8-811a-06adace20023 stream=d7df80e5-0e8a-42a1-8bfb-237dfc780d96
+2026-09-23 10:02:44,583 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-23 10:02:44,628 plivo INFO recording the customer's audio to data/recordings/call_56.wav
+2026-09-23 10:02:44,629 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-23 10:02:44,829 plivo INFO plivo audio byte order: loudness as-is=1155 swapped=9895 -> little-endian, no change
+2026-09-23 10:02:44,929 bridge INFO call 56: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 10:02:44,929 bridge INFO call 56: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 10:02:46,118 bridge INFO call 56: agent started speaking at 2.3s
+2026-09-23 10:02:48,826 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 4459 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:02:51,607 bridge INFO call 56: agent turn complete, now waiting for the customer
+2026-09-23 10:02:51,725 plivo INFO greeting finished; now listening to the customer
+2026-09-23 10:02:53,825 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:02:55,747 bridge INFO call 56: customer started talking at 12.0s
+2026-09-23 10:02:57,397 plivo INFO customer sound: 0.1s of voice, loudest level 3279, usual voice level 1788, over the agent: no
+2026-09-23 10:02:57,397 bridge INFO call 56: customer stopped talking at 13.6s
+2026-09-23 10:02:58,826 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 3279 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:02:58,899 bridge INFO call 56: customer speech detected
+2026-09-23 10:02:59,917 bridge INFO call 56: agent started speaking at 16.1s
+2026-09-23 10:03:03,847 plivo WARNING sending audio to the phone stopped: 
+2026-09-23 10:03:03,877 bridge INFO call 56 ended: 20s, outcome=None, watchdog nudges=0, reconnects=1
+2026-09-23 10:03:03,877 bridge INFO call 56 usage: 1 turns, in: 0 audio + 3033 text tokens, out: 146 audio + 0 text tokens, about $0.0033
+2026-09-23 10:03:05,689 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=21 bill=0.00238 to=919660000146
+2026-09-23 10:03:15,200 plivo INFO line report: background level 0, agent echo level 4, customer voice level 1176, 52% of frames silenced, 2 loud frames not taken as speech, 0 background-voice frames ignored, 21 loud-enough-to-interrupt frames, gated line: yes, stuck nudges 0, silence nudges 0
+2026-09-23 10:03:15,484 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/897b67a7-7509-4fa8-811a-06adace20023/ "HTTP/1.1 404 Not Found"
+2026-09-23 10:03:15,485 plivo INFO call 897b67a7-7509-4fa8-811a-06adace20023 had already ended
+2026-09-23 10:03:19,929 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-23 10:03:19,976 plivo INFO dialing +919660000146 for contact 19 (voice Aoede) token=66973596a46a49af
+2026-09-23 10:03:21,315 bridge INFO call 57: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 10:03:42,117 plivo INFO call 66973596a46a49af answered; greeting started
+2026-09-23 10:03:42,118 bridge INFO call 57: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 10:03:42,601 plivo INFO plivo stream started call=1c2d7e82-643d-43ae-811e-48ea52b9c9b2 stream=b4954613-66b1-47c1-9073-c9b494c755ec
+2026-09-23 10:03:42,601 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-23 10:03:42,648 plivo INFO recording the customer's audio to data/recordings/call_57.wav
+2026-09-23 10:03:42,648 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-23 10:03:43,181 plivo INFO plivo audio byte order: loudness as-is=0 swapped=0 -> little-endian, no change
+2026-09-23 10:03:43,334 bridge INFO call 57: agent started speaking at 1.2s
+2026-09-23 10:03:47,184 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-23 10:03:50,023 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:03:50,033 plivo INFO greeting finished; now listening to the customer
+2026-09-23 10:03:50,737 bridge INFO call 57: customer started talking at 8.6s
+2026-09-23 10:03:52,183 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 4043 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:03:52,629 plivo INFO customer sound: 0.2s of voice, loudest level 4043, usual voice level 1590, over the agent: no
+2026-09-23 10:03:52,629 bridge INFO call 57: customer stopped talking at 10.5s
+2026-09-23 10:03:54,115 bridge INFO call 57: customer speech detected
+2026-09-23 10:03:55,233 bridge INFO call 57: agent started speaking at 13.1s
+2026-09-23 10:03:57,157 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:04:02,153 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:04:03,803 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:03,803 bridge INFO call 57: customer turn inaudible ('<noise>'), 1 in a row; nudging the agent
+2026-09-23 10:04:03,803 bridge INFO call 57: nudging the agent: [Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and ask that previous question again, in fewer words.]
+2026-09-23 10:04:04,947 bridge INFO call 57: agent started speaking at 22.8s
+2026-09-23 10:04:06,553 bridge INFO call 57: customer started talking at 24.4s
+2026-09-23 10:04:07,159 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 5157 (speech is usually above 500), most voice-like frame 1.00, 4 loud frames not taken as speech
+2026-09-23 10:04:07,314 bridge INFO call 57: customer interrupted
+2026-09-23 10:04:07,315 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:07,555 plivo INFO customer sound: 0.1s of voice, loudest level 3019, usual voice level 1844, over the agent: yes
+2026-09-23 10:04:07,555 bridge INFO call 57: customer stopped talking at 25.4s
+2026-09-23 10:04:08,858 bridge INFO call 57: customer speech detected
+2026-09-23 10:04:09,073 bridge INFO call 57: customer started talking at 27.0s
+2026-09-23 10:04:09,156 bridge INFO call 57: customer interrupted
+2026-09-23 10:04:09,156 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:11,555 plivo INFO customer sound: 0.8s of voice, loudest level 3917, usual voice level 818, over the agent: no
+2026-09-23 10:04:11,555 bridge INFO call 57: customer stopped talking at 29.4s
+2026-09-23 10:04:11,832 bridge INFO call 57: customer speech detected
+2026-09-23 10:04:12,153 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 5773 (speech is usually above 500), most voice-like frame 1.00, 3 loud frames not taken as speech
+2026-09-23 10:04:14,182 bridge INFO call 57: agent started speaking at 32.1s
+2026-09-23 10:04:17,153 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 2 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:04:21,362 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:22,152 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 5489 (speech is usually above 500), most voice-like frame 0.99, 2 loud frames not taken as speech
+2026-09-23 10:04:22,172 bridge INFO call 57: customer started talking at 40.0s
+2026-09-23 10:04:25,213 plivo INFO customer sound: 2.0s of voice, loudest level 6287, usual voice level 929, over the agent: no
+2026-09-23 10:04:25,213 bridge INFO call 57: customer stopped talking at 43.1s
+2026-09-23 10:04:25,302 bridge INFO call 57: customer speech detected
+2026-09-23 10:04:27,152 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 6287 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:04:29,142 bridge INFO call 57: agent started speaking at 47.0s
+2026-09-23 10:04:32,152 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 659 (speech is usually above 500), most voice-like frame 0.09, 0 loud frames not taken as speech
+2026-09-23 10:04:37,151 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 26 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-23 10:04:37,321 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:38,714 bridge INFO call 57: customer started talking at 56.6s
+2026-09-23 10:04:40,992 plivo INFO customer sound: 0.5s of voice, loudest level 6566, usual voice level 1058, over the agent: no
+2026-09-23 10:04:40,992 bridge INFO call 57: customer stopped talking at 58.9s
+2026-09-23 10:04:41,852 bridge INFO call 57: customer speech detected
+2026-09-23 10:04:42,152 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 6837 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:04:43,536 bridge INFO call 57: agent started speaking at 61.4s
+2026-09-23 10:04:47,155 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:04:49,471 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:04:51,313 bridge INFO call 57: customer started talking at 69.2s
+2026-09-23 10:04:52,154 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 4388 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:04:54,321 bridge INFO call 57: customer speech detected
+2026-09-23 10:04:57,154 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 3143 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:05:01,275 plivo INFO customer sound: 5.1s of voice, loudest level 4388, usual voice level 641, over the agent: no
+2026-09-23 10:05:01,275 bridge INFO call 57: customer stopped talking at 79.2s
+2026-09-23 10:05:02,151 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 1833 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:05:04,815 bridge INFO call 57: agent started speaking at 82.7s
+2026-09-23 10:05:07,155 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 3 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:05:10,632 bridge INFO tool record_address {"city": "punjab", "area": "savitri greens st number 10", "pin": "140603", "house": "502, 5th floor"}
+2026-09-23 10:05:10,633 bridge INFO call 57: record_address refused; the agent asked 'भेज देगी। expected delivery 23rd September तक है। सब सही है?' in this same turn and has no answer yet
+2026-09-23 10:05:12,153 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 107 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-23 10:05:17,152 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 290 (speech is usually above 500), most voice-like frame 0.62, 0 loud frames not taken as speech
+2026-09-23 10:05:22,151 plivo INFO plivo inbound audio: 5000 frames so far, loudest recent level 53 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-23 10:05:27,153 plivo INFO plivo inbound audio: 5250 frames so far, loudest recent level 205 (speech is usually above 500), most voice-like frame 0.68, 0 loud frames not taken as speech
+2026-09-23 10:05:27,473 bridge INFO call 57: agent turn complete, now waiting for the customer
+2026-09-23 10:05:30,409 bridge INFO call 57 ended: 108s, outcome=None, watchdog nudges=0, reconnects=0
+2026-09-23 10:05:30,409 bridge INFO call 57 usage: 8 turns, in: 416 audio + 32817 text tokens, out: 1658 audio + 0 text tokens, about $0.0376
+2026-09-23 10:05:31,047 plivo INFO line report: background level 0, agent echo level 4, customer voice level 641, 73% of frames silenced, 18 loud frames not taken as speech, 0 background-voice frames ignored, 25 loud-enough-to-interrupt frames, gated line: yes, stuck nudges 0, silence nudges 0
+2026-09-23 10:05:31,416 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/1c2d7e82-643d-43ae-811e-48ea52b9c9b2/ "HTTP/1.1 404 Not Found"
+2026-09-23 10:05:31,416 plivo INFO call 1c2d7e82-643d-43ae-811e-48ea52b9c9b2 had already ended
+2026-09-23 10:05:31,780 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=109 bill=0.00950 to=919660000146
+2026-09-23 10:06:08,570 httpx INFO HTTP Request: POST https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/ "HTTP/1.1 201 Created"
+2026-09-23 10:06:08,587 plivo INFO dialing +919660000146 for contact 19 (voice Aoede) token=cd403214b8584682
+2026-09-23 10:06:09,308 bridge INFO call 58: connected to gemini-2.5-flash-native-audio-preview-12-2025 via Gemini API (fast replies on, transcript language hint off)
+2026-09-23 10:06:24,299 plivo INFO call cd403214b8584682 answered; greeting started
+2026-09-23 10:06:24,301 bridge INFO call 58: opening sent, voice=Aoede model=gemini-2.5-flash-native-audio-preview-12-2025
+2026-09-23 10:06:25,074 plivo INFO plivo stream started call=875f773f-bfb4-4f4a-b653-a44bb3bea8fe stream=e7bce978-e146-4993-b792-c539535af793
+2026-09-23 10:06:25,074 plivo INFO audio line attached; 0 prepared audio chunks waiting
+2026-09-23 10:06:25,119 plivo INFO recording the customer's audio to data/recordings/call_58.wav
+2026-09-23 10:06:25,120 plivo INFO plivo first audio frame: contentType= sampleRate=16000 bytes=640
+2026-09-23 10:06:25,334 plivo INFO plivo audio byte order: loudness as-is=20 swapped=4780 -> little-endian, no change
+2026-09-23 10:06:25,436 bridge INFO call 58: agent started speaking at 1.1s
+2026-09-23 10:06:29,326 plivo INFO plivo inbound audio: 250 frames so far, loudest recent level 94 (speech is usually above 500), most voice-like frame 0.20, 0 loud frames not taken as speech
+2026-09-23 10:06:34,343 plivo INFO plivo inbound audio: 500 frames so far, loudest recent level 5 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:06:35,165 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:06:35,233 plivo INFO greeting finished; now listening to the customer
+2026-09-23 10:06:36,032 bridge INFO call 58: customer started talking at 11.7s
+2026-09-23 10:06:37,412 plivo INFO customer sound: 0.5s of voice, loudest level 7000, usual voice level 1656, over the agent: no
+2026-09-23 10:06:37,412 bridge INFO call 58: customer stopped talking at 13.1s
+2026-09-23 10:06:38,835 bridge INFO call 58: customer speech detected
+2026-09-23 10:06:39,355 plivo INFO plivo inbound audio: 750 frames so far, loudest recent level 7000 (speech is usually above 500), most voice-like frame 1.00, 1 loud frames not taken as speech
+2026-09-23 10:06:39,923 bridge INFO call 58: agent started speaking at 15.6s
+2026-09-23 10:06:44,515 plivo INFO plivo inbound audio: 1000 frames so far, loudest recent level 1 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:06:48,360 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:06:49,191 bridge INFO call 58: customer started talking at 24.9s
+2026-09-23 10:06:49,353 plivo INFO plivo inbound audio: 1250 frames so far, loudest recent level 9264 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:06:51,365 plivo INFO customer sound: 0.7s of voice, loudest level 8433, usual voice level 1425, over the agent: no
+2026-09-23 10:06:51,365 bridge INFO call 58: customer stopped talking at 27.1s
+2026-09-23 10:06:52,564 bridge INFO call 58: customer speech detected
+2026-09-23 10:06:54,347 plivo INFO plivo inbound audio: 1500 frames so far, loudest recent level 5548 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 10:06:54,610 bridge INFO call 58: agent started speaking at 30.3s
+2026-09-23 10:06:59,332 plivo INFO plivo inbound audio: 1750 frames so far, loudest recent level 243 (speech is usually above 500), most voice-like frame 0.02, 0 loud frames not taken as speech
+2026-09-23 10:06:59,765 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:07:02,294 bridge INFO call 58: customer started talking at 38.0s
+2026-09-23 10:07:04,361 plivo INFO plivo inbound audio: 2000 frames so far, loudest recent level 8878 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:07:05,715 bridge INFO call 58: customer speech detected
+2026-09-23 10:07:09,331 plivo INFO plivo inbound audio: 2250 frames so far, loudest recent level 8524 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:07:09,980 plivo INFO customer sound: 4.7s of voice, loudest level 8878, usual voice level 691, over the agent: no
+2026-09-23 10:07:09,980 bridge INFO call 58: customer stopped talking at 45.7s
+2026-09-23 10:07:13,282 bridge INFO tool record_address {"pin": "140603", "city": "Unknown", "area": "Savatri Enclave, Phase 4", "house": "Tower No 10, 502, 5th Floor"}
+2026-09-23 10:07:13,283 bridge INFO call 58: record_address refused; house number Tower No 10, 502, 5th Floor was never said (customer digits so far: '10502140603')
+2026-09-23 10:07:14,304 bridge INFO call 58: agent started speaking at 50.0s
+2026-09-23 10:07:14,331 plivo INFO plivo inbound audio: 2500 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.01, 0 loud frames not taken as speech
+2026-09-23 10:07:17,915 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:07:18,613 bridge INFO call 58: customer started talking at 54.3s
+2026-09-23 10:07:19,335 plivo INFO plivo inbound audio: 2750 frames so far, loudest recent level 7844 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:07:22,007 plivo INFO customer sound: 1.0s of voice, loudest level 7844, usual voice level 917, over the agent: no
+2026-09-23 10:07:22,007 bridge INFO call 58: customer stopped talking at 57.7s
+2026-09-23 10:07:22,139 bridge INFO call 58: customer speech detected
+2026-09-23 10:07:24,331 plivo INFO plivo inbound audio: 3000 frames so far, loudest recent level 2121 (speech is usually above 500), most voice-like frame 1.00, 0 loud frames not taken as speech
+2026-09-23 10:07:24,729 bridge INFO tool record_address {"house": "502", "area": "Savatri Enclave, Phase 4", "pin": "140603", "city": "Unknown"}
+2026-09-23 10:07:24,730 bridge INFO call 58: address recorded {"house": "502", "area": "Savatri Enclave, Phase 4", "city": "Unknown", "pin": "140603", "landmark": ""}
+2026-09-23 10:07:25,663 bridge INFO call 58: agent started speaking at 61.4s
+2026-09-23 10:07:29,331 plivo INFO plivo inbound audio: 3250 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:07:34,192 bridge INFO call 58: customer started talking at 69.9s
+2026-09-23 10:07:34,263 bridge INFO call 58: customer interrupted
+2026-09-23 10:07:34,268 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:07:34,331 plivo INFO plivo inbound audio: 3500 frames so far, loudest recent level 4844 (speech is usually above 500), most voice-like frame 0.99, 0 loud frames not taken as speech
+2026-09-23 10:07:37,932 plivo INFO customer sound: 0.3s of voice, loudest level 8782, usual voice level 2087, over the agent: yes
+2026-09-23 10:07:37,932 bridge INFO call 58: customer stopped talking at 73.6s
+2026-09-23 10:07:39,331 plivo INFO plivo inbound audio: 3750 frames so far, loudest recent level 8782 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:07:39,503 bridge INFO call 58: customer speech detected
+2026-09-23 10:07:40,535 bridge INFO call 58: agent started speaking at 76.2s
+2026-09-23 10:07:44,332 plivo INFO plivo inbound audio: 4000 frames so far, loudest recent level 8 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:07:49,332 plivo INFO plivo inbound audio: 4250 frames so far, loudest recent level 0 (speech is usually above 500), most voice-like frame 0.00, 0 loud frames not taken as speech
+2026-09-23 10:07:51,673 bridge INFO call 58: agent turn complete, now waiting for the customer
+2026-09-23 10:07:52,638 bridge INFO call 58: customer started talking at 88.3s
+2026-09-23 10:07:54,330 plivo INFO plivo inbound audio: 4500 frames so far, loudest recent level 3947 (speech is usually above 500), most voice-like frame 1.00, 2 loud frames not taken as speech
+2026-09-23 10:07:56,092 bridge INFO call 58: customer speech detected
+2026-09-23 10:07:56,853 plivo INFO customer sound: 1.5s of voice, loudest level 8339, usual voice level 581, over the agent: no
+2026-09-23 10:07:56,853 bridge INFO call 58: customer stopped talking at 92.6s
+2026-09-23 10:07:59,355 plivo INFO plivo inbound audio: 4750 frames so far, loudest recent level 8339 (speech is usually above 500), most voice-like frame 1.00, 3 loud frames not taken as speech
+2026-09-23 10:07:59,691 bridge INFO call 58: agent started speaking at 95.4s
+2026-09-23 10:08:00,581 bridge INFO tool mark_outcome {"outcome": "confirmed", "new_address": "502, Savatri Enclave, Phase 4, Unknown, 140603"}
+2026-09-23 10:08:00,921 bridge INFO tool end_call {}
+2026-09-23 10:08:02,481 bridge INFO call 58 ended: 98s, outcome=confirmed, watchdog nudges=0, reconnects=0
+2026-09-23 10:08:02,481 bridge INFO call 58 usage: 6 turns, in: 302 audio + 24575 text tokens, out: 1215 audio + 56 text tokens, about $0.0279
+2026-09-23 10:08:04,041 plivo INFO line report: background level 0, agent echo level 4, customer voice level 553, 66% of frames silenced, 16 loud frames not taken as speech, 1 background-voice frames ignored, 14 loud-enough-to-interrupt frames, gated line: no, stuck nudges 0, silence nudges 0
+2026-09-23 10:08:04,429 httpx INFO HTTP Request: DELETE https://api.plivo.com/v1/Account/MAZGMXMDUYZGUTMTI5NC/Call/875f773f-bfb4-4f4a-b653-a44bb3bea8fe/ "HTTP/1.1 204 No Content"
+2026-09-23 10:08:06,342 plivo INFO plivo hangup: status=completed cause=NORMAL_CLEARING duration=101 bill=0.00950 to=919660000146

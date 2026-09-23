@@ -11,7 +11,6 @@ let scheduled = [];        // sources currently scheduled, for barge-in cancel
 let agentLine = null;
 let customerLine = null;
 let chunksSent = 0;
-const RS_PER_MIN = 1.3; // Gemini Live estimate: audio in + audio out, agent speaking about half the time
 
 function sendTyped() {
   const t = $('typed').value.trim();
@@ -46,7 +45,10 @@ async function loadContacts() {
   contactRows = rows;
   const cc = document.getElementById('contactcount');
   if (cc) cc.textContent = rows.length ? `${rows.length} loaded` : 'none loaded';
+  if (window.renderContacts) window.renderContacts(rows);
+  if (window.loadCampaign) window.loadCampaign();
   const sel = $('contact');
+  const chosen = sel.value;   // the list refreshes every few seconds during a run; keep the pick
   sel.innerHTML = '';
   if (!rows.length) {
     sel.innerHTML = '<option value="">No contacts. Upload the Excel sheet first.</option>';
@@ -56,9 +58,10 @@ async function loadContacts() {
     const o = document.createElement('option');
     o.value = r.id;
     o.textContent = `${r.order_id || '-'} | ${r.customer_name || '-'} | ${r.phone || 'no phone'} | ${r.product || '-'} | Rs ${r.amount || '-'} | ${r.payment_mode || ''} | ${r.status}`;
+    if (String(r.id) === chosen) o.selected = true;
     sel.appendChild(o);
   }
-  syncDialTo();
+  if (sel.value !== chosen) syncDialTo();
 }
 
 async function loadCalls() {
@@ -67,18 +70,91 @@ async function loadCalls() {
   if (window.loadStats) window.loadStats();
 }
 
+// ---- upload: preview first, import on confirm ----
+let previewFilter = 'all';
+let previewData = null;
+const ISSUE = {
+  ok: ['good', 'check', 'OK'],
+  no_phone: ['critical', 'alert', 'No valid phone'],
+  duplicate: ['warning', 'alert', 'Repeated in sheet'],
+  on_list: ['serious', 'clock', 'Already on list'],
+};
+const COL_LABEL = { order_id: 'Order ID', customer_name: 'Customer name', phone: 'Phone', product: 'Product', quantity: 'Qty', amount: 'Amount',
+  payment_mode: 'Payment', address: 'Address', delivery_date: 'Delivery date', language: 'Language', notes: 'Notes' };
+
+async function previewSheet() {
+  const f = $('file').files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  $('pv-summary').textContent = 'Reading the file…';
+  $('preview').hidden = false;
+  const r = await fetch('/api/contacts/preview', { method: 'POST', body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 404) { $('preview').hidden = true; notify('The server is running older code: close the run_phone.bat / run.bat window and start it again, then reload this page.'); return; }
+  if (!r.ok) { $('preview').hidden = true; notify(j.detail || 'Could not read the file.'); return; }
+  previewData = j;
+  previewFilter = 'all';
+  renderPreview();
+  $('preview').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+function renderPreview() {
+  const j = previewData;
+  if (!j) return;
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const c = j.counts;
+  const willImport = c.ok + (!$('pv-skipdup').checked ? c.duplicate + c.on_list : 0) + (!$('pv-skipnophone').checked ? c.no_phone : 0);
+  $('pv-summary').textContent = `${j.total} row${j.total === 1 ? '' : 's'} in the sheet · ${willImport} will be added`;
+  $('upload').textContent = `Import ${willImport} contact${willImport === 1 ? '' : 's'}`;
+  $('upload').disabled = willImport === 0;
+  $('pv-columns').innerHTML = `<span class="hint">Columns understood:</span>` + j.columns.map((k) => window.outcomeBadge ? `<span class="badge good">${esc(COL_LABEL[k] || k)}</span>` : esc(k)).join('')
+    + (j.ignored.length ? `<span class="hint" style="margin-left:6px">Ignored:</span>` + j.ignored.map((k) => `<span class="badge">${esc(k)}</span>`).join('') : '');
+  const warn = [];
+  if (j.missing.length) warn.push(`Missing column${j.missing.length > 1 ? 's' : ''}: ${j.missing.map((k) => COL_LABEL[k] || k).join(', ')}. The agent will have nothing to say for those details.`);
+  if (c.no_phone) warn.push(`${c.no_phone} row${c.no_phone > 1 ? 's have' : ' has'} no valid 10-digit phone.`);
+  if (c.duplicate) warn.push(`${c.duplicate} row${c.duplicate > 1 ? 's repeat' : ' repeats'} a number used earlier in the sheet.`);
+  if (c.on_list) warn.push(`${c.on_list} number${c.on_list > 1 ? 's are' : ' is'} already on the call list.`);
+  $('pv-warn').hidden = !warn.length;
+  $('pv-warn').textContent = warn.join(' ');
+  const chip = (key, label, tone, n) => `<button class="${tone}" data-pv="${key}" aria-pressed="${previewFilter === key}">${label} <b>${n}</b></button>`;
+  $('pv-chips').innerHTML = chip('all', 'All rows', '', j.total) + Object.entries(ISSUE).filter(([k]) => c[k]).map(([k, v]) => chip(k, v[2], v[0], c[k])).join('');
+  const rows = j.rows.filter((r) => previewFilter === 'all' || r.issue === previewFilter);
+  $('pv-rows').innerHTML = rows.map((r) => {
+    const v = ISSUE[r.issue] || ISSUE.ok;
+    const badge = window.outcomeBadge ? `<span class="badge ${v[0]}">${v[2]}</span>` : v[2];
+    return `<tr>
+      <td class="num"><small>${r.row}</small></td><td>${badge}</td>
+      <td><b>${esc(r.customer_name)}</b></td><td class="num">${esc(r.phone)}</td><td><small>${esc(r.order_id)}</small></td>
+      <td>${esc(r.product)}</td><td class="num">${esc(r.quantity)}</td><td class="num">${esc(r.amount)}</td><td>${esc(r.payment_mode)}</td>
+      <td><small>${esc(r.address)}</small></td><td><small>${esc(r.delivery_date)}</small></td><td><small>${esc(r.notes)}</small></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="12"><small>No rows in this group.</small></td></tr>';
+  $('pv-more').textContent = j.total > j.rows.length ? `Showing the first ${j.rows.length} of ${j.total} rows; all of them will be imported.` : '';
+}
+
+function closePreview() {
+  $('preview').hidden = true;
+  previewData = null;
+  $('file').value = '';
+  $('filename').textContent = 'Choose an Excel file';
+}
+
 async function upload() {
   const f = $('file').files[0];
   if (!f) return alert('Choose an .xlsx file first');
   const fd = new FormData();
   fd.append('file', f);
-  const r = await fetch('/api/contacts/upload', { method: 'POST', body: fd });
-  const j = await r.json();
+  const qs = new URLSearchParams({ skip_duplicates: $('pv-skipdup').checked, skip_no_phone: $('pv-skipnophone').checked });
+  $('upload').disabled = true;
+  const r = await fetch(`/api/contacts/upload?${qs}`, { method: 'POST', body: fd });
+  const j = await r.json().catch(() => ({}));
+  $('upload').disabled = false;
   if (!r.ok) return alert(j.detail || 'Upload failed');
-  notify(`Imported ${j.imported} contacts`);
-  $('file').value = '';
-  $('filename').textContent = 'Choose an Excel file';
+  notify(`Added ${j.imported} contact${j.imported === 1 ? '' : 's'} to the call list` + (j.skipped ? ` · ${j.skipped} skipped` : ''));
+  closePreview();
   await loadContacts();
+  if (window.showPage) { window.showPage('overview'); setTimeout(() => document.getElementById('board').scrollIntoView({ block: 'start', behavior: 'smooth' }), 30); }
 }
 
 async function clearContacts() {
@@ -144,7 +220,7 @@ async function startCall() {
   chunksSent = 0;
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value });
+  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, language: $('lang').value });
   try { localStorage.setItem('voice', $('voice').value); localStorage.setItem('model', $('modelSel').value); } catch (e) { /* ignore */ }
   ws = new WebSocket(`${proto}://${location.host}/ws/call/${contactId}?${qs}`);
   ws.binaryType = 'arraybuffer';
@@ -224,6 +300,10 @@ function cleanup() {
 }
 
 $('upload').onclick = upload;
+$('pv-cancel').onclick = closePreview;
+$('file').addEventListener('change', () => { if ($('file').files[0]) previewSheet(); });
+for (const id of ['pv-skipdup', 'pv-skipnophone']) $(id).addEventListener('change', renderPreview);
+$('pv-chips').addEventListener('click', (e) => { const b = e.target.closest('[data-pv]'); if (b) { previewFilter = b.dataset.pv; renderPreview(); } });
 $('clear').onclick = clearContacts;
 $('start').onclick = startCall;
 $('hangup').onclick = hangup;
@@ -236,23 +316,43 @@ $('clearcalls').onclick = async () => {
 };
 // Phone calls end outside this page, so keep the history fresh automatically.
 // Skips while a transcript is open so it does not collapse under you.
-setInterval(() => { if (!document.querySelector('#calls details[open]')) loadCalls(); }, 5000);
+setInterval(() => { if (!document.querySelector('#calls details[open]')) { loadCalls(); loadContacts(); } }, 5000);
 $('send').onclick = sendTyped;
 $('typed').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendTyped(); });
 fetch('/api/config').then(r => r.json()).then(c => {
   let savedVoice = c.voice, savedModel = c.model;
   try { savedVoice = localStorage.getItem('voice') || c.voice; savedModel = localStorage.getItem('model') || c.model; } catch (e) { /* ignore */ }
   for (const [name, gender] of Object.entries(c.voices)) {
-    const o = document.createElement('option');
-    o.value = name; o.textContent = `${name} (${gender})`;
-    if (name === savedVoice) o.selected = true;
-    $('voice').appendChild(o);
+    for (const id of ['voice', 'camp-voice']) {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = `${name} (${gender})`;
+      if (name === savedVoice) o.selected = true;
+      $(id).appendChild(o);
+    }
   }
   for (const m of c.models) {
     const o = document.createElement('option');
     o.value = m; o.textContent = m.replace('-preview-12-2025', '');
     if (m === savedModel) o.selected = true;
     $('modelSel').appendChild(o);
+  }
+  // Language: the sheet has no language column, so the owner picks it here. Remembered, and the
+  // two selects (campaign and single call) stay in step.
+  let savedLang = 'hinglish';
+  try { savedLang = localStorage.getItem('language') || savedLang; } catch (e) { /* ignore */ }
+  const LANG_LABELS = { hinglish: 'Hinglish (Hindi + English)', hindi: 'Hindi', english: 'English' };
+  for (const id of ['lang', 'camp-lang']) {
+    for (const l of c.languages || ['hinglish', 'hindi', 'english']) {
+      const o = document.createElement('option');
+      o.value = l; o.textContent = LANG_LABELS[l] || l;
+      if (l === savedLang) o.selected = true;
+      $(id).appendChild(o);
+    }
+    $(id).addEventListener('change', () => {
+      const v = $(id).value;
+      for (const other of ['lang', 'camp-lang']) $(other).value = v;
+      try { localStorage.setItem('language', v); } catch (e) { /* ignore */ }
+    });
   }
 });
 loadContacts();
@@ -279,10 +379,10 @@ $('dial').onclick = async () => {
 
 Number: ${to}
 Script for: ${who ? who.customer_name : ''} (${who ? who.order_id : ''})
-Cost: about Rs 1.70 per minute.
+Cost: a few rupees per minute (Gemini bills every turn for the whole call so far).
 
 Only call numbers of people who expect it.`)) return;
-  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, to });
+  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, to, language: $('lang').value });
   const r = await fetch(`/api/calls/dial/${contactId}?${qs}`, { method: 'POST' });
   const j = await r.json();
   notify(r.ok ? `Dialing ${j.dialed}… Watch the Live calls panel.` : 'Could not dial: ' + (j.detail || r.status));

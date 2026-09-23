@@ -10,11 +10,12 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, VOICES
-from .contacts import build_template, is_valid_phone, normalise_phone, parse_excel
+from .campaign import router as campaign_router
+from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, RECORDINGS_DIR, VOICES
+from .contacts import build_results, build_template, check_rows, inspect_excel, is_valid_phone, normalise_phone
 from .live_bridge import live_snapshot, run_call
 from .plivo_bridge import router as plivo_router
-from .prompts import get_prompt
+from .prompts import LANGUAGES, get_prompt, with_language
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # Keep call events on disk too, so a call can be diagnosed after the console window is closed.
@@ -42,6 +43,7 @@ STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Voice Agent MVP")
 db.init_db()
 app.include_router(plivo_router)
+app.include_router(campaign_router)
 
 
 async def stall_monitor() -> None:
@@ -68,7 +70,7 @@ async def index() -> FileResponse:
 
 @app.get("/api/config")
 async def get_config() -> dict:
-    return {"model": GEMINI_LIVE_MODEL, "voice": GEMINI_VOICE, "voices": VOICES,
+    return {"model": GEMINI_LIVE_MODEL, "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
             "models": ["gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live"]}
 
 
@@ -77,15 +79,48 @@ async def contacts() -> list[dict]:
     return db.list_contacts()
 
 
-@app.post("/api/contacts/upload")
-async def upload_contacts(file: UploadFile = File(...)) -> dict:
+def _read_sheet(file: UploadFile, content: bytes) -> dict:
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Upload an .xlsx file")
-    rows = parse_excel(await file.read())
-    if not rows:
+    try:
+        sheet = inspect_excel(content)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Could not read that file as Excel: {exc}")
+    if not sheet["rows"]:
         raise HTTPException(400, "No rows found. Check the header row matches the template.")
-    n = db.insert_contacts(rows)
-    return {"imported": n}
+    existing = {c["phone"] for c in db.list_contacts() if c.get("phone")}
+    sheet["rows"] = check_rows(sheet["rows"], existing)
+    sheet["counts"] = {k: sum(1 for r in sheet["rows"] if r["_issue"] == k) for k in ("ok", "no_phone", "duplicate", "on_list")}
+    sheet["missing"] = [c for c in ("customer_name", "phone", "product", "amount", "payment_mode") if c not in sheet["columns"]]
+    return sheet
+
+
+@app.post("/api/contacts/preview")
+async def preview_contacts(file: UploadFile = File(...)) -> dict:
+    """What the sheet contains, before anything is added: rows, columns understood, problems."""
+    sheet = _read_sheet(file, await file.read())
+    rows = [{k: v for k, v in r.items() if k != "_row"} | {"row": r["_row"], "issue": r["_issue"]} for r in sheet["rows"]]
+    for r in rows:
+        r.pop("_issue", None)
+    return {"rows": rows[:500], "total": len(rows), "columns": sheet["columns"], "ignored": sheet["ignored"],
+            "missing": sheet["missing"], "counts": sheet["counts"]}
+
+
+@app.post("/api/contacts/upload")
+async def upload_contacts(file: UploadFile = File(...), skip_duplicates: bool = True, skip_no_phone: bool = False) -> dict:
+    """Add the sheet's rows to the call list. By default rows whose number is already on the list
+    (or earlier in the same sheet) are left out; rows without a valid phone are kept so they show
+    up as 'wrong number' for the team to fix, unless skip_no_phone is set."""
+    sheet = _read_sheet(file, await file.read())
+    keep = []
+    for r in sheet["rows"]:
+        if skip_duplicates and r["_issue"] in ("duplicate", "on_list"):
+            continue
+        if skip_no_phone and r["_issue"] == "no_phone":
+            continue
+        keep.append({k: v for k, v in r.items() if not k.startswith("_")})
+    n = db.insert_contacts(keep) if keep else 0
+    return {"imported": n, "skipped": len(sheet["rows"]) - n, "counts": sheet["counts"]}
 
 
 @app.post("/api/contacts")
@@ -105,6 +140,18 @@ async def delete_contacts() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/contacts/export")
+async def export_results() -> Response:
+    """The contact sheet with every call's result beside it, for the team."""
+    contacts = sorted(db.list_contacts(), key=lambda c: c["id"])
+    stamp = db.datetime.now(db.IST).strftime("%Y-%m-%d_%H%M")
+    return Response(
+        content=build_results(contacts, db.latest_call_for_contact),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=call_results_{stamp}.xlsx"},
+    )
+
+
 @app.get("/api/contacts/template")
 async def template() -> Response:
     return Response(
@@ -117,6 +164,25 @@ async def template() -> Response:
 @app.get("/api/calls")
 async def calls() -> list[dict]:
     return db.list_calls()
+
+
+@app.get("/api/calls/{call_id}")
+async def one_call(call_id: int) -> dict:
+    """One call with its transcript, for the board (which may point at calls older than the history table shows)."""
+    row = db.get_call(call_id)
+    if not row:
+        raise HTTPException(404, "No such call.")
+    return row
+
+
+@app.get("/api/calls/{call_id}/recording")
+async def recording(call_id: int) -> FileResponse:
+    """The customer's side of a phone call as a wav file (see PHONE_RECORD)."""
+    name = db.get_recording(call_id)
+    path = RECORDINGS_DIR / name if name else None
+    if not path or not path.is_file():
+        raise HTTPException(404, "No recording for this call.")
+    return FileResponse(path, media_type="audio/wav", filename=name)
 
 
 @app.get("/api/live")
@@ -148,6 +214,7 @@ async def browser_call(ws: WebSocket, contact_id: int) -> None:
         await ws.send_text(json.dumps({"type": "error", "text": "contact not found"}))
         await ws.close()
         return
+    contact = with_language(contact, ws.query_params.get("language") or "")
 
     incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
 

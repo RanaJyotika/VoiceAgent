@@ -19,6 +19,18 @@ AI outbound calling agent on the Gemini Live API. Stage 1: order-confirmation ag
 2. Pick a contact and press Start call. The agent speaks first, like a real call. Answer it as the customer would.
 3. When the agent says goodbye it records the outcome and ends the call. The call history table shows outcome, duration, token usage and the transcript.
 
+## Calling the whole list
+
+The "Call the list" card on the dashboard rings every contact in the sheet one after another (start it with `run_phone.bat` running, since these are real calls):
+
+- never-called contacts go first, in sheet order; no-answer and busy contacts are rung again after "Retry after" minutes, up to "Tries per contact" times;
+- calls are placed only inside the calling hours (Indian time), and "Stop after" caps a run (use it for tests);
+- the campaign pauses itself if calls start failing on our side (Gemini billing, Plivo, the tunnel) so a bad key cannot burn through the list;
+- every contact ends up with a status: confirmed, change requested, cancelled, call later (callback time in the notes), no answer, busy, wrong number, do not call, or needs review (customer hung up, line dropped, or the agent could not make it out);
+- "Download results" gives the uploaded sheet back with the status, tries, the agent's notes (mismatch, new address, cancel reason, callback time) and the transcript beside each row.
+
+With `DIAL_ONLY_MY_NUMBER=true` every campaign call rings your own phone: the dashboard warns about this.
+
 ## Excel columns
 
 | Column | Example | Notes |
@@ -61,4 +73,10 @@ data/             SQLite database and uploads (git-ignored)
 
 ## Cost check
 
-Each call row stores the token usage Gemini reports. Audio input is about $0.005 per minute and audio output about $0.018 per minute on the Live API, so a one-minute confirmation call costs roughly Rs 1 to 1.5 in AI before telephony.
+Each call row stores the token usage Gemini reports, added up over every model turn and split by modality (audio in, text in, audio out, text out). The cost column is worked out from those tokens at the prices in `config.py` (`GEMINI_PRICE_PER_M`) and the `USD_INR` rate, plus Plivo's per-30-second pulse. A `~` in front of the figure means Gemini reported nothing for that call and it is a per-minute guess instead.
+
+Gemini Live bills every model turn for the whole conversation so far, so the cost of a call grows faster than its length: a 3-minute call with 8 turns costs several times a 1-minute call with 3 turns. Keep calls short. On 21 Sep 2026 Google billed about Rs 700 for 22 minutes of calls (about Rs 32 a minute) while the old dashboard estimate said Rs 30.
+
+Phone calls are recorded (customer's side only) to `data/recordings/call_<id>.wav`; the transcript view has a Listen link. Set `PHONE_RECORD=false` to turn this off.
+
+While Gemini prepares each reply (about 3 s) the phone plays a short "hmm" or "achha" in the agent's voice. The clips are made once per voice with Gemini text-to-speech on the first call that uses the voice (a few paise) and kept in `data/fillers/<voice>/`; until they exist a soft keyboard tap is played. `FILLERS=false` turns the sounds off, `FILLER_GENERATE=false` forbids the text-to-speech call.
