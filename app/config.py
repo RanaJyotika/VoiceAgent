@@ -19,7 +19,11 @@ GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Aoede")
 AGENT_NAME = os.getenv("AGENT_NAME", "Gauri")            # used with female voices
 AGENT_NAME_MALE = os.getenv("AGENT_NAME_MALE", "Arjun")  # used with male voices
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "Vedic Vaibhav")
-AFFECTIVE_DIALOG = os.getenv("AFFECTIVE_DIALOG", "true").lower() == "true"
+# Gemini's tone matching. It leaks the model's private mood label into the turn, and on calls 61
+# and 62 the label was spoken aloud: "excitement" before the greeting, "calmness" before "ji",
+# "surprise (negative)" before "achha". A flatter read is better than that. AFFECTIVE_DIALOG=true
+# switches it back on.
+AFFECTIVE_DIALOG = os.getenv("AFFECTIVE_DIALOG", "false").lower() == "true"
 # 0 = the model answers immediately (fast turns). -1 = leave the model default (slower, ~3 s pauses).
 GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 

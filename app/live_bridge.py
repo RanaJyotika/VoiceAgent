@@ -38,10 +38,20 @@ ACTIVE: dict[int, dict] = {}
 # With affective dialog on, the model's private mood notes sometimes leak into the written
 # transcript: "emotion_user\ncalmness<ctrl95>emotion_model\ncalmness<ctrl95>". They are not spoken.
 _MOOD_NOTE = re.compile(r"emotion_(?:user|model)\s*[a-zA-Z_]*\s*(?:<ctrl\d+>)?")
+# ...and the bare label on its own, glued to the first word ("excitementhello", "calmnessji").
+# Only at the very start of a turn: these are English words the agent could legitimately say
+# in the middle of a Hinglish sentence.
+_MOODS = (r"calmness|excitement|confusion|surprise|sadness|anger|joy|happiness|amusement|neutral|"
+          r"disappointment|concern|empathy|sympathy|curiosity|frustration|relief|enthusiasm|warmth|"
+          r"seriousness|embarrassment|gratitude|hesitation|determination|affection|admiration|"
+          r"boredom|fear|disgust|pride|hope|annoyance|anticipation|nervousness")
+_MOOD_PREFIX = re.compile(r"^\s*(?:" + _MOODS + r")(?:\s*\((?:positive|negative|neutral)\))?\s*(?:<ctrl\d+>)?",
+                          re.IGNORECASE)
 
 
 def clean_agent_text(text: str) -> str:
-    return re.sub(r"<ctrl\d+>", "", _MOOD_NOTE.sub("", text)).strip()
+    out = re.sub(r"<ctrl\d+>", "", _MOOD_NOTE.sub("", text)).strip()
+    return _MOOD_PREFIX.sub("", out).strip()
 
 
 _NOTHING = re.compile(r"^[\s.,!?…\-–—'\"()\[\]]*$")
