@@ -426,12 +426,15 @@ class PendingCall:
         self.ws = ws
         waiting = self.outbox.qsize()
         self.sender = asyncio.create_task(self._send_loop(ws))
-        if FILLERS:
+        if FILLERS and is_openai_model(self.model):
+            # The filler exists to cover Gemini's ~3 s pause. OpenAI answers quickly and in its
+            # own voice, so a synthetic click would be noise rather than cover.
+            log.info("filler sounds: off (this agent answers without the pause they cover)")
+        elif FILLERS:
             # Loaded now, not at dial time: the clips may still be generating while the phone rings.
-            own_voice = not is_openai_model(self.model)
-            self.filler = fillers.Picker(self.voice, clips_ok=own_voice)
+            self.filler = fillers.Picker(self.voice)
             log.info("filler sounds: %s", f"{len(self.filler.clips)} clips in voice {self.voice}" if self.filler.clips
-                     else "keyboard tap" + ("" if own_voice else " (the agent is not speaking in a Gemini voice)"))
+                     else "no clips for this voice yet; using the keyboard tap")
         log.info("audio line attached; %s prepared audio chunks waiting", waiting)
 
     def play_filler(self) -> None:

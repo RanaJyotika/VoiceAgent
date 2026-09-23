@@ -22,7 +22,8 @@ from google.genai import types
 from . import db, openai_bridge
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
-                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
+                     GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE,
+                     OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
                      TRANSCRIPT_LANGUAGES)
 from .tools import TOOLS
@@ -252,6 +253,7 @@ class CallState:
     error: str | None = None
     _in_buf: str = ""
     _out_buf: str = ""
+    speech_until: float = 0.0                       # when the audio already sent finishes playing
     provider: str = "gemini"                        # which voice agent answered this call
     prices: dict[str, float] = field(default_factory=lambda: GEMINI_PRICE_PER_M)
 
@@ -510,6 +512,7 @@ async def run_call(
                                 state.speaking = False
                                 state.idle_since = time.monotonic()
                                 state.loud_since = None
+                                state.speech_until = 0.0   # that audio is dropped, not played
                                 state.close_usage_turn()   # a cut-off turn is still billed
                                 log.info("call %s: customer interrupted", call_id)
                                 await send_event({"type": "interrupted"})
@@ -531,6 +534,12 @@ async def run_call(
                                             state.idle_since = None
                                             state.loud_since = None
                                             log.info("call %s: agent started speaking at %.1fs", call_id, time.monotonic() - state.started)
+                                        # How long this audio takes to speak. OpenAI hands over a
+                                        # whole sentence in a fraction of the time it takes to say
+                                        # it, so "the model has stopped" is not "the customer has
+                                        # heard it" and the goodbye was being cut off.
+                                        state.speech_until = max(state.speech_until, time.monotonic()) + \
+                                            len(part.inline_data.data) / (OUTPUT_SAMPLE_RATE * 2)
                                         await send_audio(part.inline_data.data)
                             if sc.turn_complete:
                                 state.speaking = False
@@ -561,8 +570,12 @@ async def run_call(
                                 responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
                             await session.send_tool_response(function_responses=responses)
                             if state.ended:
-                                # Give the final audio a moment to drain, then stop.
-                                await asyncio.sleep(1.5)
+                                # Wait for the goodbye to actually finish in the customer's ear,
+                                # not merely for the model to stop producing it. Capped so a
+                                # runaway reply cannot hold the line open.
+                                left = min(20.0, max(0.0, state.speech_until - time.monotonic()) + 0.4)
+                                log.info("call %s: waiting %.1fs for the goodbye to finish", call_id, left)
+                                await asyncio.sleep(left)
                                 return
 
             in_task = asyncio.create_task(pump_in())

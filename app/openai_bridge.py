@@ -165,10 +165,13 @@ class _Message:
 class OpenAISession:
     """One Realtime conversation, presenting the handful of methods live_bridge calls."""
 
-    def __init__(self, ws, dialect: str, call_label: str = "") -> None:
+    def __init__(self, ws, dialect: str, call_label: str = "", manual_vad: bool = True) -> None:
         self.ws = ws
         self.dialect = dialect          # "ga" or "beta"
         self.label = call_label
+        self.manual_vad = manual_vad    # we mark the turns (phone) rather than the server (browser)
+        self._tool_buf: list = []       # function calls of the response being read
+        self._warned_vad = False
         self._q: asyncio.Queue = asyncio.Queue()
         self._send_lock = asyncio.Lock()
         self._resample = None           # 16 kHz -> 24 kHz state, kept across chunks
@@ -242,12 +245,18 @@ class OpenAISession:
         await self._say_user_text(text)
 
     async def send_tool_response(self, *, function_responses) -> None:
+        ending = False
         for fr in function_responses or []:
             await self._send({"type": "conversation.item.create",
                               "item": {"type": "function_call_output",
                                        "call_id": getattr(fr, "id", "") or "",
                                        "output": json.dumps(getattr(fr, "response", {}) or {}, ensure_ascii=False)}})
             self._pending_tools = max(0, self._pending_tools - 1)
+            ending = ending or getattr(fr, "name", "") == "end_call"
+        if ending:
+            # The goodbye has already been spoken and the line is about to close. Asking for
+            # another reply here makes the agent start talking over its own hang-up.
+            return
         # The model has its answer; let it carry on speaking.
         await self._send({"type": "response.create"})
         self._responding = True
@@ -298,8 +307,16 @@ class OpenAISession:
                 out.append(_Message(server_content=_ServerContent(input_transcription=_Text(evt["transcript"]))))
 
         elif kind == "input_audio_buffer.speech_started":
-            # Server turn detection only (the browser test): the customer talked over the agent.
-            if self._responding:
+            if self.manual_vad:
+                # We asked for turn_detection null, so this event should never arrive. It means
+                # the server is still listening for pauses itself and will answer on its own,
+                # on top of our replies. Worth saying plainly once.
+                if not self._warned_vad:
+                    self._warned_vad = True
+                    log.warning("%s: the server is detecting turns even though we asked it not to; "
+                                "replies may double up. Check the wire format in the connect line.", self.label)
+            elif self._responding:
+                # Browser test: the customer talked over the agent.
                 self._responding = False
                 out.append(_Message(server_content=_ServerContent(interrupted=True)))
 
@@ -308,9 +325,11 @@ class OpenAISession:
                 args = json.loads(evt.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            self._pending_tools += 1
-            out.append(_Message(tool_call=_ToolCall(function_calls=[
-                _FunctionCall(id=evt.get("call_id") or "", name=evt.get("name") or "", args=args)])))
+            # Held until the response ends so that all of a turn's tool calls arrive together, as
+            # Gemini delivers them. One at a time meant one extra reply request per tool, and the
+            # agent said a second goodbye after mark_outcome.
+            self._tool_buf.append(_FunctionCall(id=evt.get("call_id") or "",
+                                                name=evt.get("name") or "", args=args))
 
         elif kind == "response.done":
             self._responding = False
@@ -318,9 +337,13 @@ class OpenAISession:
             usage = self._usage(resp.get("usage") or {})
             if usage is not None:
                 out.append(_Message(usage_metadata=usage))
-            # A reply that only called a tool is not the end of the agent's turn: the spoken
-            # follow-up comes after we hand the tool's answer back.
-            if not self._pending_tools:
+            if self._tool_buf:
+                self._pending_tools = len(self._tool_buf)
+                out.append(_Message(tool_call=_ToolCall(function_calls=self._tool_buf)))
+                self._tool_buf = []
+            else:
+                # A reply that called a tool is not the end of the agent's turn: the spoken
+                # follow-up comes after we hand the tool's answer back.
                 out.append(_Message(server_content=_ServerContent(turn_complete=True)))
 
         elif kind == "error":
@@ -437,7 +460,7 @@ async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label:
             if kind in ("session.updated", "session.created"):
                 if kind == "session.created":
                     continue   # the greeting event; the answer to our update is still coming
-                return OpenAISession(ws, dialect, label)
+                return OpenAISession(ws, dialect, label, manual_vad=manual_vad)
             if kind == "error":
                 err = evt.get("error") or {}
                 raise RuntimeError(f"{err.get('code')}: {err.get('message')}")
