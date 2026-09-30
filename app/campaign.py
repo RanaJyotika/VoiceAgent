@@ -21,7 +21,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from . import db
-from .config import DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, PHONE_NUMBER, VOICES, plivo_missing
+from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
+                     STALE_PAGE, VOICES, plivo_missing)
 from .db import IST
 from .plivo_bridge import PENDING, place_call
 from .prompts import LANGUAGES
@@ -35,7 +36,9 @@ STOP_ON_ERRORS = 2       # consecutive system failures that pause the campaign
 
 @dataclass
 class Settings:
+    campaign_id: int = 0           # the campaign being called (one runs at a time)
     voice: str = GEMINI_VOICE
+    model: str = ""                # the agent every call of this run starts on ("" = the first offered)
     language: str = "hinglish"     # for rows whose sheet has no language column
     max_concurrent: int = 1
     max_attempts: int = 3          # calls to one contact before giving up on no answer / busy
@@ -57,13 +60,23 @@ class Campaign:
     task: asyncio.Task | None = None
     watchers: set = field(default_factory=set)
 
-    def snapshot(self) -> dict:
+    def snapshot(self, campaign_id: int | None = None) -> dict:
+        """How the running campaign stands, or (when another one is asked for) how that one's list
+        stands; its saved settings are returned so the form shows what it last ran with."""
         s = self.settings
-        counts = db.contact_counts(s.max_attempts)
+        cid = s.campaign_id if self.running or not campaign_id else campaign_id
+        viewed = campaign_id or cid
+        camp = db.get_campaign(viewed) if viewed else None
+        saved = Settings(**{**asdict(Settings()), **((camp or {}).get("settings") or {}), "campaign_id": viewed or 0})             if camp and not (self.running and viewed == s.campaign_id) else s
+        counts = db.contact_counts(saved.max_attempts, viewed) if viewed else db.contact_counts(saved.max_attempts, -1)
         return {
-            "running": self.running, "reason": self.reason, "started_at": self.started_at,
-            "calls_made": self.calls_made, "settings": asdict(s), "in_progress": len(PENDING),
-            "within_hours": within_hours(s), "now_ist": datetime.now(IST).strftime("%H:%M"),
+            "running": self.running, "running_campaign_id": s.campaign_id if self.running else None,
+            "campaign_id": viewed, "last_call_date": (camp or {}).get("last_call_date") or "",
+            "past_last_date": past_last_date(camp),
+            "reason": self.reason if (self.running or viewed == s.campaign_id) else "",
+            "started_at": self.started_at,
+            "calls_made": self.calls_made, "settings": asdict(saved), "in_progress": len(PENDING),
+            "within_hours": within_hours(saved), "now_ist": datetime.now(IST).strftime("%H:%M"),
             "dial_only_my_number": DIAL_ONLY_MY_NUMBER, "my_number": PHONE_NUMBER if DIAL_ONLY_MY_NUMBER else "",
             "max_concurrent_allowed": MAX_CONCURRENT_CALLS,
             **counts,
@@ -71,6 +84,12 @@ class Campaign:
 
 
 CAMPAIGN = Campaign()
+
+
+def past_last_date(camp: dict | None) -> bool:
+    """The campaign's last calling day has gone by (Indian date)."""
+    last = (camp or {}).get("last_call_date") or ""
+    return bool(last) and datetime.now(IST).strftime("%Y-%m-%d") > last[:10]
 
 
 def within_hours(s: Settings) -> bool:
@@ -96,6 +115,9 @@ async def _run() -> None:
                 if spent >= s.budget_rs:
                     c.reason = f"paused: today's estimated cost is Rs {spent:.0f}, the budget was Rs {s.budget_rs}"
                     break
+            if past_last_date(db.get_campaign(s.campaign_id)):
+                c.reason = "finished: the campaign's last calling day has passed"
+                break
             if not within_hours(s):
                 if not waiting_logged:
                     log.info("campaign waiting: outside calling hours (%02d:00 to %02d:00 IST)", s.start_hour, s.end_hour)
@@ -106,12 +128,12 @@ async def _run() -> None:
             if len(PENDING) >= s.max_concurrent:
                 await asyncio.sleep(1)
                 continue
-            contact = db.next_to_call(s.max_attempts)
+            contact = db.next_to_call(s.max_attempts, s.campaign_id)
             if contact is None:
                 if PENDING or c.watchers:
                     await asyncio.sleep(2)     # last calls still running; their retries may come
                     continue
-                counts = db.contact_counts(s.max_attempts)
+                counts = db.contact_counts(s.max_attempts, s.campaign_id)
                 if counts["retry_left"]:
                     # Only retries are left and none is due yet: wait for the next one.
                     await asyncio.sleep(15)
@@ -119,7 +141,7 @@ async def _run() -> None:
                 c.reason = "finished: everyone on the list has been called"
                 break
             try:
-                pc = await place_call(contact, s.voice, language=s.language)
+                pc = await place_call(contact, s.voice, s.model, language=s.language)
             except HTTPException as exc:
                 # A bad row (no phone number) is that row's problem; anything else is ours.
                 if exc.status_code == 400:
@@ -171,21 +193,30 @@ async def _after_call(pc, contact: dict) -> None:
 
 
 @router.get("/api/campaign")
-async def campaign_status() -> dict:
-    return CAMPAIGN.snapshot()
+async def campaign_status(campaign_id: int | None = None) -> dict:
+    return CAMPAIGN.snapshot(campaign_id)
 
 
 @router.post("/api/campaign/start")
 async def campaign_start(body: dict) -> dict:
     """Start (or resume) calling the list. Every call is a real, paid phone call."""
     c = CAMPAIGN
+    if str(body.get("build") or "") != PAGE_BUILD:
+        raise HTTPException(409, STALE_PAGE)
     if c.running:
-        raise HTTPException(400, "The campaign is already running.")
+        raise HTTPException(400, "A campaign is already running. Stop it first; one campaign calls at a time.")
+    camp = db.get_campaign(int(body.get("campaign_id") or 0))
+    if not camp:
+        raise HTTPException(400, "Pick a campaign to start.")
+    if past_last_date(camp):
+        raise HTTPException(400, "This campaign's last calling day has passed. Change it on the campaign to call again.")
     missing = plivo_missing()
     if missing:
         raise HTTPException(400, f"Phone line not ready. Missing: {', '.join(missing)}")
     s = Settings(
+        campaign_id=camp["id"],
         voice=body.get("voice") if body.get("voice") in VOICES else GEMINI_VOICE,
+        model=body.get("model") if body.get("model") in OFFERED_MODELS else OFFERED_MODELS[0],
         language=body.get("language") if body.get("language") in LANGUAGES else "hinglish",
         max_concurrent=max(1, min(MAX_CONCURRENT_CALLS, int(body.get("max_concurrent") or 1))),
         max_attempts=max(1, min(6, int(body.get("max_attempts") or 3))),
@@ -197,10 +228,11 @@ async def campaign_start(body: dict) -> dict:
     )
     if s.end_hour <= s.start_hour:
         raise HTTPException(400, "Calling hours: the end must be after the start.")
-    counts = db.contact_counts(s.max_attempts)
+    counts = db.contact_counts(s.max_attempts, s.campaign_id)
     if not counts["to_call"]:
         raise HTTPException(400, "Nobody to call: every contact is done. Re-queue some contacts or upload a new sheet.")
     c.settings = s
+    db.update_campaign(s.campaign_id, settings={k: v for k, v in asdict(s).items() if k != "campaign_id"})
     c.running, c.reason, c.calls_made, c.errors_in_a_row = True, "", 0, 0
     c.started_at = db.now_iso()
     c.task = asyncio.create_task(_run())
@@ -255,5 +287,5 @@ async def requeue(body: dict) -> dict:
     """Put contacts back on the list: by ids, or every contact with one of the given statuses."""
     ids = [int(i) for i in body.get("ids") or []]
     statuses = tuple(str(x) for x in body.get("statuses") or [])
-    n = db.requeue_contacts(ids=ids or None, statuses=statuses or None)
+    n = db.requeue_contacts(ids=ids or None, statuses=statuses or None, campaign_id=int(body.get("campaign_id") or 0) or None)
     return {"requeued": n}

@@ -21,12 +21,13 @@ from google.genai import types
 
 from . import db, openai_bridge
 from .db import IST
-from .config import (AFFECTIVE_DIALOG, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
+from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
                      TRANSCRIPT_LANGUAGES)
-from .tools import TOOLS
+from .call_types import DEFAULT as DEFAULT_CALL_TYPE, CallType, call_type_for
+from .tools import tools_for
 
 log = logging.getLogger("bridge")
 
@@ -55,15 +56,19 @@ def clean_agent_text(text: str) -> str:
 
 
 _NOTHING = re.compile(r"^[\s.,!?…\-–—'\"()\[\]]*$")
-_REPEAT_WORDS = re.compile(r"sorry|phir|dobara|dubara|awaaz|awaz|sun(?:ai|a)? nahi|फिर|दोबारा|दुबारा|आवाज़|आवाज|सुनाई नहीं|repeat", re.IGNORECASE)
 # Letters that can carry a customer's words on these calls: Latin, digits, Devanagari and the other
 # Indian scripts, Arabic (Urdu). Anything else on a Hindi call is the transcriber guessing at noise:
 # call 53 transcribed a fragment as Thai.
 _OUR_LETTERS = re.compile(r"[A-Za-z0-9ऀ-෿؀-ۿ٠-٩०-९]")
 _ANY_LETTER = re.compile(r"[^\W\d_]")
-_YES = re.compile(r"\b(haan|han|ha|haa|hanji|ji|jee|sahi|sahee|theek|thik|ok|okay|yes|yeah|confirm|bilkul|kar do|kar dijiye|"
-                  r"kardo|karo|done|right|correct|हाँ|हां|हा|जी|सही|ठीक|बिल्कुल|कर दो|कर दीजिए)\b", re.IGNORECASE)
-_NO = re.compile(r"\b(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|गलत|मत)\b", re.IGNORECASE)
+# Word edges that also work for Indian scripts: \b fails there, because vowel signs such as the
+# "ं" in "ਹਾਂ" do not count as word characters, so "ਹਾਂ ਜੀ ਸਹੀ ਹੈ" matched nothing (call 71).
+_L, _R = r"(?<![\wऀ-෿])", r"(?![\wऀ-෿])"
+_YES = re.compile(_L + r"(haan|han|ha|haa|hanji|ji|jee|sahi|sahee|theek|thik|ok|okay|yes|yeah|confirm|bilkul|kar do|kar dijiye|"
+                  r"kardo|karo|done|right|correct|हाँ|हां|हा|जी|हाँजी|हांजी|सही|ठीक|बिल्कुल|कर दो|कर दीजिए|"
+                  r"ਹਾਂ|ਹਾਂਜੀ|ਜੀ|ਸਹੀ|ਠੀਕ|ਬਿਲਕੁਲ)" + _R, re.IGNORECASE)   # last group: Punjabi script (call 71)
+_NO = re.compile(_L + r"(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|नई|गलत|मत|कैंसल|कैंसिल|कैन्सल|केंसल|"
+                 r"ਨਹੀਂ|ਨਹੀ|ਗਲਤ|ਕੈਂਸਲ)" + _R, re.IGNORECASE)
 
 
 def heard_nothing(customer_text: str) -> bool:
@@ -93,6 +98,13 @@ _DIGIT_WORDS = {
     "chah": "6", "chhah": "6", "छह": "6", "छे": "6", "छः": "6", "saat": "7", "sat": "7", "सात": "7", "aath": "8", "ath": "8",
     "आठ": "8", "nau": "9", "नौ": "9", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
     "seven": "7", "eight": "8", "nine": "9",
+    # English digits written in Devanagari: call 71's "हाउस नंबर थ्री जीरो 35" was heard as only "35",
+    # so house number 3035 was refused twice and the customer was asked for it three times.
+    "ज़ीरो": "0", "जीरो": "0", "ज़ेरो": "0", "वन": "1", "टू": "2", "थ्री": "3", "थ्रि": "3", "फोर": "4", "फ़ोर": "4",
+    "फाइव": "5", "फ़ाइव": "5", "सिक्स": "6", "सेवन": "7", "सेवेन": "7", "एट": "8", "एइट": "8", "नाइन": "9",
+    # Punjabi (Gurmukhi): the transcriber writes some Chandigarh callers in it (call 71).
+    "ਸਿਫ਼ਰ": "0", "ਸਿਫਰ": "0", "ਜ਼ੀਰੋ": "0", "ਜੀਰੋ": "0", "ਇੱਕ": "1", "ਇਕ": "1", "ਦੋ": "2", "ਤਿੰਨ": "3", "ਚਾਰ": "4",
+    "ਪੰਜ": "5", "ਛੇ": "6", "ਸੱਤ": "7", "ਅੱਠ": "8", "ਨੌਂ": "9", "ਨੌ": "9",
 }
 # A run of digits, or a word: anything between spaces and punctuation (Devanagari vowel signs are not
 # "word characters" to the regex engine, so \w+ would cut "पांच" into pieces).
@@ -140,10 +152,6 @@ def asks_for_address_part(agent_text: str) -> str:
     return ""
 
 
-def asked_to_repeat(agent_text: str) -> bool:
-    return _REPEAT_WORDS.search(clean_agent_text(agent_text)) is not None
-
-
 # Questions whose answer is long (an address, a number, "what did you order") get a longer pause
 # before the turn is closed; a yes/no gets a short one. Decided from the agent's own words.
 _LONG_ANSWER = re.compile(r"address|एड्रेस|पता|house|हाउस|flat|फ्लैट|makaan|मकान|area|एरिया|sector|सेक्टर|society|सोसाइटी|"
@@ -155,21 +163,93 @@ def expects_long_answer(agent_text: str) -> bool:
     return _LONG_ANSWER.search(clean_agent_text(agent_text)) is not None
 
 
-# What to tell the agent after the customer's reply came through as nothing, by how many times in a
-# row it has happened for the same question. Escalation lives here, not in the prompt.
+# A customer turn whose transcript carries no words ("<noise>") is not an answer. On call 72 the
+# customer made a short "hmm" after the question; Gemini heard no words but answered it anyway ("koi
+# baat nahi ji, koi khaas wajah?"), and the note sent after that reply then made the agent say "sorry
+# ji, aapki awaaz nahi aayi" straight after it, to someone who had not spoken. So the reply to such a
+# turn is held back, never played (run_call), and the agent speaks up only when it keeps happening.
+# What it is told, by how many such turns in a row; the first is left alone, the customer is still to answer.
 INAUDIBLE_NOTES = {
-    1: "[Note from the phone line: the customer's last reply was not audible at all; nothing they said reached you, so "
-       "you have not had an answer to your previous question. Do not go on. Say 'sorry ji, aapki awaaz nahi aayi' and "
-       "ask that previous question again, in fewer words.]",
-    2: "[Note from the phone line: the customer's reply was inaudible again, twice now. Ask them once, warmly, to hold the "
-       "phone a little closer and speak slowly ('ji, phone thoda paas rakh ke dheere se boliye'), then ask the same "
-       "question again. Do not move on.]",
-    3: "[Note from the phone line: three replies in a row could not be heard. Do not ask this question again. If it was "
+    2: "[Note from the phone line: again a sound from the customer's side with no words in it; you still have no answer "
+       "to your question. Say 'sorry ji, awaaz saaf nahi aa rahi' and ask that question again, in fewer words.]",
+    3: "[Note from the phone line: three sounds in a row from the customer's side carried no words. Ask them once, warmly, "
+       "to hold the phone a little closer and speak slowly ('ji, phone thoda paas rakh ke dheere se boliye'), then ask the "
+       "same question again. Do not move on.]",
+    4: "[Note from the phone line: four replies in a row could not be heard. Do not ask this question again. If it was "
        "about the address or another detail: say 'koi baat nahi, team aapse le legi', put that in mark_outcome notes, and "
        "carry on with the next step. If it was the final confirmation or the opening: say the line is bad and you will "
        "call back a little later ('awaaz nahi aa rahi, hum thodi der mein dobara call karte hain'), then call end_call "
        "without mark_outcome.]",
 }
+# Goes with the customer's next words (or the next note from the line) after a reply was held back,
+# so the agent does not take their answer as a reply to something they never heard.
+UNHEARD_NOTE = ("[Note from the phone line: your last reply was NOT played to the customer. It answered a sound with no "
+                "words in it (a breath, a 'hmm', background noise). Treat that reply as never said: anything it asked, you "
+                "have NOT asked. What the customer says now answers the last thing they heard from you, which was: "
+                "\"{question}\". Reply to their words as an answer to that.]")
+
+# Did the agent ask why? Only turns the customer heard count (a held-back reply is not in the transcript).
+_ASKED_WHY = re.compile(r"wajah|kyun|kyon|kyu\b|reason|kaaran|वजह|क्यों|क्यूँ|क्यू|कारण", re.IGNORECASE)
+# A "reason" made only of these words is a no said again, not a reason: on call 77 the agent recorded
+# not_interested_reason "not interested" without having asked.
+_NO_WORDS = {"nahi", "nahin", "nhi", "no", "not", "interested", "interest", "hoon", "hu", "hai", "hain", "main", "mai",
+             "mujhe", "me", "i", "am", "ji", "chahiye", "given", "none", "at", "all", "in", "this", "it", "the", "customer",
+             "is", "says", "said", "नहीं", "नही", "इंटरेस्टेड", "इंटरेस्ट", "हूं", "हूँ", "है", "हैं", "मैं", "मुझे", "चाहिए", "जी"}
+
+
+def bare_no(reason: str) -> bool:
+    """True when the recorded reason says nothing beyond "no" ("not interested", "nahi chahiye", "")."""
+    # Split on spaces and punctuation, not on \w: Devanagari vowel signs are not "word characters" to the
+    # regex engine, so \w would cut "नहीं" into pieces.
+    words = re.findall(r"[^\s.,;:!?()\[\]/\-\"'|]+", (reason or "").lower())
+    return not any(w not in _NO_WORDS for w in words)
+
+
+def last_question(transcript: list[dict[str, str]]) -> str:
+    """The end of the last thing the customer heard the agent say: the question they are answering."""
+    said = next((t["text"] for t in reversed(transcript) if t["role"] == "agent"), "")
+    sentences = [x.strip() for x in re.split(r"(?<=[?।.!])\s+", said) if x.strip()]
+    return sentences[-1] if sentences else said
+
+
+# Results that throw an order or a booking away. Refused unless the customer said a no somewhere.
+NEEDS_A_NO = ("cancelled", "not_ordered")
+
+_GOODBYE = re.compile(r"dhanyavaad|dhanyawad|dhanyavad|धन्यवाद|shubh ho|शुभ हो", re.IGNORECASE)
+
+
+def said_goodbye(transcript: list[dict[str, str]]) -> bool:
+    """The last thing the customer heard from the agent was its goodbye."""
+    said = next((t["text"] for t in reversed(transcript) if t["role"] == "agent"), "")
+    return _GOODBYE.search(said) is not None
+
+
+def yes_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
+    """The customer's clear yes to the call's main question ("kya aapka order confirm hai?"), if the
+    last time it was asked they said yes and nothing later took it back. "" otherwise."""
+    if not pattern:
+        return ""
+    asked = re.compile(pattern, re.IGNORECASE)
+    for i in range(len(transcript) - 1, -1, -1):
+        t = transcript[i]
+        if t["role"] == "agent" and asked.search(t["text"]):
+            later = [x["text"] for x in transcript[i + 1:] if x["role"] == "customer" and not heard_nothing(x["text"])]
+            if later and said_yes(later[0]) and not any(_NO.search(x) for x in later[1:]):
+                return later[0]
+            return ""
+    return ""
+
+
+# Strong Hindi and English abuse, as the transcriber writes it. Only tags the call for the team: the
+# agent hears the audio itself and follows the prompt, and a misheard word (call 98's "चूपिया") slips past.
+_ABUSE = re.compile(_L + r"(madarchod|maderchod|madarchood|behenchod|behnchod|bhenchod|benchod|chutiya|chutiye|chutia|"
+                    r"chootiya|bhosdi\w*|bhosadi\w*|gandu|haramzad\w*|harami|randi|kamina|kamine|fuck\w*|bastard|"
+                    r"मादरचोद|बहनचोद|बहनचो|भेनचोद|बेनचोद|चूतिया|चुतिया|चूतिये|चुतिये|भोसड़ी\S*|भोसडी\S*|भोसड़ीके|"
+                    r"गांडू|गांडु|हरामी|हरामज़ादा|हरामजादा|रंडी|कमीना|कमीने)" + _R, re.IGNORECASE)
+
+
+def was_abusive(transcript: list[dict[str, str]]) -> bool:
+    return any(t["role"] == "customer" and _ABUSE.search(t["text"]) for t in transcript)
 
 
 MAX_RECONNECTS = 3
@@ -227,13 +307,14 @@ def gemini_is_down() -> bool:
     return time.monotonic() < _provider_down.get("gemini", 0.0)
 
 
-def can_fall_back(model: str, exc: BaseException) -> bool:
+def can_fall_back(model: str, exc: BaseException, exhausted: bool = False) -> bool:
     """Should this call leave Gemini for OpenAI? Only when Gemini cannot take the call at all:
-    out of credit, key refused, or it has already failed to reconnect the allowed number of
-    times. A single internal error is a blip and reconnecting to Gemini fixes it."""
+    out of credit, key refused, or (exhausted) it has already failed to reconnect the allowed
+    number of times. A single internal error is a blip and reconnecting to Gemini fixes it; on
+    call 79 the same "1011 internal error" came back on every reconnect and the call was lost."""
     if not OPENAI_FALLBACK or openai_bridge.is_openai_model(model):
         return False
-    return is_billing_error(exc) or "api key" in str(exc).lower() or "permission" in str(exc).lower()
+    return exhausted or is_billing_error(exc) or "api key" in str(exc).lower() or "permission" in str(exc).lower()
 
 
 SendAudio = Callable[[bytes], Awaitable[None]]
@@ -243,6 +324,7 @@ SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
 @dataclass
 class CallState:
     call_id: int
+    call_type: CallType = DEFAULT_CALL_TYPE   # what the call is for: its results, checks and tools
     started: float = field(default_factory=time.monotonic)
     transcript: list[dict[str, str]] = field(default_factory=list)
     outcome: str | None = None
@@ -259,13 +341,25 @@ class CallState:
     address: dict[str, str] | None = None   # what record_address accepted
     inaudible_streak: int = 0           # customer replies in a row that carried no words
     inaudible_total: int = 0
+    held: bool | None = None            # the reply in progress answers a turn with no words and is not played (None: not decided yet)
+    unheard: bool = False               # a reply was held back and the agent has not been told yet
+    answering: str = "note"             # what the next reply answers: the customer's "speech" or a "note" (phone only)
+    noise_told: bool = False            # the phone line was told this turn carried no words
     confirm_refusals: int = 0           # mark_outcome "confirmed" sent back for want of a clear yes
-    reconnects: int = 0
+    denial_refusals: int = 0            # mark_outcome "cancelled" / "not_ordered" sent back for want of a no
+    reason_refused: bool = False        # mark_outcome "not_interested" sent back once because why was never asked
+    record_pending: bool = False        # a mark_outcome was sent back and nothing has been recorded since
+    end_refusals: int = 0               # end_call refused while record_pending (at most twice a call)
+    loose_address_refusals: int = 0     # mark_outcome sent back for a new_address that record_address never took
+    question_refusals: int = 0          # end_call sent back because it came with an unanswered question
+    reconnects: int = 0                 # reconnects to the current provider (reset when the call changes provider)
+    drops: int = 0                      # times the line dropped and the call carried on (any provider)
     error: str | None = None
     _in_buf: str = ""
     _out_buf: str = ""
     speech_until: float = 0.0                       # when the audio already sent finishes playing
     provider: str = "gemini"                        # which voice agent answered this call
+    model: str = ""                                 # ...and its model, as it is now (it can switch mid-call)
     prices: dict[str, float] = field(default_factory=lambda: GEMINI_PRICE_PER_M)
 
     def add_input_text(self, text: str) -> None:
@@ -309,9 +403,15 @@ class CallState:
         self._out_buf = ""
 
 
+def address_text(a: dict[str, str]) -> str:
+    """An address record_address accepted, as one line for the team."""
+    return ", ".join(x for x in (f"house number {a['house']}", a["area"], a.get("landmark", ""), a["city"], f"PIN {a['pin']}") if x)
+
+
 def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
                  sensitive_listening: bool = False, fast: bool = True,
-                 manual_vad: bool = False, language_hints: bool = False) -> types.LiveConnectConfig:
+                 manual_vad: bool = False, language_hints: bool = False,
+                 call_type: CallType = DEFAULT_CALL_TYPE) -> types.LiveConnectConfig:
     extra: dict[str, Any] = {}
     heard = types.AudioTranscriptionConfig(language_codes=TRANSCRIPT_LANGUAGES) if language_hints \
         else types.AudioTranscriptionConfig()
@@ -344,7 +444,7 @@ def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
             )
         ),
-        tools=TOOLS,
+        tools=tools_for(call_type),
         input_audio_transcription=heard,
         output_audio_transcription=types.AudioTranscriptionConfig(),
         realtime_input_config=types.RealtimeInputConfig(automatic_activity_detection=detection),
@@ -381,18 +481,55 @@ async def run_call(
                     OPENAI_REALTIME_MODEL, left / 60)
         model = OPENAI_REALTIME_MODEL
     call_id = db.start_call(contact["id"] if contact else None, channel)
-    state = CallState(call_id=call_id)
+    state = CallState(call_id=call_id, call_type=call_type_for(contact), model=model)
     if openai_bridge.is_openai_model(model):
         state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
+    if meta is not None:
+        meta["provider"] = state.provider   # the phone bridge handles barge-in differently for OpenAI
     ACTIVE[call_id] = {"state": state, "contact": contact or {}, "channel": channel, "gate": start_gate,
                        "meta": meta or {}, "dialed_at": time.monotonic(), "voice": voice}
     client = make_client()
     fast_modes = [True, False] if GEMINI_THINKING_BUDGET >= 0 else [False]
     await send_event({"type": "status", "text": f"connecting to {model}", "call_id": call_id})
 
-    OPENING = "[The customer has answered the call. Greet them now, then wait for their reply.]"
+    OPENING = "[The customer has answered the call. Say your first turn now (THE USUAL ORDER, step 1), then wait for their reply.]"
+
+    def may_hold_back() -> bool:
+        """Can the reply being prepared be held back if the customer's turn carried no words? Only on the
+        phone with Gemini: its transcript of the customer always arrived before its reply (111 of 111 turns
+        on calls 35 to 72). OpenAI writes the customer's words after its reply has begun."""
+        return manual_vad and state.provider == "gemini" and state.answering == "speech"
+
+    def reply_begins() -> None:
+        """The model's first output of a new turn (audio, text or a tool call): decide, once, whether
+        the customer hears it."""
+        if state.held is not None:
+            return
+        said = state._in_buf.strip()
+        state.held = may_hold_back() and bool(said) and heard_nothing(said)
+        if not state.held:
+            if said and may_hold_back():
+                state.inaudible_streak = 0
+            state.unheard = False   # the customer hears this reply, so an earlier held-back one no longer matters
+            return
+        state.inaudible_streak += 1
+        state.inaudible_total += 1
+        state.unheard = True
+        log.info("call %s: the customer's turn carried no words (%r, %s in a row); holding back the reply to it",
+                 call_id, said[:40], state.inaudible_streak)
+        note = INAUDIBLE_NOTES.get(min(state.inaudible_streak, max(INAUDIBLE_NOTES)))
+        if note:
+            incoming_audio.put_nowait(Nudge(note))   # also cuts the held-back reply short
+
+    def drop_held_reply() -> None:
+        """A held-back reply is over: keep it out of the transcript (nobody heard it), but in the log."""
+        text = clean_agent_text(state._out_buf)
+        if text:
+            log.info("call %s: not played (it answered a sound with no words): %s", call_id, text[:200])
+        state._out_buf = ""
 
     async def session_once(prompt: str, opening: str, first: bool) -> None:
+        state.held, state.unheard, state.answering, state.noise_told = None, False, "note", False
         async with contextlib.AsyncExitStack() as stack:
             global _hints_ok
             session = None
@@ -403,12 +540,13 @@ async def run_call(
                 # OpenAI Realtime wearing the same session interface (app/openai_bridge.py), so
                 # everything below this line is shared with Gemini.
                 session = await stack.enter_async_context(openai_bridge.connect(
-                    model=model, prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad))
+                    model=model, prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad,
+                    tools=tools_for(state.call_type)))
                 attempts = []
             for n, (fast, hints) in enumerate(attempts):
                 try:
                     session = await stack.enter_async_context(client.aio.live.connect(
-                        model=model, config=build_config(prompt, voice, sensitive_listening, fast, manual_vad, hints)))
+                        model=model, config=build_config(prompt, voice, sensitive_listening, fast, manual_vad, hints, state.call_type)))
                     log.info("call %s: connected to %s via %s (fast replies %s, transcript language hint %s)",
                              call_id, model, "Vertex AI" if GEMINI_VERTEX else "Gemini API",
                              "on" if fast else "off", "on" if hints else "off")
@@ -454,8 +592,13 @@ async def run_call(
                         return
                     if chunk is ACTIVITY_START:
                         in_activity = True
+                        state.answering, state.noise_told = "speech", False
                         log.info("call %s: customer started talking at %.1fs", call_id, time.monotonic() - state.started)
                         await session.send_realtime_input(activity_start=types.ActivityStart())
+                        if state.unheard:
+                            # Their words follow a reply they never heard; say so inside the same turn.
+                            state.unheard = False
+                            await session.send_realtime_input(text=UNHEARD_NOTE.format(question=last_question(state.transcript)))
                         continue
                     if chunk is ACTIVITY_END:
                         if in_activity:   # a marker left over from before a reconnect has no start
@@ -468,10 +611,15 @@ async def run_call(
                         # our own speech detection a text turn has to sit inside start/end marks.
                         if in_activity:
                             continue   # the customer is mid-sentence; that audio matters more
-                        log.info("call %s: nudging the agent: %s", call_id, chunk)
+                        note = str(chunk)
+                        if state.unheard:
+                            state.unheard = False
+                            note = UNHEARD_NOTE.format(question=last_question(state.transcript)) + " " + note
+                        state.answering = "note"
+                        log.info("call %s: nudging the agent: %s", call_id, note)
                         if manual_vad:
                             await session.send_realtime_input(activity_start=types.ActivityStart())
-                        await session.send_realtime_input(text=str(chunk))
+                        await session.send_realtime_input(text=note)
                         if manual_vad:
                             await session.send_realtime_input(activity_end=types.ActivityEnd())
                         continue
@@ -523,23 +671,36 @@ async def run_call(
                                 state.speaking = False
                                 state.idle_since = time.monotonic()
                                 state.loud_since = None
-                                state.speech_until = 0.0   # that audio is dropped, not played
                                 state.close_usage_turn()   # a cut-off turn is still billed
-                                log.info("call %s: customer interrupted", call_id)
-                                await send_event({"type": "interrupted"})
+                                if state.held:
+                                    drop_held_reply()      # none of it was played, so there is nothing to cut
+                                else:
+                                    state.speech_until = 0.0   # that audio is dropped, not played
+                                    log.info("call %s: customer interrupted", call_id)
+                                    await send_event({"type": "interrupted"})
                             if sc.input_transcription is not None and sc.input_transcription.text:
                                 if not state._in_buf:
                                     log.info("call %s: customer speech detected", call_id)
                                 state.add_input_text(sc.input_transcription.text)
                                 await send_event({"type": "transcript", "role": "customer",
                                                   "text": sc.input_transcription.text, "partial": True})
+                                if may_hold_back() and not state.noise_told and heard_nothing(state._in_buf):
+                                    # No words in it: the reply to it will be held back, so the phone line
+                                    # can stop waiting for one.
+                                    state.noise_told = True
+                                    await send_event({"type": "heard_nothing"})
                             if sc.output_transcription is not None and sc.output_transcription.text:
+                                reply_begins()
                                 state.add_output_text(sc.output_transcription.text)
-                                await send_event({"type": "transcript", "role": "agent",
-                                                  "text": sc.output_transcription.text, "partial": True})
+                                if not state.held:
+                                    await send_event({"type": "transcript", "role": "agent",
+                                                      "text": sc.output_transcription.text, "partial": True})
                             if sc.model_turn is not None:
                                 for part in sc.model_turn.parts or []:
                                     if part.inline_data is not None and part.inline_data.data:
+                                        reply_begins()
+                                        if state.held:
+                                            continue
                                         if not state.speaking:
                                             state.speaking = True
                                             state.idle_since = None
@@ -556,25 +717,19 @@ async def run_call(
                                 state.speaking = False
                                 state.idle_since = time.monotonic()
                                 state.loud_since = None
-                                log.info("call %s: agent turn complete, now waiting for the customer", call_id)
-                                # Safety net: the customer's turn transcribed to nothing ("." / "<noise>" /
-                                # a foreign script). Count it, and escalate: ask again, then ask them to
-                                # speak closer, then stop asking. The agent is told, not left to guess.
-                                if state._in_buf.strip():
-                                    if heard_nothing(state._in_buf):
-                                        state.inaudible_streak += 1
-                                        state.inaudible_total += 1
-                                    else:
-                                        state.inaudible_streak = 0
-                                streak = state.inaudible_streak
-                                if streak and not state.ended and (streak >= 2 or not asked_to_repeat(state._out_buf)):
-                                    log.info("call %s: customer turn inaudible (%r), %s in a row; nudging the agent",
-                                             call_id, state._in_buf.strip()[:40], streak)
-                                    incoming_audio.put_nowait(Nudge(INAUDIBLE_NOTES[min(streak, 3)]))
-                                long_answer = expects_long_answer(state._out_buf)
+                                if state.held:
+                                    drop_held_reply()
+                                    log.info("call %s: held-back reply finished; still waiting for the customer's answer", call_id)
+                                else:
+                                    log.info("call %s: agent turn complete, now waiting for the customer", call_id)
+                                state.held, state.noise_told = None, False
+                                # The pause that closes the customer's next turn follows the last question
+                                # they actually heard (a held-back reply leaves nothing of its own).
+                                long_answer = expects_long_answer(state._out_buf or last_question(state.transcript))
                                 state.flush_turn()
                                 await send_event({"type": "turn_complete", "long_answer": long_answer})
                         if msg.tool_call is not None:
+                            reply_begins()
                             responses = []
                             for fc in msg.tool_call.function_calls or []:
                                 result = await handle_tool(fc.name, dict(fc.args or {}), state, send_event)
@@ -613,43 +768,63 @@ async def run_call(
         prompt, opening = system_prompt, OPENING
         while True:
             try:
-                await session_once(prompt, opening, state.reconnects == 0)
+                await session_once(prompt, opening, state.drops == 0)
                 break
             except Exception as exc:  # noqa: BLE001
-                # The connection to Gemini dropped (network blip, Gemini "1011 internal error"). The
-                # customer is still on the line, so reconnect and carry on instead of going silent
-                # and hanging up. Gemini has failed twice in one call, so allow a few tries.
+                # The connection dropped (network blip, Gemini "1011 internal error"). The customer
+                # is still on the line, so reconnect and carry on instead of going silent and
+                # hanging up. Gemini has failed twice in one call, so allow a few tries.
                 alive = drain_stale_audio()
-                switching = alive and not state.ended and can_fall_back(model, exc)
+                saying = clean_agent_text(state._out_buf)   # the reply that died with the line, for the log
+                exhausted = state.reconnects >= MAX_RECONNECTS
+                switching = alive and not state.ended and can_fall_back(model, exc, exhausted)
                 if switching:
-                    # Gemini cannot take this call at all. Rather than hang up on a customer who
-                    # is still holding the phone, carry on with the other provider.
-                    _provider_down["gemini"] = time.monotonic() + PROVIDER_COOLDOWN_SECONDS
-                    log.warning("call %s: Gemini cannot take this call (%s); switching to %s",
-                                call_id, exc, OPENAI_REALTIME_MODEL)
-                    model = OPENAI_REALTIME_MODEL
+                    # Gemini cannot take this call. Rather than hang up on a customer who is still
+                    # holding the phone, carry on with the other provider.
+                    if not exhausted:
+                        # Out of credit or key refused: every later call would fail the same way.
+                        # Repeated internal errors are about this call; the next one may be fine.
+                        _provider_down["gemini"] = time.monotonic() + PROVIDER_COOLDOWN_SECONDS
+                    log.warning("call %s: Gemini cannot take this call (%s%s) while the agent was saying %r; switching to %s",
+                                call_id, exc, f"; {state.reconnects} reconnects failed" if exhausted else "", saying,
+                                OPENAI_REALTIME_MODEL)
+                    model = state.model = OPENAI_REALTIME_MODEL
                     state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
-                elif state.ended or state.reconnects >= MAX_RECONNECTS or is_billing_error(exc) or not alive:
+                    state.reconnects = 0   # the new provider gets its own tries
+                    if meta is not None:
+                        meta["provider"] = "openai"   # the phone line cuts barge-ins itself for OpenAI
+                elif state.ended or exhausted or is_billing_error(exc) or not alive:
                     raise
                 else:
                     state.reconnects += 1
-                    log.warning("call %s: connection to Gemini dropped (%s: %s); reconnecting (%s of %s)",
-                                call_id, type(exc).__name__, exc, state.reconnects, MAX_RECONNECTS)
-                    if "1007" in str(exc) and model != GEMINI_LIVE_MODEL:
+                    log.warning("call %s: connection to %s dropped (%s: %s) while the agent was saying %r; reconnecting (%s of %s)",
+                                call_id, state.provider, type(exc).__name__, exc, saying, state.reconnects, MAX_RECONNECTS)
+                    if "1007" in str(exc) and model != GEMINI_LIVE_MODEL and not openai_bridge.is_openai_model(model):
                         # "Invalid argument" is not a blip: this model refuses how we talk to it, and
                         # would refuse again. Carry the call on the default model instead of dropping it.
                         log.warning("call %s: %s refused the session; switching to %s", call_id, model, GEMINI_LIVE_MODEL)
                         _refused_models.add(model)   # later calls skip it at once instead of greeting 3 s late
-                        model = GEMINI_LIVE_MODEL
+                        model = state.model = GEMINI_LIVE_MODEL
+                state.drops += 1
+                state.speaking, state.speech_until = False, 0.0   # that reply died with the line
+                if state.held:
+                    drop_held_reply()
                 state.flush_turn()
                 if not state.transcript:
                     continue   # nothing was said yet: greet normally, there is no break to apologise for
                 so_far = "\n".join(f"{'You' if t['role'] == 'agent' else 'Customer'}: {t['text']}" for t in state.transcript) or "(nothing yet)"
-                prompt = (system_prompt + "\n\nTHE LINE DROPPED FOR A MOMENT AND IS BACK. Conversation so far:\n" + so_far +
-                          "\nDo not greet or introduce yourself again. Say one short apology for the break "
-                          "(for example: 'sorry ji, awaaz cut gayi thi') and continue from where you stopped. "
-                          "If the conversation above was already finished, just say a short goodbye, then call mark_outcome and end_call.")
-                opening = "[The line is back. Apologise briefly for the break and continue.]"
+                finished = "If the conversation above was already finished, just say a short goodbye, then call mark_outcome and end_call."
+                if state.drops == 1:
+                    prompt = (system_prompt + "\n\nTHE LINE DROPPED FOR A MOMENT AND IS BACK. Conversation so far:\n" + so_far +
+                              "\nDo not greet or introduce yourself again. Say one short apology for the break "
+                              "(for example: 'sorry ji, awaaz cut gayi thi') and continue from where you stopped. " + finished)
+                    opening = "[The line is back. Apologise briefly for the break and continue.]"
+                else:
+                    # Call 79: four drops in a row, and the customer heard "sorry ji, awaaz cut gayi thi" four times.
+                    prompt = (system_prompt + "\n\nTHE LINE DROPPED AGAIN AND IS BACK. Conversation so far:\n" + so_far +
+                              "\nDo not greet or introduce yourself again, and do NOT apologise again: the customer has already "
+                              "heard 'sorry ji, awaaz cut gayi thi'. Carry on from where you stopped, in one short sentence. " + finished)
+                    opening = "[The line is back again. Do not apologise; carry on from where you stopped.]"
     except Exception as exc:  # noqa: BLE001
         if is_billing_error(exc):
             log.error("call %s failed: Gemini refused for billing reasons: %s", call_id, exc)
@@ -660,6 +835,8 @@ async def run_call(
         await send_event({"type": "error", "text": state.error})
     finally:
         ACTIVE.pop(call_id, None)
+        if state.held:
+            drop_held_reply()
         state.flush_turn()
         duration = time.monotonic() - state.started
         log.info("call %s ended: %.0fs, outcome=%s, agent=%s (%s), watchdog nudges=%s, reconnects=%s",
@@ -682,6 +859,23 @@ async def run_call(
                 result = f"not called: {state.error}"     # our failure; the customer was never rung
             else:
                 state.outcome, result = classify_unanswered(cause)
+        elif not state.outcome and (yes := yes_to_main_question(state.transcript, state.call_type.main_question)):
+            # The customer said yes to the call's main question and the call ended before the result was
+            # written (calls 88 and 92: confirmed orders saved as "dropped" and queued to be rung again).
+            has_address = bool(state.address or (contact or {}).get("address"))
+            if state.call_type.takes_address and not has_address:
+                state.outcome = "unclear"
+                notes = (f"customer said yes ({yes!r}) but the call ended before the delivery address was taken; "
+                         "team to get the address")
+            else:
+                state.outcome = state.call_type.positive[0]
+                notes = f"customer said yes ({yes!r}); the call ended before the goodbye"
+            details = {**(state.outcome_details or {}), "outcome": state.outcome, "notes": notes}
+            if state.address:
+                details["new_address"] = address_text(state.address)
+            state.outcome_details = details
+            log.info("call %s: no result recorded, but the customer said yes to the main question; saved as %s",
+                     call_id, state.outcome)
         elif not state.outcome:
             # Someone answered but the call ended with nothing recorded: the customer hung up or the
             # line dropped -> call back later. If the agent itself failed mid-way, a person looks first.
@@ -690,9 +884,12 @@ async def run_call(
                 f"call failed mid-way: {state.error}" if state.error else "call ended without a result (customer hung up or line dropped)")
             state.outcome_details = {**(state.outcome_details or {}), "notes": notes}
             result = notes
+        notes = str((state.outcome_details or {}).get("notes") or "")
+        if state.outcome_details is not None and was_abusive(state.transcript) and "abusive" not in notes:
+            state.outcome_details["notes"] = f"{notes} (customer used abusive language)".strip()
         if not result:
             result = (state.outcome or "").replace("_", " ")
-            for key in ("notes", "cancel_reason", "callback_time", "mismatch", "new_address"):
+            for key in state.call_type.summary_keys:
                 if (state.outcome_details or {}).get(key):
                     result += f": {state.outcome_details[key]}"
                     break
@@ -782,6 +979,19 @@ def classify_unanswered(cause: str) -> tuple[str, str]:
 
 async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_event: SendEvent) -> dict[str, Any]:
     log.info("tool %s %s", name, json.dumps(args, ensure_ascii=False))
+    after_goodbye = name in ("mark_outcome", "end_call") and said_goodbye(state.transcript)
+    if state.held and after_goodbye:
+        # Call 88: the customer confirmed and heard the goodbye; the result came a moment later, with a
+        # reply to a stray noise, and was refused, so a confirmed order was saved as "dropped". The
+        # decision was made on words the customer heard, so it stands.
+        log.info("call %s: %s taken although it came with a reply to a sound with no words; the goodbye was already heard",
+                 state.call_id, name)
+    elif state.held and name in ("mark_outcome", "end_call", "record_address"):
+        # Call 72 recorded "not interested" and hung up on a "hmm": nothing was answered, nothing is recorded.
+        log.info("call %s: %s refused; it came with a reply to a sound that carried no words", state.call_id, name)
+        return {"status": "not done", "reason": "The customer has not answered: the last sound on the line carried no words, "
+                "and this reply of yours is not being played to them. Record nothing and do not end the call; they have "
+                "still to answer your question."}
     if name == "record_address":
         # The address must come from the customer, not be assembled by the model out of fragments.
         recent = state.recent_customer_turns(4)
@@ -844,9 +1054,25 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                 f"{parts['area']}, {parts['city']}, PIN {' '.join(pin)}. Sahi hai?' If they correct a part, call record_address again with the corrected part."}
     if name == "mark_outcome":
         outcome = args.get("outcome", "unclear")
-        if state.address and not args.get("new_address"):
-            a = state.address
-            args["new_address"] = ", ".join(x for x in (f"house number {a['house']}", a["area"], a.get("landmark", ""), a["city"], f"PIN {a['pin']}") if x)
+        if state.address:
+            # The address the checks accepted, not the model's own wording of it: on call 88 the free text
+            # carried a town and a sector the customer never said.
+            args["new_address"] = address_text(state.address)
+        elif state.call_type.takes_address and str(args.get("new_address") or "").strip():
+            # Call 88 skipped record_address and put an invented address straight in here, where the
+            # spoken-digit check never ran.
+            state.loose_address_refusals += 1
+            if state.loose_address_refusals <= 2:
+                state.record_pending = True
+                log.info("call %s: mark_outcome refused; new_address %r never went through record_address",
+                         state.call_id, args.get("new_address"))
+                return {"status": "not recorded", "reason": "An address can only be written down through record_address, "
+                        "which checks it against what the customer actually said. Do not end the call. Call record_address "
+                        "with only the parts the customer said; if a part is missing (house number, area, city or PIN), ask "
+                        "for it first. Never add a sector, city or PIN yourself. Then read it back, get a yes, and call "
+                        "mark_outcome again without new_address."}
+            loose = str(args.pop("new_address"))
+            args["notes"] = f"{args.get('notes') or ''} (address heard on the call but not checked, team to verify: {loose})".strip()
         address = str(args.get("new_address") or "")
         if address and not re.search(r"(?<!\d)\d{3}\s?\d{3}(?!\d)", address) and not state.address_checked:
             # Refused once only, so a customer who truly cannot give a PIN code does not trap the call.
@@ -855,22 +1081,52 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": "new_address has no valid 6-digit PIN code. Do not end the call yet. "
                     "Ask the customer for the PIN code digit by digit, read the full address back, then call mark_outcome again. "
                     "If they cannot give it, call mark_outcome again and say in notes that the team must take the address."}
-        if outcome in ("confirmed", "changed") and not any(said_yes(t) for t in state.recent_customer_turns(2)):
+        if outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2)):
             # No clear yes on record: the model is confirming on silence or noise (call 53 did exactly this).
             state.confirm_refusals += 1
             if state.confirm_refusals <= 2:
+                state.record_pending = True
                 log.info("call %s: mark_outcome %s refused; no clear yes from the customer (last: %r)",
                          state.call_id, outcome, state.recent_customer_turns(1))
                 return {"status": "not recorded", "reason": "The customer has NOT clearly said yes: their last replies were inaudible "
-                        "or not an agreement. Do not confirm. Ask once more, in a few words, 'sab sahi hai? confirm kar doon?' and "
+                        f"or not an agreement. Do not confirm. Ask once more, in a few words, '{state.call_type.confirm_question}' and "
                         "wait for a clear haan. If you still cannot hear them, say 'awaaz nahi aa rahi, team aapse baat kar legi', call "
                         "mark_outcome with outcome 'unclear' and notes 'could not hear the customer's confirmation', and end_call."}
             outcome = "unclear"
             args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") + " (confirmation was not clearly heard)").strip()}
+        if outcome in NEEDS_A_NO and not any(_NO.search(t) for t in state.recent_customer_turns(50)):
+            # Throwing an order away needs the customer's own "nahi" or "cancel" somewhere in the call. On
+            # call 100 the transcript was gibberish and the agent recorded "not ordered" all the same.
+            state.denial_refusals += 1
+            if state.denial_refusals <= 2:
+                state.record_pending = True
+                log.info("call %s: mark_outcome %s refused; the customer never said no or cancel (last: %r)",
+                         state.call_id, outcome, state.recent_customer_turns(1))
+                return {"status": "not recorded", "reason": f"The customer has NOT said 'nahi', 'cancel' or that they did not "
+                        f"order: nothing they said on this call was a no. Do not record '{outcome}'. You may have misheard them. "
+                        "Ask them plainly, in a few words, what they want ('ji, aap order rakhna chahte hain ya cancel karna "
+                        "chahte hain?') and go by their answer. If you still cannot make it out, say 'awaaz saaf nahi aa rahi, "
+                        "team aapse baat kar legi', call mark_outcome with outcome 'unclear', and end_call."}
+            outcome = "unclear"
+            args = {**args, "outcome": outcome,
+                    "notes": ((args.get("notes") or "") + " (the agent took it as a no, but no no was heard)").strip()}
+        if outcome == "not_interested" and not state.reason_refused and bare_no(str(args.get("not_interested_reason") or "")):
+            # The script asks the reason once. On call 77 the agent skipped it and closed on a bare "no",
+            # because a question it had asked in a held-back (unplayed) reply was still in its own memory.
+            heard = [t["text"] for t in state.transcript if t["role"] == "agent"] + [clean_agent_text(state._out_buf)]
+            if not any(_ASKED_WHY.search(t) for t in heard):
+                state.reason_refused = state.record_pending = True
+                log.info("call %s: mark_outcome not_interested refused; the reason was never asked (recorded: %r)",
+                         state.call_id, args.get("not_interested_reason"))
+                return {"status": "not recorded", "reason": "You have not asked why, and 'not interested' is a no, not a reason. "
+                        "Do not end the call. Ask once, gently: 'koi baat nahi ji. agar bura na maanein toh, koi khaas wajah?' and wait. "
+                        "If their reason is a misunderstanding that CAMPAIGN DETAILS answer, clear it up once as NOT INTERESTED says. "
+                        "Then call mark_outcome again with their reason in their words, or 'not given' if they would not say."}
         if state.inaudible_total >= 2:
             args = {**args, "notes": ((args.get("notes") or "") + f" (customer was inaudible {state.inaudible_total} times on this call)").strip()}
         state.outcome = outcome
         state.outcome_details = args
+        state.record_pending = False
         await send_event({"type": "outcome", "outcome": state.outcome, "details": args})
         return {"status": "recorded"}
     if name == "end_call":
@@ -882,6 +1138,22 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             state.outcome = state.outcome_details = None
             return {"status": "refused", "reason": "The customer has only just picked up and is on the line. "
                     "Do not hang up. Greet them and run the call."}
+        if state.record_pending and not state.outcome and state.end_refusals < 2:
+            # The model asks for mark_outcome and end_call in one breath (call 77: 0.5 s apart). When the
+            # first was sent back, the second must not end the call with nothing recorded.
+            state.end_refusals += 1
+            log.info("call %s: end_call refused; the result was sent back and nothing is recorded yet", state.call_id)
+            return {"status": "refused", "reason": "Nothing has been recorded: your mark_outcome was sent back. Do not hang up. "
+                    "Do what its reply asked, then call mark_outcome again, and only then end_call."}
+        asking = clean_agent_text(state._out_buf).rstrip().endswith("?")
+        if asking and not state.held and state.question_refusals < 2:
+            # Call 98: "achha ji, kya poochhna chahte hain?" and the line went dead in the same breath.
+            state.question_refusals += 1
+            log.info("call %s: end_call refused; it came with a question the customer has not answered: %r",
+                     state.call_id, clean_agent_text(state._out_buf)[-80:])
+            return {"status": "refused", "reason": "You have just asked the customer a question and they have not answered. "
+                    "Do not hang up. Wait for their answer and reply to it; if anything changes, call mark_outcome again. "
+                    "End the call only after your goodbye."}
         state.ended = True
         return {"status": "ending"}
     return {"error": f"unknown tool {name}"}
@@ -909,7 +1181,7 @@ def live_snapshot() -> list[dict]:
         lines = list(state.transcript[-3:])
         if state._in_buf.strip():
             lines.append({"role": "customer", "text": state._in_buf.strip()})
-        if clean_agent_text(state._out_buf):
+        if clean_agent_text(state._out_buf) and not state.held:   # a held-back reply is never heard
             lines.append({"role": "agent", "text": clean_agent_text(state._out_buf)})
         c = a["contact"]
         out.append({
@@ -918,5 +1190,6 @@ def live_snapshot() -> list[dict]:
             "customer_name": c.get("customer_name", ""), "order_id": c.get("order_id", ""),
             "product": c.get("product", ""), "to": a["meta"].get("to") or c.get("phone", ""),
             "voice": a["voice"], "outcome": state.outcome, "lines": lines[-3:],
+            "agent": AGENT_LABELS.get(state.model, state.model),
         })
     return out

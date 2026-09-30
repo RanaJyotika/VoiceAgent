@@ -30,6 +30,7 @@
     confirmed: ['good', 'check', 'Confirmed'],
     changed: ['warning', 'edit', 'Change requested'],
     cancelled: ['critical', 'x', 'Cancelled'],
+    not_ordered: ['serious', 'alert', 'Says not ordered'],
     call_later: ['', 'clock', 'Call later'],
     wrong_number: ['serious', 'alert', 'Wrong number'],
     do_not_call: ['critical', 'ban', 'Do not call'],
@@ -37,6 +38,10 @@
     busy: ['', 'missed', 'Busy'],
     dropped: ['warning', 'missed', 'Call dropped'],
     unclear: ['serious', 'help', 'Needs review'],
+    interested: ['good', 'check', 'Interested'],
+    not_interested: ['', 'x', 'Not interested'],
+    already_booked: ['good', 'check', 'Already booked'],
+    needs_help: ['warning', 'help', 'Wants help'],
     error: ['critical', 'alert', 'Error'],
     none: ['', 'minus', 'No outcome'],
     // contact statuses that are not call outcomes
@@ -51,23 +56,25 @@
   const talk = (s) => s >= 3600 ? `${(s / 3600).toFixed(1)} h` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 
   // ---------------- sidebar pages, phone drawer, transcript modal ----------------
-  const PAGES = ['overview', 'callback', 'call', 'upload', 'history', 'spend'];
-  const navButtons = [...document.querySelectorAll('.nav [data-page], .dock [data-page]')];
+  // Every page has exactly one button, in the sidebar.
+  const PAGES = ['overview', 'campaigns', 'callback', 'call', 'history', 'spend'];
+  const navButtons = [...document.querySelectorAll('.nav [data-page]')];
   window.showPage = (name) => {
     if (!PAGES.includes(name)) name = 'overview';
     for (const p of PAGES) el(`page-${p}`).classList.toggle('on', p === name);
-    for (const b of navButtons) { if (b.dataset.page === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+    for (const b of navButtons) {
+      if (b.dataset.page === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    }
     closeDrawer();
     window.scrollTo({ top: 0 });
     if (name === 'callback' && window.loadCallbacks) window.loadCallbacks();
     if (name === 'spend' && window.loadSpend) window.loadSpend();
     try { localStorage.setItem('page', name); } catch (e) { /* ignore */ }
   };
-  const FOCUS = { console: 'sheet-console', board: 'board' };
-  for (const b of document.querySelectorAll('[data-page]')) b.addEventListener('click', () => {
+  for (const b of navButtons) b.addEventListener('click', () => {
     window.showPage(b.dataset.page);
-    const target = FOCUS[b.dataset.focus];
-    if (target) setTimeout(() => el(target).scrollIntoView({ block: 'start', behavior: 'smooth' }), 30);
+    // The Campaigns button always lands on the list, even when a campaign was open.
+    if (b.dataset.page === 'campaigns' && window.showCampaignList) window.showCampaignList();
   });
 
   // The phone drawer: the sidebar slides in over the page on small screens.
@@ -77,7 +84,7 @@
   el('burger').onclick = () => (side.classList.contains('open') ? closeDrawer() : openDrawer());
 
   // openSheet is what the older code calls; sheets are now pages, except the transcript, which is a modal.
-  const SHEET_TO_PAGE = { contacts: 'upload', call: 'call', console: 'call' };
+  const SHEET_TO_PAGE = { contacts: 'campaigns', call: 'call', console: 'call' };
   window.openSheet = (name) => {
     if (name === 'transcript') { el('sheet-transcript').classList.add('on'); el('scrim').classList.add('on'); return; }
     if (name === null) { el('sheet-transcript').classList.remove('on'); closeDrawer(); el('scrim').classList.remove('on'); return; }
@@ -114,11 +121,14 @@
     const s = await fetch(`/api/stats?period=${period}`).then((r) => r.json());
     const tile = (tone, ico, label, value, note = '') =>
       `<div class="tile"><div class="label badge-like ${tone}" style="--c:var(--${tone || 'accent'})">${icon(ico)}${esc(label)}</div><div class="value">${value}</div><div class="note">${esc(note)}</div></div>`;
+    // Results that only some kinds of call produce are shown once they have happened.
     el('tiles').innerHTML = [
       tile('', 'phone', 'Calls made', s.calls, s.phone_calls ? `${s.phone_calls} by phone, ${s.calls - s.phone_calls} browser tests` : (s.calls ? 'browser tests' : '')),
       tile('good', 'ring', 'Answered', s.answered, s.answer_rate == null ? '' : `${s.answer_rate}% of calls`),
       tile('good', 'check', 'Confirmed', s.confirmed, s.answered ? `${Math.round(100 * s.confirmed / s.answered)}% of answered` : ''),
-      tile('warning', 'edit', 'Change requested', s.changed),
+      s.interested ? tile('good', 'check', 'Interested', s.interested, 'from campaign invites') : '',
+      s.not_interested ? tile('', 'x', 'Not interested', s.not_interested) : '',
+      s.changed ? tile('warning', 'edit', 'Change requested', s.changed) : '',
       tile('critical', 'x', 'Cancelled', s.cancelled),
       tile('', 'missed', 'Call back', s.call_back, [s.no_answer ? `${s.no_answer} no answer` : '', s.dropped ? `${s.dropped} dropped` : '', s.call_later ? `${s.call_later} asked later` : ''].filter(Boolean).join(', ')),
       tile('serious', 'help', 'Needs review', s.needs_review, s.needs_review ? 'unclear, wrong number, do not call' : ''),
@@ -176,7 +186,6 @@
       window.loadSpend();
     };
   }
-  el('sp_refresh').onclick = () => window.loadSpend();
   setInterval(() => { if (el('page-spend').classList.contains('on')) window.loadSpend(); }, 15000);
 
   for (const [id, p] of [['p_today', 'today'], ['p_all', 'all']]) {
@@ -217,8 +226,6 @@
     window.toast(r.ok ? 'Call ended.' : (j.detail || 'Could not hang up.'));
     loadLive();
   }
-  // Used by the dock button: the newest live call.
-  window.hangupNewestLive = () => { if (liveRows.length) hangupLive(liveRows[liveRows.length - 1].call_id); };
   // The cards are redrawn every second, so listen on the container, and on pointerup: a click
   // needs press and release on the same element, which a redraw in between would break.
   el('live').addEventListener('pointerup', (e) => {
@@ -230,10 +237,8 @@
     let rows = [];
     try { rows = await fetch('/api/live').then((r) => r.json()); } catch (e) { return; }
     liveRows = rows;
-    el('hangup').disabled = rows.length === 0;
     el('livecount').innerHTML = rows.length
       ? `<span class="badge accent pulse"><span class="dot"></span>${rows.length} live ${rows.length === 1 ? 'call' : 'calls'}</span>` : '';
-    el('fab').classList.toggle('live', rows.length > 0);   // the dock's call button pulses while a call is on
     if (!rows.length) {
       el('live').innerHTML = '<div class="empty">No calls in progress.</div>';
       if (hadLive && window.loadCalls) { window.loadCalls(); }   // a call just ended: refresh history and tiles
@@ -250,11 +255,13 @@
       const bars = c.status === 'agent_speaking' ? '<span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>' : '';
       const st = `<span class="badge ${l[0]} ${l[3] ? 'pulse' : ''}">${l[3] ? '<span class="dot"></span>' : icon(l[1])}${esc(label)}${bars}</span>`;
       const channel = c.channel === 'plivo' ? badge('', 'phone', 'Phone') : badge('', 'monitor', 'Browser test');
+      // The agent actually on the line: it can differ from the one chosen (Gemini 3.8 refusing, Gemini failing).
+      const agent = c.agent ? badge('', 'chat', c.agent) : '';
       const said = (c.lines || []).map((t) => `<div class="${t.role === 'agent' ? 'a' : ''}"><b>${t.role === 'agent' ? 'Agent' : 'Customer'}:</b> ${esc(t.text)}</div>`).join('');
       return `<div class="live">
         <div class="who"><b>${esc(c.customer_name || 'Unknown')}</b><span class="hint">${esc(c.to || '')}</span><span class="timer">${mmss(c.seconds)}</span></div>
         <div class="meta">${esc([c.order_id, c.product].filter(Boolean).join(' · '))}</div>
-        <div class="row">${st}${channel}${c.outcome ? outcomeBadge(c.outcome) : ''}
+        <div class="row">${st}${channel}${agent}${c.outcome ? outcomeBadge(c.outcome) : ''}
           <button class="hang" data-hang="${c.call_id}">${icon('phone')}${c.status === 'ringing' ? 'Cancel' : 'Hang up'}</button></div>
         ${said ? `<div class="say">${said}</div>` : ''}
       </div>`;
@@ -324,6 +331,7 @@
         <td>${c.channel === 'plivo' ? badge('', 'phone', 'Phone') : badge('', 'monitor', 'Browser')}</td>
         <td class="num">${esc(when)}</td>
         <td>${esc(c.customer_name || '')}<br><small>${esc(c.order_id || '')}</small></td>
+        <td><small>${esc(c.campaign_name || (c.contact_id ? '' : 'no contact'))}</small></td>
         <td class="num">${mmss(c.duration_sec)}</td>
         <td>${outcomeBadge(key)}${details ? `<br><small>${esc(details)}</small>` : ''}</td>
         <td class="num" title="${c.cost_estimated ? 'estimated from call length' : 'from the tokens the model reported'}">${esc(costText(c))}</td>
@@ -333,16 +341,34 @@
   };
 
   // ---------------- campaign: call the whole list ----------------
-  const STATUS_ORDER = ['pending', 'calling', 'confirmed', 'changed', 'cancelled', 'call_later', 'no_answer', 'busy', 'unclear', 'wrong_number', 'do_not_call'];
+  const STATUS_ORDER = ['pending', 'calling', 'confirmed', 'changed', 'cancelled', 'not_ordered', 'call_later', 'no_answer', 'busy', 'unclear', 'wrong_number', 'do_not_call'];
   let camp = null;
+  // Fill the settings form from what this campaign last ran with, once per campaign opened.
+  let formFor = null;
+  const fillSettings = (s) => {
+    if (formFor === s.campaign_id) return;
+    formFor = s.campaign_id;
+    const v = s.settings || {};
+    const set = (id, val) => { if (val !== undefined && val !== null && val !== '') el(id).value = val; };
+    // The agent this campaign last ran with. Kept in data-want too, for when the list is not filled yet.
+    if (v.model) { el('camp-model').dataset.want = v.model; set('camp-model', v.model); }
+    set('camp-voice', v.voice); set('camp-lang', v.language); set('camp-attempts', v.max_attempts); set('camp-retry', v.retry_minutes);
+    set('camp-start', v.start_hour); set('camp-end', v.end_hour); set('camp-concurrent', v.max_concurrent);
+    set('camp-limit', v.limit); set('camp-budget', v.budget_rs);
+  };
   window.renderCampaign = (s) => {
     camp = s;
-    const running = s.running;
+    // "running" below means THIS campaign is the one calling; another one may be running instead.
+    const running = s.running && s.running_campaign_id === s.campaign_id;
+    const otherRunning = s.running && !running;
+    if (!running) fillSettings(s);
     let state, reason = s.reason || '';
     if (running && s.in_progress) state = `Calling… ${s.in_progress} call${s.in_progress > 1 ? 's' : ''} in progress`;
     else if (running && !s.within_hours) state = `Waiting for calling hours (${s.settings.start_hour}:00 to ${s.settings.end_hour}:00, now ${s.now_ist})`;
     else if (running) state = 'Running · picking the next contact';
-    else if (!s.total) state = 'No contacts yet · upload the Excel sheet first';
+    else if (otherRunning) state = 'Another campaign is calling right now · one campaign calls at a time';
+    else if (s.past_last_date) state = `Finished · the last calling day (${s.last_call_date}) has passed`;
+    else if (!s.total) state = 'No contacts yet · upload the sheet in step 1';
     else if (s.to_call) state = `Ready · ${s.to_call} to call`;
     else state = 'List done · nobody left to call';
     if (running && s.calls_made) reason = `${s.calls_made} call${s.calls_made > 1 ? 's' : ''} placed this run` + (s.retry_left ? ` · ${s.retry_left} retries queued` : '');
@@ -363,14 +389,16 @@
     el('camp-concurrent').title = `Calls running at the same time (up to ${s.max_concurrent_allowed || 10}). Each needs its own Gemini session and Plivo call.`;
     el('camp-start-btn').hidden = running;
     el('camp-stop-btn').hidden = !running;
-    el('camp-start-btn').disabled = !s.to_call;
-    for (const id of ['camp-voice', 'camp-lang', 'camp-attempts', 'camp-retry', 'camp-start', 'camp-end', 'camp-concurrent', 'camp-limit', 'camp-budget']) el(id).disabled = running;
-    el('camp-requeue').disabled = running || !((s.by_status.no_answer || 0) + (s.by_status.busy || 0));
+    el('camp-start-btn').disabled = !s.to_call || otherRunning || s.past_last_date;
+    for (const id of ['camp-model', 'camp-voice', 'camp-lang', 'camp-attempts', 'camp-retry', 'camp-start', 'camp-end', 'camp-concurrent', 'camp-limit', 'camp-budget']) el(id).disabled = running;
+    el('camp-requeue').disabled = running || !((s.by_status.no_answer || 0) + (s.by_status.busy || 0) + (s.by_status.dropped || 0));
   };
   let staleWarned = false;
   window.loadCampaign = async () => {
+    const id = window.currentCampaignId && window.currentCampaignId();
+    if (!id) return;
     try {
-      const r = await fetch('/api/campaign');
+      const r = await fetch(`/api/campaign?campaign_id=${id}`);
       if (r.status === 404) {
         // The page is new but the Python behind it is not: the server was not restarted.
         el('camp-state').textContent = 'Server needs a restart';
@@ -379,33 +407,37 @@
         if (!staleWarned) { staleWarned = true; window.toast('Restart the server: it is running older code.'); }
         return;
       }
-      window.renderCampaign(await r.json());
+      const s = await r.json();
+      if (s.campaign_id === (window.currentCampaignId && window.currentCampaignId())) window.renderCampaign(s);
     } catch (e) { /* server away */ }
   };
   el('camp-start-btn').onclick = async () => {
     if (!camp) return;
     const body = {
+      campaign_id: camp.campaign_id, model: el('camp-model').value, build: window.BUILD || '',
       voice: el('camp-voice').value, language: el('camp-lang').value, max_attempts: el('camp-attempts').value, retry_minutes: el('camp-retry').value,
       start_hour: el('camp-start').value, end_hour: el('camp-end').value, max_concurrent: el('camp-concurrent').value,
       limit: el('camp-limit').value, budget_rs: el('camp-budget').value,
     };
     const n = body.limit > 0 ? Math.min(body.limit, camp.to_call) : camp.to_call;
     const where = camp.dial_only_my_number ? `ALL of them to YOUR phone ${camp.my_number} (test mode)` : 'to the customers\' numbers';
-    if (!confirm(`Start calling ${n} contact${n > 1 ? 's' : ''} now, ${where}?\n\nEvery call is a real, paid phone call. You can stop at any time; the call in progress will finish first.`)) return;
+    const agent = el('camp-model').selectedOptions[0] ? el('camp-model').selectedOptions[0].textContent : '';
+    if (!confirm(`Start calling ${n} contact${n > 1 ? 's' : ''} now, ${where}?\n\nAgent: ${agent}\n\nEvery call is a real, paid phone call. You can stop at any time; the call in progress will finish first.`)) return;
     const r = await fetch('/api/campaign/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await r.json();
     if (!r.ok) { window.toast(j.detail || 'Could not start.'); return; }
-    window.toast('Campaign started. Watch the Live calls panel.');
+    window.toast('Campaign started. Live calls show on Home.');
     window.renderCampaign(j);
   };
   el('camp-stop-btn').onclick = async () => {
-    const j = await fetch('/api/campaign/stop', { method: 'POST' }).then((r) => r.json());
+    await fetch('/api/campaign/stop', { method: 'POST' });
     window.toast('Stopping after the current call.');
-    window.renderCampaign(j);
+    window.loadCampaign();
   };
   el('camp-requeue').onclick = async () => {
-    if (!confirm('Put every no-answer and busy contact back on the list with a fresh count of tries?')) return;
-    const j = await fetch('/api/contacts/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ statuses: ['no_answer', 'busy', 'dropped'] }) }).then((r) => r.json());
+    if (!confirm('Put every no-answer, busy and dropped contact in this campaign back on the list with a fresh count of tries?')) return;
+    const j = await fetch('/api/contacts/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statuses: ['no_answer', 'busy', 'dropped'], campaign_id: camp && camp.campaign_id }) }).then((r) => r.json());
     window.toast(`${j.requeued} contact${j.requeued === 1 ? '' : 's'} re-queued.`);
     window.loadCampaign();
     if (window.loadContacts) window.loadContacts();
@@ -414,8 +446,10 @@
   window.loadCampaign();
 
   // ---------------- contacts board: the list, grouped by what happened ----------------
+  window.resetCampaignForm = () => { formFor = null; };
   const CALLBACK_STATUSES = ['no_answer', 'busy', 'dropped', 'call_later'];
-  const PICKED_UP = ['confirmed', 'changed', 'cancelled', 'call_later', 'dropped', 'unclear', 'do_not_call'];
+  const PICKED_UP = ['confirmed', 'changed', 'cancelled', 'not_ordered', 'call_later', 'dropped', 'unclear', 'do_not_call',
+    'interested', 'not_interested', 'already_booked', 'needs_help'];
   // Row 1: where each contact is in the run. Row 2: the exact result. One filter active at a time.
   const STAGE_FILTERS = {
     all: ['All', '', 'minus', () => true],
@@ -425,11 +459,27 @@
     answered: ['Answered', 'good', 'ring', (c) => PICKED_UP.includes(c.status) && (c.last_duration || 0) > 0],
     not_answered: ['Not answered', '', 'missed', (c) => c.status === 'no_answer' || c.status === 'busy'],
   };
-  const RESULT_FILTERS = ['confirmed', 'changed', 'cancelled', 'call_later', 'busy', 'dropped', 'wrong_number', 'do_not_call', 'unclear', 'calling'];
+  // The results a call type can produce, plus the line outcomes every call can have.
+  const resultFilters = () => {
+    const t = window.currentCallType && window.currentCallType();
+    return [...((t && t.outcomes) || ['confirmed', 'changed', 'cancelled', 'call_later', 'wrong_number', 'do_not_call', 'unclear']),
+      'busy', 'dropped', 'calling'];
+  };
   let boardRows = [];
   let boardFilter = 'all';
   let boardQuery = '';
-  const NOTE_KEYS = ['notes', 'mismatch', 'new_product', 'new_address', 'new_delivery_date', 'cancel_reason', 'callback_time'];
+  const noteKeys = () => {
+    const t = window.currentCallType && window.currentCallType();
+    return (t && t.details) || ['notes', 'mismatch', 'new_product', 'new_address', 'new_delivery_date', 'cancel_reason', 'callback_time'];
+  };
+  // What the Details column shows for a contact: the call type's own columns, shortly.
+  const xval = (c, k) => { const v = (c.extra || {})[k]; return v && typeof v === 'object' ? v.value : (v || ''); };
+  const detailsOf = (c) => {
+    const t = (window.currentCallType && window.currentCallType()) || {};
+    if (t.key === 'booking_confirmation') return [c.order_id, c.product, xval(c, 'temple'), xval(c, 'puja_date'), c.amount ? `Rs ${c.amount}` : ''];
+    if (t.key === 'campaign_invite') return [c.notes, ...Object.values(c.extra || {}).map((v) => (v && v.value) || '')].slice(0, 3);
+    return [c.order_id, c.product, c.amount ? `Rs ${c.amount}` : '', c.payment_mode];
+  };
   const fmtShort = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 
   function boardTest(c) {
@@ -439,7 +489,7 @@
   function boardMatches(c) {
     if (!boardTest(c)) return false;
     if (!boardQuery) return true;
-    const hay = [c.customer_name, c.phone, c.order_id, c.product, c.last_result].join(' ').toLowerCase();
+    const hay = [c.customer_name, c.phone, c.last_result, ...detailsOf(c)].join(' ').toLowerCase();
     return hay.includes(boardQuery);
   }
 
@@ -451,18 +501,16 @@
       `<button class="${tone}" data-filter="${key}" aria-pressed="${boardFilter === key}">${icon(ico)}${esc(label)} <b>${n}</b></button>`;
     el('board-chips').innerHTML = Object.entries(STAGE_FILTERS)
       .map(([k, f]) => chip(k, f[0], f[1], f[2], rows.filter(f[3]).length)).join('');
-    el('board-chips2').innerHTML = RESULT_FILTERS.filter((k) => counts[k] || k === boardFilter)
-      .map((k) => { const o = OUTCOME[k]; return chip(k, o[2], o[0], o[1], counts[k] || 0); }).join('');
+    el('board-chips2').innerHTML = resultFilters().filter((k) => counts[k] || k === boardFilter)
+      .map((k) => { const o = OUTCOME[k] || OUTCOME.none; return chip(k, o[2], o[0], o[1], counts[k] || 0); }).join('');
     el('board-chips2').hidden = !el('board-chips2').innerHTML;
     const shown = rows.filter(boardMatches).sort((a, b) => a.id - b.id);
     el('board-count').textContent = rows.length ? `${shown.length} of ${rows.length} contacts` : '';
-    el('nav-contacts').textContent = counts.pending ? String(counts.pending) : '';
-    const cb = CALLBACK_STATUSES.reduce((n, k) => n + (counts[k] || 0), 0);
-    el('nav-callback').textContent = cb ? String(cb) : '';
     const now = Date.now();
+    const keys = noteKeys();
     el('board-rows').innerHTML = shown.map((c) => {
       const d = c.last_details || {};
-      const notes = NOTE_KEYS.filter((k) => d[k]).map((k) => `${k.replace(/_/g, ' ')}: ${d[k]}`).join(' · ');
+      const notes = keys.filter((k) => d[k]).map((k) => `${k.replace(/_/g, ' ')}: ${d[k]}`).join(' · ');
       const result = c.last_result && (!notes || !notes.includes(c.last_result)) ? c.last_result : '';
       const busy = c.status === 'calling';
       const queued = CALLBACK_STATUSES.includes(c.status);
@@ -476,7 +524,7 @@
       return `<tr>
         <td class="num">${c.id}</td>
         <td><b>${esc(c.customer_name || '')}</b><br><small>${esc(c.phone || 'no phone')}</small></td>
-        <td><small>${esc([c.order_id, c.product, c.amount ? `Rs ${c.amount}` : '', c.payment_mode].filter(Boolean).join(' · '))}</small></td>
+        <td><small>${esc(detailsOf(c).filter(Boolean).join(' · '))}</small></td>
         <td>${outcomeBadge(c.status)}</td>
         <td class="num">${c.attempts || 0}</td>
         <td><small>${esc([result, notes].filter(Boolean).join(' · '))}</small></td>
@@ -487,8 +535,10 @@
     }).join('');
     const empty = el('board-empty');
     empty.hidden = shown.length > 0;
-    if (!shown.length) empty.textContent = rows.length ? 'No contacts in this group.' : 'No contacts yet. Upload the Excel sheet to start.';
+    if (!shown.length) empty.textContent = rows.length ? 'No contacts in this group.' : 'No contacts yet. Upload the sheet in step 1.';
   };
+  // Opening another campaign starts its list from "All".
+  window.resetBoardFilter = () => { boardFilter = 'all'; boardQuery = ''; el('board-search').value = ''; };
   // ---------------- call back: the queue of people to ring again ----------------
   let cbFilter = 'all';
   let cbRows = [];
@@ -522,6 +572,7 @@
       const exhausted = c.status !== 'call_later' && (c.attempts || 0) >= j.max_attempts;
       return `<tr>
         <td><b>${esc(c.customer_name || '')}</b><br><small>${esc(c.phone || '')}${c.order_id ? ' · ' + esc(c.order_id) : ''}</small></td>
+        <td><small>${esc(c.campaign_name || '')}</small></td>
         <td>${outcomeBadge(c.status)}<br><small>${esc(why)}${extra ? ' · ' + esc(extra) : ''}</small></td>
         <td class="num">${c.attempts || 0}${exhausted ? '<br><small>no more automatic tries</small>' : ''}</td>
         <td class="num"><small>${esc(fmtWhen(c.last_call_at))}</small></td>
@@ -538,7 +589,7 @@
     }).join('');
     el('cb-empty').hidden = shown.length > 0;
     el('cb-note').textContent = cbRows.length
-      ? (j.running ? 'The campaign is running: each of these is rung when its time comes.' : 'Start the campaign (Overview) to ring these when their time comes, or press Call now on one.')
+      ? (j.running ? 'A campaign is running: its own contacts here are rung when their time comes.' : 'Start their campaign (Campaigns) to ring these when their time comes, or press Call now on one.')
       : '';
   };
   el('cb-chips').addEventListener('click', (e) => { const b = e.target.closest('[data-cb]'); if (b) { cbFilter = b.dataset.cb; window.loadCallbacks(); } });
@@ -566,7 +617,7 @@
       if (!c) return;
       const to = camp && camp.dial_only_my_number ? `YOUR phone ${camp.my_number} (test mode)` : (c.phone || 'no phone');
       if (!confirm(`Call ${c.customer_name || 'this contact'} now?\n\nNumber: ${to}\n\nThis is a real, paid phone call.`)) return;
-      const qs = new URLSearchParams({ voice: el('camp-voice').value || '', language: el('camp-lang').value || '' });
+      const qs = new URLSearchParams({ voice: el('camp-voice').value || '', model: el('camp-model').value || '', language: el('camp-lang').value || '', build: window.BUILD || '' });
       const r = await fetch(`/api/calls/dial/${c.id}?${qs}`, { method: 'POST' });
       const jj = await r.json().catch(() => ({}));
       window.toast(r.ok ? `Dialing ${jj.dialed}…` : (jj.detail || 'Could not dial.'));
@@ -606,7 +657,7 @@
       if (!c) return;
       const to = camp && camp.dial_only_my_number ? `YOUR phone ${camp.my_number} (test mode)` : (c.phone || 'no phone');
       if (!confirm(`Call ${c.customer_name || 'this contact'} now?\n\nNumber: ${to}\nOrder: ${c.order_id || ''}\n\nThis is a real, paid phone call.`)) return;
-      const qs = new URLSearchParams({ voice: el('camp-voice').value || '', language: el('camp-lang').value || '' });
+      const qs = new URLSearchParams({ voice: el('camp-voice').value || '', model: el('camp-model').value || '', language: el('camp-lang').value || '', build: window.BUILD || '' });
       const r = await fetch(`/api/calls/dial/${c.id}?${qs}`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       window.toast(r.ok ? `Dialing ${j.dialed}…` : (j.detail || 'Could not dial.'));

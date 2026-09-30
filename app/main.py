@@ -10,12 +10,15 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .campaign import router as campaign_router
-from .config import DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OPENAI_REALTIME_MODEL, RECORDINGS_DIR, VOICES
-from .contacts import build_results, build_template, check_rows, inspect_excel, is_valid_phone, normalise_phone
+from .campaign import CAMPAIGN, router as campaign_router
+from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
+                     STALE_PAGE, VOICES)
+from .contacts import (build_results, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
+                       missing_columns, normalise_phone)
 from .live_bridge import live_snapshot, run_call
 from .plivo_bridge import router as plivo_router
-from .prompts import LANGUAGES, get_prompt, with_language
+from .call_types import CALL_TYPES, get_prompt
+from .prompts import LANGUAGES, with_language
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # Keep call events on disk too, so a call can be diagnosed after the console window is closed.
@@ -70,22 +73,92 @@ async def index() -> FileResponse:
 
 @app.get("/api/config")
 async def get_config() -> dict:
-    # While the OpenAI agent is being tested it is the only one offered, so a call cannot go to
-    # Gemini by accident (calls 61 and 62 did exactly that). Put the two Gemini lines back to
-    # have the choice again; nothing else needs changing.
-    return {"model": OPENAI_REALTIME_MODEL, "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
-            "models": [OPENAI_REALTIME_MODEL,
-                       # "gemini-2.5-flash-native-audio-preview-12-2025",
-                       # "gemini-3.8-live",
-                       ]}
+    # Only OFFERED_MODELS (config.py). A browser that remembered another model falls back to the first.
+    return {"model": OFFERED_MODELS[0], "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
+            "models": OFFERED_MODELS, "model_labels": AGENT_LABELS, "build": PAGE_BUILD}
 
+
+# --- call types and campaigns ----------------------------------------------------------------------
+
+@app.get("/api/call-types")
+async def call_types() -> list[dict]:
+    """What each kind of call does, its sheet columns and the campaign facts it asks for."""
+    return [t.public() for t in CALL_TYPES.values()]
+
+
+def _campaign_or_404(campaign_id: int) -> dict:
+    camp = db.get_campaign(campaign_id)
+    if not camp:
+        raise HTTPException(404, "No such campaign.")
+    return camp
+
+
+def _clean_campaign(body: dict, call_type_key: str) -> dict:
+    """Name, facts and last call date from the dashboard form, checked against the call type."""
+    ct = CALL_TYPES.get(call_type_key)
+    if not ct:
+        raise HTTPException(400, "Pick a call type.")
+    name = str(body.get("name") or "").strip()[:120]
+    if not name:
+        raise HTTPException(400, "Give the campaign a name.")
+    given = body.get("facts") or {}
+    facts = {f.key: str(given.get(f.key) or "").strip()[:2000] for f in ct.facts}
+    missing = [f.label for f in ct.facts if f.required and not facts[f.key]]
+    if missing:
+        raise HTTPException(400, "Missing: " + ", ".join(missing))
+    last = str(body.get("last_call_date") or "").strip()[:10]
+    return {"name": name, "facts": facts, "last_call_date": last}
+
+
+@app.get("/api/campaigns")
+async def campaigns() -> list[dict]:
+    running = CAMPAIGN.settings.campaign_id if CAMPAIGN.running else None
+    out = db.list_campaigns()
+    for c in out:
+        c["running"] = c["id"] == running
+        ct = CALL_TYPES.get(c["call_type"])
+        c["call_type_name"] = ct.name if ct else c["call_type"]
+    return out
+
+
+@app.post("/api/campaigns")
+async def create_campaign(body: dict) -> dict:
+    key = str(body.get("call_type") or "")
+    clean = _clean_campaign(body, key)
+    campaign_id = db.create_campaign(clean["name"], key, clean["facts"], clean["last_call_date"])
+    return db.get_campaign(campaign_id)
+
+
+@app.get("/api/campaigns/{campaign_id}")
+async def one_campaign(campaign_id: int) -> dict:
+    return _campaign_or_404(campaign_id)
+
+
+@app.put("/api/campaigns/{campaign_id}")
+async def edit_campaign(campaign_id: int, body: dict) -> dict:
+    camp = _campaign_or_404(campaign_id)
+    clean = _clean_campaign(body, camp["call_type"])
+    db.update_campaign(campaign_id, **clean)
+    return db.get_campaign(campaign_id)
+
+
+@app.delete("/api/campaigns/{campaign_id}")
+async def remove_campaign(campaign_id: int) -> dict:
+    _campaign_or_404(campaign_id)
+    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+        raise HTTPException(400, "Stop this campaign before deleting it.")
+    db.delete_campaign(campaign_id)
+    return {"ok": True}
+
+
+# --- contacts ------------------------------------------------------------------------------------------
 
 @app.get("/api/contacts")
-async def contacts() -> list[dict]:
-    return db.list_contacts()
+async def contacts(campaign_id: int | None = None) -> list[dict]:
+    return db.list_contacts(campaign_id)
 
 
-def _read_sheet(file: UploadFile, content: bytes) -> dict:
+def _read_sheet(file: UploadFile, content: bytes, camp: dict) -> dict:
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Upload an .xlsx file")
     try:
@@ -93,83 +166,109 @@ def _read_sheet(file: UploadFile, content: bytes) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not read that file as Excel: {exc}")
     if not sheet["rows"]:
-        raise HTTPException(400, "No rows found. Check the header row matches the template.")
-    existing = {c["phone"] for c in db.list_contacts() if c.get("phone")}
-    sheet["rows"] = check_rows(sheet["rows"], existing)
-    sheet["counts"] = {k: sum(1 for r in sheet["rows"] if r["_issue"] == k) for k in ("ok", "no_phone", "duplicate", "on_list")}
-    sheet["missing"] = [c for c in ("customer_name", "phone", "product", "amount", "payment_mode") if c not in sheet["columns"]]
+        raise HTTPException(400, "No rows found. Check the first row holds the column names, as in the template.")
+    # Duplicates are judged within this campaign: the same customer may well be in two campaigns.
+    existing = {c["phone"] for c in db.list_contacts(camp["id"]) if c.get("phone")}
+    blocked = db.do_not_call_phones()
+    rows = check_rows(sheet["rows"], existing)
+    for r in rows:
+        if r["_issue"] == "ok" and r.get("phone") in blocked:
+            r["_issue"] = "do_not_call"
+    sheet["rows"] = rows
+    sheet["counts"] = {k: sum(1 for r in rows if r["_issue"] == k) for k in ("ok", "no_phone", "duplicate", "on_list", "do_not_call")}
+    sheet["missing"] = missing_columns(call_type_named(camp["call_type"]), sheet["columns"], sheet["extras"])
     return sheet
 
 
-@app.post("/api/contacts/preview")
-async def preview_contacts(file: UploadFile = File(...)) -> dict:
+@app.post("/api/campaigns/{campaign_id}/preview")
+async def preview_contacts(campaign_id: int, file: UploadFile = File(...)) -> dict:
     """What the sheet contains, before anything is added: rows, columns understood, problems."""
-    sheet = _read_sheet(file, await file.read())
-    rows = [{k: v for k, v in r.items() if k != "_row"} | {"row": r["_row"], "issue": r["_issue"]} for r in sheet["rows"]]
-    for r in rows:
-        r.pop("_issue", None)
-    return {"rows": rows[:500], "total": len(rows), "columns": sheet["columns"], "ignored": sheet["ignored"],
+    camp = _campaign_or_404(campaign_id)
+    sheet = _read_sheet(file, await file.read(), camp)
+    rows = []
+    for r in sheet["rows"]:
+        row = {k: v for k, v in r.items() if not k.startswith("_")}
+        row["row"], row["issue"] = r["_row"], r["_issue"]
+        rows.append(row)
+    return {"rows": rows[:500], "total": len(rows), "columns": sheet["columns"], "extras": sheet["extras"],
             "missing": sheet["missing"], "counts": sheet["counts"]}
 
 
-@app.post("/api/contacts/upload")
-async def upload_contacts(file: UploadFile = File(...), skip_duplicates: bool = True, skip_no_phone: bool = False) -> dict:
-    """Add the sheet's rows to the call list. By default rows whose number is already on the list
-    (or earlier in the same sheet) are left out; rows without a valid phone are kept so they show
-    up as 'wrong number' for the team to fix, unless skip_no_phone is set."""
-    sheet = _read_sheet(file, await file.read())
+@app.post("/api/campaigns/{campaign_id}/upload")
+async def upload_contacts(campaign_id: int, file: UploadFile = File(...), skip_duplicates: bool = True,
+                          skip_no_phone: bool = False) -> dict:
+    """Add the sheet's rows to this campaign. By default rows whose number is already in the
+    campaign (or earlier in the same sheet) are left out, and so are numbers that asked not to be
+    called; rows without a valid phone are kept so the team can fix them, unless skip_no_phone."""
+    camp = _campaign_or_404(campaign_id)
+    sheet = _read_sheet(file, await file.read(), camp)
     keep = []
     for r in sheet["rows"]:
+        if r["_issue"] == "do_not_call":
+            continue
         if skip_duplicates and r["_issue"] in ("duplicate", "on_list"):
             continue
         if skip_no_phone and r["_issue"] == "no_phone":
             continue
         keep.append({k: v for k, v in r.items() if not k.startswith("_")})
-    n = db.insert_contacts(keep) if keep else 0
+    n = db.insert_contacts(keep, camp["id"], camp["call_type"]) if keep else 0
     return {"imported": n, "skipped": len(sheet["rows"]) - n, "counts": sheet["counts"]}
 
 
-@app.post("/api/contacts")
-async def add_contact(row: dict) -> dict:
-    """Add one contact typed on the screen."""
+@app.post("/api/campaigns/{campaign_id}/contacts")
+async def add_contact(campaign_id: int, row: dict) -> dict:
+    """Add one contact typed on the screen. Fields the call type reads beyond the fixed columns
+    (temple, puja date...) go to its extra details."""
+    camp = _campaign_or_404(campaign_id)
+    ct = call_type_named(camp["call_type"])
     clean = {k: str(row.get(k, "") or "").strip() for k in db.CONTACT_COLUMNS}
     clean["phone"] = normalise_phone(clean["phone"])
+    clean["extra"] = {c.key: {"label": c.label, "value": str(row.get(c.key) or "").strip()}
+                      for c in ct.columns if c.key not in db.CONTACT_COLUMNS and str(row.get(c.key) or "").strip()}
     if not clean["customer_name"] or not is_valid_phone(clean["phone"]):
         raise HTTPException(400, "Name and a valid 10-digit phone number are required.")
-    db.insert_contacts([clean])
+    if clean["phone"] in db.do_not_call_phones():
+        raise HTTPException(400, "This number asked not to be called again.")
+    db.insert_contacts([clean], camp["id"], camp["call_type"])
     return {"ok": True}
 
 
-@app.delete("/api/contacts")
-async def delete_contacts() -> dict:
-    db.clear_contacts()
+@app.delete("/api/campaigns/{campaign_id}/contacts")
+async def delete_contacts(campaign_id: int) -> dict:
+    _campaign_or_404(campaign_id)
+    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+        raise HTTPException(400, "Stop this campaign before clearing its list.")
+    db.clear_contacts(campaign_id)
     return {"ok": True}
 
 
-@app.get("/api/contacts/export")
-async def export_results() -> Response:
-    """The contact sheet with every call's result beside it, for the team."""
-    contacts = sorted(db.list_contacts(), key=lambda c: c["id"])
+@app.get("/api/campaigns/{campaign_id}/export")
+async def export_results(campaign_id: int) -> Response:
+    """Each contact's details with why we called, whether they picked up and what they said, for the team."""
+    camp = _campaign_or_404(campaign_id)
+    contacts = sorted(db.list_contacts(campaign_id), key=lambda c: c["id"])
     stamp = db.datetime.now(db.IST).strftime("%Y-%m-%d_%H%M")
+    safe = "".join(ch if ch.isalnum() else "_" for ch in camp["name"])[:40] or "campaign"
     return Response(
-        content=build_results(contacts, db.latest_call_for_contact),
+        content=build_results(contacts, db.latest_call_for_contact, call_type_named(camp["call_type"]), camp["name"]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=call_results_{stamp}.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename={safe}_results_{stamp}.xlsx"},
     )
 
 
-@app.get("/api/contacts/template")
-async def template() -> Response:
+@app.get("/api/call-types/{key}/template")
+async def template(key: str) -> Response:
+    ct = call_type_named(key)
     return Response(
-        content=build_template(),
+        content=build_template(ct),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=contacts_template.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename={ct.key}_template.xlsx"},
     )
 
 
 @app.get("/api/calls")
-async def calls() -> list[dict]:
-    return db.list_calls()
+async def calls(campaign_id: int | None = None) -> list[dict]:
+    return db.list_calls(campaign_id=campaign_id)
 
 
 @app.get("/api/calls/{call_id}")
@@ -216,10 +315,16 @@ async def delete_calls() -> dict:
 async def browser_call(ws: WebSocket, contact_id: int) -> None:
     """Browser sends binary 16 kHz PCM frames; we send binary 24 kHz PCM frames and JSON text events."""
     await ws.accept()
+    if ws.query_params.get("build") != PAGE_BUILD:
+        await ws.send_text(json.dumps({"type": "error", "text": STALE_PAGE}))
+        await ws.close()
+        return
     voice = ws.query_params.get("voice") or GEMINI_VOICE
     if voice not in VOICES:
         voice = GEMINI_VOICE
     model = ws.query_params.get("model") or GEMINI_LIVE_MODEL
+    if model not in OFFERED_MODELS:
+        model = OFFERED_MODELS[0]
     contact = db.get_contact(contact_id)
     if not contact:
         await ws.send_text(json.dumps({"type": "error", "text": "contact not found"}))

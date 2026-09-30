@@ -1,35 +1,25 @@
 """Tools the agent can call during a conversation."""
 from google.genai import types
 
-OUTCOMES = [
-    "confirmed", "changed", "cancelled", "call_later", "wrong_number",
-    "do_not_call", "no_answer", "busy", "dropped", "unclear",
-]
-# Set by us from the phone line, never by the agent: nobody answered, or the call ended before
-# the agent recorded anything (customer hung up, line dropped).
-LINE_OUTCOMES = ("no_answer", "busy", "dropped")
+from .call_types import DEFAULT, LINE_OUTCOMES, CallType  # noqa: F401  (LINE_OUTCOMES: re-exported)
 
-MARK_OUTCOME = types.FunctionDeclaration(
-    name="mark_outcome",
-    description="Record the result of the call once the customer has answered. Call this exactly once, before end_call.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            # "no_answer" and "busy" are ours to set when the phone is never picked up. The agent
-            # only exists once someone has answered, so it is not offered those choices.
-            "outcome": types.Schema(type=types.Type.STRING, enum=[o for o in OUTCOMES if o not in LINE_OUTCOMES],
-                                    description="What happened on the call."),
-            "mismatch": types.Schema(type=types.Type.STRING, description="What the customer claims versus what our record shows, raised for the team to verify. Example: 'customer says already paid online by UPI; record shows COD'."),
-            "new_product": types.Schema(type=types.Type.STRING, description="Product and quantity the customer says they ordered, if different from our record. A claim to verify, not a change."),
-            "new_address": types.Schema(type=types.Type.STRING, description="New delivery address the customer confirmed after you read it back, with house number and 6-digit PIN code."),
-            "new_delivery_date": types.Schema(type=types.Type.STRING, description="New delivery date if the customer changed it."),
-            "cancel_reason": types.Schema(type=types.Type.STRING, description="Reason given if cancelled."),
-            "callback_time": types.Schema(type=types.Type.STRING, description="When to call back if the customer asked for a later call."),
-            "notes": types.Schema(type=types.Type.STRING, description="Anything else the team should know, in one or two sentences."),
-        },
-        required=["outcome"],
-    ),
-)
+
+def mark_outcome_for(call_type: CallType) -> types.FunctionDeclaration:
+    """The result tool for one call type: its own results and the details it writes down."""
+    props = {
+        # "no_answer" and "busy" are ours to set when the phone is never picked up. The agent
+        # only exists once someone has answered, so it is not offered those choices.
+        "outcome": types.Schema(type=types.Type.STRING, enum=list(call_type.outcomes),
+                                description="What happened on the call."),
+    }
+    for name, description in call_type.details.items():
+        props[name] = types.Schema(type=types.Type.STRING, description=description)
+    return types.FunctionDeclaration(
+        name="mark_outcome",
+        description="Record the result of the call once the customer has answered. Call this exactly once, before end_call.",
+        parameters=types.Schema(type=types.Type.OBJECT, properties=props, required=["outcome"]),
+    )
+
 
 RECORD_ADDRESS = types.FunctionDeclaration(
     name="record_address",
@@ -55,4 +45,13 @@ END_CALL = types.FunctionDeclaration(
     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
 )
 
-TOOLS = [types.Tool(function_declarations=[MARK_OUTCOME, RECORD_ADDRESS, END_CALL])]
+def tools_for(call_type: CallType) -> list[types.Tool]:
+    """The tools the agent has on a call of this type. record_address only where addresses are taken."""
+    declarations = [mark_outcome_for(call_type)]
+    if call_type.takes_address:
+        declarations.append(RECORD_ADDRESS)
+    declarations.append(END_CALL)
+    return [types.Tool(function_declarations=declarations)]
+
+
+TOOLS = tools_for(DEFAULT)

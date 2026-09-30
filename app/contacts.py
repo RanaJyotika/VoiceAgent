@@ -1,10 +1,27 @@
-"""Excel import for contacts. Header row must match CONTACT_COLUMNS (case-insensitive)."""
+"""Excel import for contacts. Headers are matched to CONTACT_COLUMNS (case-insensitive, with
+aliases); every other column is kept as an extra detail of the contact, never dropped."""
+import re
 from datetime import datetime
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
+from .call_types import CALL_TYPES, DEFAULT, CallType, extra_of
 from .db import CONTACT_COLUMNS, IST
+
+# Extra columns the call types read by name (contacts.extra keys), and what sheets call them.
+EXTRA_ALIASES = {
+    "temple": "temple", "mandir": "temple", "temple_name": "temple",
+    "puja_date": "puja_date", "seva_date": "puja_date", "booking_date": "puja_date", "event_date": "puja_date",
+    "date": "puja_date", "chadhava_date": "puja_date",
+    "devotee_names": "devotee_names", "devotees": "devotee_names", "devotee": "devotee_names",
+    "devotee_name": "devotee_names", "sankalp_name": "devotee_names", "sankalp": "devotee_names",
+    "puja": "product", "seva": "product", "puja_name": "product", "seva_name": "product", "booking": "product",
+    "booking_id": "order_id", "booking_no": "order_id",
+    # the template's own headers (call_types Column labels)
+    "puja_seva": "product", "puja_or_seva": "product", "payment_cod_prepaid": "payment_mode",
+}
 
 ALIASES = {
     "name": "customer_name",
@@ -51,8 +68,8 @@ ALIASES = {
 
 
 def _normalise(header: str) -> str:
-    key = str(header or "").strip().lower().replace(" ", "_").replace("-", "_")
-    return ALIASES.get(key, key)
+    key = re.sub(r"[^a-z0-9]+", "_", str(header or "").strip().lower()).strip("_")
+    return ALIASES.get(key) or EXTRA_ALIASES.get(key) or key
 
 
 def normalise_phone(raw) -> str:
@@ -75,39 +92,47 @@ def is_valid_phone(phone: str) -> bool:
     return phone.startswith("+") and digits.isdigit() and 10 <= len(digits) <= 15
 
 
+def _cell_text(v) -> str:
+    if v is None:
+        return ""
+    if hasattr(v, "strftime"):
+        return v.strftime("%d %B %Y")    # a date cell
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))               # Excel turns 1499 into 1499.0
+    return str(v).strip()
+
+
 def inspect_excel(content: bytes) -> dict:
-    """Read the sheet and say what is in it: the rows as contacts, which headers were understood,
-    which were ignored, and the sheet's own row number for each contact (for the preview)."""
+    """Read the sheet and say what is in it: the rows as contacts, which headers went to the fixed
+    columns, which were kept as extra details, and the sheet's own row number for each contact."""
     wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
     ws = wb.active
     rows_iter = ws.iter_rows(values_only=True)
     header = next(rows_iter, None)
     if not header:
-        return {"rows": [], "columns": [], "ignored": []}
+        return {"rows": [], "columns": [], "extras": []}
     raw_headers = [str(h).strip() if h not in (None, "") else "" for h in header]
-    cols = [_normalise(h) for h in raw_headers]
+    cols = [_normalise(h) if h else "" for h in raw_headers]
     columns = [c for c in cols if c in CONTACT_COLUMNS]
-    ignored = [h for h, c in zip(raw_headers, cols) if h and c not in CONTACT_COLUMNS]
+    extras = [(c, h) for c, h in zip(cols, raw_headers) if c and c not in CONTACT_COLUMNS]
     rows: list[dict] = []
     for n, raw in enumerate(rows_iter, start=2):
         if raw is None or all(v in (None, "") for v in raw):
             continue
-        row = {c: (v if v is not None else "") for c, v in zip(cols, raw) if c in CONTACT_COLUMNS}
+        row = {c: _cell_text(v) for c, v in zip(cols, raw) if c in CONTACT_COLUMNS}
         row["phone"] = normalise_phone(row.get("phone", ""))
-        if hasattr(row.get("delivery_date"), "strftime"):
-            row["delivery_date"] = row["delivery_date"].strftime("%d %B %Y")
-        for k, v in list(row.items()):
-            if isinstance(v, float) and v.is_integer():
-                row[k] = str(int(v))      # Excel turns 1499 into 1499.0
-            elif not isinstance(v, str):
-                row[k] = str(v)
+        extra = {c: {"label": h, "value": _cell_text(v)} for (c, h), v in
+                 zip([(c, h) for c, h in zip(cols, raw_headers)], raw) if c and c not in CONTACT_COLUMNS and _cell_text(v)}
+        row["extra"] = extra
         row["_row"] = n
         rows.append(row)
-    return {"rows": rows, "columns": columns, "ignored": ignored}
+    return {"rows": rows, "columns": columns, "extras": [{"key": c, "label": h} for c, h in extras]}
 
 
-def parse_excel(content: bytes) -> list[dict]:
-    return [{k: v for k, v in r.items() if not k.startswith("_")} for r in inspect_excel(content)["rows"]]
+def missing_columns(call_type: CallType, columns: list[str], extras: list[dict]) -> list[str]:
+    """Required columns of this call type that the sheet does not have (by label)."""
+    have = set(columns) | {e["key"] for e in extras}
+    return [c.label for c in call_type.columns if c.required and c.key not in have]
 
 
 def check_rows(rows: list[dict], existing_phones: set[str]) -> list[dict]:
@@ -130,57 +155,107 @@ def check_rows(rows: list[dict], existing_phones: set[str]) -> list[dict]:
     return out
 
 
-RESULT_COLUMNS = [
-    "status", "attempts", "last_call", "result", "mismatch", "new_product", "new_address",
-    "new_delivery_date", "cancel_reason", "callback_time", "agent_notes", "call_length_sec", "transcript",
-]
+def _value(contact: dict, key: str) -> str:
+    """A contact's value for a call type column: a fixed column or one of its extras."""
+    if key in CONTACT_COLUMNS:
+        return str(contact.get(key) or "")
+    v = extra_of(contact).get(key)
+    return str(v.get("value") if isinstance(v, dict) else v or "")
 
 
-def build_results(contacts: list[dict], latest_call) -> bytes:
-    """The uploaded sheet with the call results added on the right, one row per contact.
-    latest_call(contact_id) -> the most recent call row for that contact, or None."""
+# What the customer said, in the team's words, by the result the agent recorded.
+RESPONSES = {
+    "confirmed": "Accepted", "interested": "Accepted", "changed": "Accepted with changes",
+    "cancelled": "Cancelled", "not_ordered": "Says they did not order", "not_interested": "Denied", "already_booked": "Already booked",
+    "needs_help": "Wants help to book", "call_later": "Call back later", "wrong_number": "Wrong number",
+    "do_not_call": "Do not call again", "unclear": "Unclear, needs review",
+}
+# How a call nobody picked up ended, by live_bridge.classify_unanswered's note.
+NOT_PICKED_UP = {
+    "busy": "Line busy", "call rejected": "Call rejected", "no answer": "Not answered",
+    "switched off or not reachable": "Switched off / not reachable", "number does not exist": "Number does not exist",
+}
+DETAIL_LABELS = {
+    "not_interested_reason": "Reason", "cancel_reason": "Reason", "callback_time": "Call back",
+    "new_address": "New address", "new_delivery_date": "New delivery date", "new_product": "Product they named",
+    "mismatch": "Mismatch", "question": "Question", "notes": "Note",
+}
+
+
+def call_result(contact: dict, call: dict | None) -> tuple[str, str]:
+    """(call status, customer response) for one contact, from its latest call: did anyone pick up,
+    and if so what did they say. The response is empty when nobody answered."""
+    from .live_bridge import classify_unanswered   # here: live_bridge pulls in the voice agent
+    status = contact.get("status") or "pending"
+    if status == "calling":
+        return "Calling now", ""
+    if status == "pending":
+        return "Not called yet", ""             # never rung, or put back in the queue since its last call
+    if not call:
+        # A row the campaign could not ring at all is marked wrong_number without a call.
+        return ("No valid phone number" if status == "wrong_number" else "Not called yet"), ""
+    if not call.get("duration_sec"):
+        if call.get("error"):
+            return "Not called yet", ""          # our side failed before it rang; the campaign tries again
+        note = classify_unanswered(call.get("hangup_cause") or "")[1]
+        return NOT_PICKED_UP.get(note, "Not answered"), ""
+    outcome = call.get("outcome") or ""
+    if outcome == "dropped":
+        return "Hung up without reason", ""     # picked up, then the call ended before any answer
+    return "Picked up", RESPONSES.get(outcome, outcome.replace("_", " ").capitalize())
+
+
+def build_results(contacts: list[dict], latest_call, call_type: CallType = DEFAULT, campaign_name: str = "") -> bytes:
+    """What the team needs from a campaign, one row per contact: the customer's details, why we
+    called, whether they picked up, what they said and why. No transcripts: those stay on the
+    dashboard. latest_call(contact_id) -> the most recent call row for that contact, or None."""
+    reason = (f"Campaign: {campaign_name}" if campaign_name else "Campaign") if call_type.kind == "promotional" \
+        else call_type.name
+    header = [c.label for c in call_type.columns] + ["Call reason", "Call status", "Customer response",
+                                                     "Reason / details", "Called on", "Tries"]
     wb = Workbook()
     ws = wb.active
     ws.title = "results"
-    ws.append(CONTACT_COLUMNS + RESULT_COLUMNS)
+    ws.append(header)
     for c in contacts:
-        call = latest_call(c["id"]) or {}
-        details = call.get("outcome_details") or {}
-        lines = call.get("transcript") or []
-        transcript = "\n".join(f"{'Agent' if t.get('role') == 'agent' else 'Customer'}: {t.get('text', '')}" for t in lines)
+        call = latest_call(c["id"])
+        line, response = call_result(c, call)
+        details = ((call or {}).get("outcome_details") or {}) if response else {}
+        if not isinstance(details, dict):
+            details = {}
+        said = "; ".join(f"{DETAIL_LABELS.get(k, k.replace('_', ' ').capitalize())}: {details[k]}"
+                         for k in call_type.details if str(details.get(k) or "").strip())
         when = c.get("last_call_at") or ""
         if when:
             try:
                 when = datetime.fromisoformat(when).astimezone(IST).strftime("%d %b %Y %H:%M")
             except ValueError:
                 pass
-        ws.append([c.get(k, "") for k in CONTACT_COLUMNS] + [
-            c.get("status", ""), c.get("attempts", 0), when, c.get("last_result", ""),
-            details.get("mismatch", ""), details.get("new_product", ""), details.get("new_address", ""),
-            details.get("new_delivery_date", ""), details.get("cancel_reason", ""), details.get("callback_time", ""),
-            details.get("notes", ""), round(call.get("duration_sec") or 0), transcript[:32000],
-        ])
+        ws.append([_value(c, col.key) for col in call_type.columns]
+                  + [reason, line, response, said, when, c.get("attempts") or 0])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for col in ws.columns:
+        widest = max(len(str(cell.value or "")) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(widest + 2, 50)
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-TEMPLATE_COLUMNS = [c for c in CONTACT_COLUMNS if c != "language"]   # language is chosen on the dashboard
-
-
-def build_template() -> bytes:
+def build_template(call_type: CallType = DEFAULT) -> bytes:
+    """An empty sheet with this call type's columns and one example row."""
     wb = Workbook()
     ws = wb.active
     ws.title = "contacts"
-    ws.append(TEMPLATE_COLUMNS)
-    ws.append([
-        "VV-1001", "Ramesh Kumar", "PUT 10 DIGIT NUMBER", "Rudraksha Mala 108 beads", "1", "1499",
-        "COD", "12 MG Road, Indore, MP 452001", "22 September 2026", "First order",
-    ])
-    ws.append([
-        "VV-1002", "Sunita Sharma", "PUT 10 DIGIT NUMBER", "Shri Yantra (brass)", "1", "2299",
-        "Prepaid", "Flat 4B, Sector 21, Noida, UP 201301", "23 September 2026", "",
-    ])
+    ws.append([c.label for c in call_type.columns])
+    ws.append([c.example for c in call_type.columns])
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def call_type_named(key: str | None) -> CallType:
+    return CALL_TYPES.get(str(key or ""), DEFAULT)

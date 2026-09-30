@@ -40,35 +40,48 @@ function syncDialTo() {
   $('dialto').value = c ? (c.phone || '') : '';
 }
 
+const campaignId = () => (window.currentCampaignId ? window.currentCampaignId() : null);
+const CALLBACK = ['no_answer', 'busy', 'dropped', 'call_later'];
+
+// Every contact of every campaign: the open campaign's list shows its own, the Single call page
+// offers all of them, and the Call back count in the sidebar covers all campaigns.
 async function loadContacts() {
   const rows = await fetch('/api/contacts').then(r => r.json());
   contactRows = rows;
-  const cc = document.getElementById('contactcount');
-  if (cc) cc.textContent = rows.length ? `${rows.length} loaded` : 'none loaded';
-  if (window.renderContacts) window.renderContacts(rows);
-  if (window.loadCampaign) window.loadCampaign();
+  const cid = campaignId();
+  if (cid) {
+    const mine = rows.filter(r => r.campaign_id === cid);
+    $('contactcount').textContent = mine.length ? `${mine.length} on the list` : 'none yet';
+    if (window.renderContacts) window.renderContacts(mine);
+    if (window.loadCampaign) window.loadCampaign();
+  }
+  const cb = rows.filter(r => CALLBACK.includes(r.status)).length;
+  $('nav-callback').textContent = cb ? String(cb) : '';
   const sel = $('contact');
   const chosen = sel.value;   // the list refreshes every few seconds during a run; keep the pick
   sel.innerHTML = '';
   if (!rows.length) {
-    sel.innerHTML = '<option value="">No contacts. Upload the Excel sheet first.</option>';
+    sel.innerHTML = '<option value="">No contacts yet. Create a campaign and upload its sheet.</option>';
     return;
   }
   for (const r of rows) {
     const o = document.createElement('option');
     o.value = r.id;
-    o.textContent = `${r.order_id || '-'} | ${r.customer_name || '-'} | ${r.phone || 'no phone'} | ${r.product || '-'} | Rs ${r.amount || '-'} | ${r.payment_mode || ''} | ${r.status}`;
+    o.textContent = [r.campaign_name || 'no campaign', r.customer_name || '-', r.phone || 'no phone', r.product || r.order_id || '', r.status].filter(Boolean).join(' | ');
     if (String(r.id) === chosen) o.selected = true;
     sel.appendChild(o);
   }
   if (sel.value !== chosen) syncDialTo();
 }
+window.loadContacts = loadContacts;
 
 async function loadCalls() {
-  const rows = await fetch('/api/calls').then(r => r.json());
+  const camp = $('hist-camp').value;
+  const rows = await fetch(camp ? `/api/calls?campaign_id=${camp}` : '/api/calls').then(r => r.json());
   if (window.renderCalls) window.renderCalls(rows);
   if (window.loadStats) window.loadStats();
 }
+window.loadCalls = loadCalls;
 
 // ---- upload: preview first, import on confirm ----
 let previewFilter = 'all';
@@ -77,19 +90,22 @@ const ISSUE = {
   ok: ['good', 'check', 'OK'],
   no_phone: ['critical', 'alert', 'No valid phone'],
   duplicate: ['warning', 'alert', 'Repeated in sheet'],
-  on_list: ['serious', 'clock', 'Already on list'],
+  on_list: ['serious', 'clock', 'Already in this campaign'],
+  do_not_call: ['critical', 'alert', 'Asked not to be called'],
 };
-const COL_LABEL = { order_id: 'Order ID', customer_name: 'Customer name', phone: 'Phone', product: 'Product', quantity: 'Qty', amount: 'Amount',
+const COL_LABEL = { order_id: 'Order / booking ID', customer_name: 'Customer name', phone: 'Phone', product: 'Product / puja', quantity: 'Qty', amount: 'Amount',
   payment_mode: 'Payment', address: 'Address', delivery_date: 'Delivery date', language: 'Language', notes: 'Notes' };
 
 async function previewSheet() {
   const f = $('file').files[0];
   if (!f) return;
+  const cid = campaignId();
+  if (!cid) { notify('Open a campaign first.'); return; }
   const fd = new FormData();
   fd.append('file', f);
   $('pv-summary').textContent = 'Reading the file…';
   $('preview').hidden = false;
-  const r = await fetch('/api/contacts/preview', { method: 'POST', body: fd });
+  const r = await fetch(`/api/campaigns/${cid}/preview`, { method: 'POST', body: fd });
   const j = await r.json().catch(() => ({}));
   if (r.status === 404) { $('preview').hidden = true; notify('The server is running older code: close the run_phone.bat / run.bat window and start it again, then reload this page.'); return; }
   if (!r.ok) { $('preview').hidden = true; notify(j.detail || 'Could not read the file.'); return; }
@@ -108,13 +124,15 @@ function renderPreview() {
   $('pv-summary').textContent = `${j.total} row${j.total === 1 ? '' : 's'} in the sheet · ${willImport} will be added`;
   $('upload').textContent = `Import ${willImport} contact${willImport === 1 ? '' : 's'}`;
   $('upload').disabled = willImport === 0;
-  $('pv-columns').innerHTML = `<span class="hint">Columns understood:</span>` + j.columns.map((k) => window.outcomeBadge ? `<span class="badge good">${esc(COL_LABEL[k] || k)}</span>` : esc(k)).join('')
-    + (j.ignored.length ? `<span class="hint" style="margin-left:6px">Ignored:</span>` + j.ignored.map((k) => `<span class="badge">${esc(k)}</span>`).join('') : '');
+  $('pv-columns').innerHTML = `<span class="hint">Columns read:</span>`
+    + j.columns.map((k) => `<span class="badge good">${esc(COL_LABEL[k] || k)}</span>`).join('')
+    + j.extras.map((x) => `<span class="badge good">${esc(x.label)}</span>`).join('');
   const warn = [];
-  if (j.missing.length) warn.push(`Missing column${j.missing.length > 1 ? 's' : ''}: ${j.missing.map((k) => COL_LABEL[k] || k).join(', ')}. The agent will have nothing to say for those details.`);
+  if (j.missing.length) warn.push(`Missing column${j.missing.length > 1 ? 's' : ''} this kind of call needs: ${j.missing.join(', ')}. The agent will have nothing to say for ${j.missing.length > 1 ? 'those' : 'that'}.`);
   if (c.no_phone) warn.push(`${c.no_phone} row${c.no_phone > 1 ? 's have' : ' has'} no valid 10-digit phone.`);
   if (c.duplicate) warn.push(`${c.duplicate} row${c.duplicate > 1 ? 's repeat' : ' repeats'} a number used earlier in the sheet.`);
-  if (c.on_list) warn.push(`${c.on_list} number${c.on_list > 1 ? 's are' : ' is'} already on the call list.`);
+  if (c.on_list) warn.push(`${c.on_list} number${c.on_list > 1 ? 's are' : ' is'} already in this campaign.`);
+  if (c.do_not_call) warn.push(`${c.do_not_call} number${c.do_not_call > 1 ? 's' : ''} asked not to be called again and will be left out.`);
   $('pv-warn').hidden = !warn.length;
   $('pv-warn').textContent = warn.join(' ');
   const chip = (key, label, tone, n) => `<button class="${tone}" data-pv="${key}" aria-pressed="${previewFilter === key}">${label} <b>${n}</b></button>`;
@@ -123,13 +141,15 @@ function renderPreview() {
   $('pv-rows').innerHTML = rows.map((r) => {
     const v = ISSUE[r.issue] || ISSUE.ok;
     const badge = window.outcomeBadge ? `<span class="badge ${v[0]}">${v[2]}</span>` : v[2];
+    // Everything else on the row, labelled, so the user sees exactly what the agent will be told.
+    const fixed = Object.entries(COL_LABEL).filter(([k]) => !['customer_name', 'phone'].includes(k) && r[k]).map(([k, l]) => `${l}: ${r[k]}`);
+    const extra = Object.values(r.extra || {}).map((x) => `${x.label}: ${x.value}`);
     return `<tr>
       <td class="num"><small>${r.row}</small></td><td>${badge}</td>
-      <td><b>${esc(r.customer_name)}</b></td><td class="num">${esc(r.phone)}</td><td><small>${esc(r.order_id)}</small></td>
-      <td>${esc(r.product)}</td><td class="num">${esc(r.quantity)}</td><td class="num">${esc(r.amount)}</td><td>${esc(r.payment_mode)}</td>
-      <td><small>${esc(r.address)}</small></td><td><small>${esc(r.delivery_date)}</small></td><td><small>${esc(r.notes)}</small></td>
+      <td><b>${esc(r.customer_name)}</b></td><td class="num">${esc(r.phone)}</td>
+      <td><small>${esc([...fixed, ...extra].join(' · '))}</small></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="12"><small>No rows in this group.</small></td></tr>';
+  }).join('') || '<tr><td colspan="5"><small>No rows in this group.</small></td></tr>';
   $('pv-more').textContent = j.total > j.rows.length ? `Showing the first ${j.rows.length} of ${j.total} rows; all of them will be imported.` : '';
 }
 
@@ -137,30 +157,37 @@ function closePreview() {
   $('preview').hidden = true;
   previewData = null;
   $('file').value = '';
-  $('filename').textContent = 'Choose an Excel file';
+  $('filename').textContent = 'Upload the Excel sheet';
 }
+window.closePreview = closePreview;
 
 async function upload() {
   const f = $('file').files[0];
-  if (!f) return alert('Choose an .xlsx file first');
+  const cid = campaignId();
+  if (!f || !cid) return alert('Choose an .xlsx file first');
   const fd = new FormData();
   fd.append('file', f);
   const qs = new URLSearchParams({ skip_duplicates: $('pv-skipdup').checked, skip_no_phone: $('pv-skipnophone').checked });
   $('upload').disabled = true;
-  const r = await fetch(`/api/contacts/upload?${qs}`, { method: 'POST', body: fd });
+  const r = await fetch(`/api/campaigns/${cid}/upload?${qs}`, { method: 'POST', body: fd });
   const j = await r.json().catch(() => ({}));
   $('upload').disabled = false;
   if (!r.ok) return alert(j.detail || 'Upload failed');
-  notify(`Added ${j.imported} contact${j.imported === 1 ? '' : 's'} to the call list` + (j.skipped ? ` · ${j.skipped} skipped` : ''));
+  notify(`Added ${j.imported} contact${j.imported === 1 ? '' : 's'}` + (j.skipped ? ` · ${j.skipped} skipped` : '') + '. Next: start calling (step 2).');
   closePreview();
   await loadContacts();
-  if (window.showPage) { window.showPage('overview'); setTimeout(() => document.getElementById('board').scrollIntoView({ block: 'start', behavior: 'smooth' }), 30); }
+  if (window.loadCampaigns) window.loadCampaigns();
+  $('campaign').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 async function clearContacts() {
-  if (!confirm('Delete all contacts?')) return;
-  await fetch('/api/contacts', { method: 'DELETE' });
+  const cid = campaignId();
+  if (!cid || !confirm('Delete every contact in this campaign? Call history keeps its records.')) return;
+  const r = await fetch(`/api/campaigns/${cid}/contacts`, { method: 'DELETE' });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return notify(j.detail || 'Could not clear the list.');
   await loadContacts();
+  if (window.loadCampaigns) window.loadCampaigns();
 }
 
 function playChunk(arrayBuffer) {
@@ -220,8 +247,8 @@ async function startCall() {
   chunksSent = 0;
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, language: $('lang').value });
-  try { localStorage.setItem('voice', $('voice').value); localStorage.setItem('model', $('modelSel').value); } catch (e) { /* ignore */ }
+  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, language: $('lang').value, build: window.BUILD || '' });
+  try { localStorage.setItem('voice', $('voice').value); } catch (e) { /* ignore */ }
   ws = new WebSocket(`${proto}://${location.host}/ws/call/${contactId}?${qs}`);
   ws.binaryType = 'arraybuffer';
 
@@ -277,10 +304,9 @@ function hangupBrowserCall() {
   cleanup();
 }
 window.hangupBrowserCall = hangupBrowserCall;
-// Dock button: ends the browser test if one is running, otherwise the newest live phone call.
+// "End test" on the browser test card. Phone calls are ended from their card in Live calls.
 function hangup() {
-  if (ws) return hangupBrowserCall();
-  if (window.hangupNewestLive) window.hangupNewestLive();
+  if (ws) hangupBrowserCall();
 }
 
 function cleanup() {
@@ -307,7 +333,6 @@ $('pv-chips').addEventListener('click', (e) => { const b = e.target.closest('[da
 $('clear').onclick = clearContacts;
 $('start').onclick = startCall;
 $('hangup').onclick = hangup;
-$('refresh').onclick = loadCalls;
 $('clearcalls').onclick = async () => {
   if (!confirm('Delete the whole call history? Transcripts and outcomes will be lost. Contacts are kept.')) return;
   await fetch('/api/calls', { method: 'DELETE' });
@@ -320,8 +345,9 @@ setInterval(() => { if (!document.querySelector('#calls details[open]')) { loadC
 $('send').onclick = sendTyped;
 $('typed').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendTyped(); });
 fetch('/api/config').then(r => r.json()).then(c => {
-  let savedVoice = c.voice, savedModel = c.model;
-  try { savedVoice = localStorage.getItem('voice') || c.voice; savedModel = localStorage.getItem('model') || c.model; } catch (e) { /* ignore */ }
+  window.BUILD = c.build;   // sent with every call this page starts; a restarted server refuses an old page
+  let savedVoice = c.voice;
+  try { savedVoice = localStorage.getItem('voice') || c.voice; localStorage.removeItem('model'); } catch (e) { /* ignore */ }
   for (const [name, gender] of Object.entries(c.voices)) {
     for (const id of ['voice', 'camp-voice']) {
       const o = document.createElement('option');
@@ -330,13 +356,19 @@ fetch('/api/config').then(r => r.json()).then(c => {
       $(id).appendChild(o);
     }
   }
-  for (const m of c.models) {
-    const o = document.createElement('option');
-    o.value = m; o.textContent = m.replace('-preview-12-2025', '');
-    if (m === savedModel) o.selected = true;
-    $('modelSel').appendChild(o);
-  }
-  // Language: the sheet has no language column, so the owner picks it here. Remembered, and the
+  // The agent: Gemini 2.5, Gemini 3.8 or ChatGPT. A single call always starts on the first (Gemini 2.5):
+  // remembering the last choice put calls 103 and 104 on ChatGPT without anyone noticing. A campaign
+  // shows the agent it last ran with (dashboard.js puts it in data-want).
+  const labels = c.model_labels || {};
+  for (const id of ['modelSel', 'camp-model']) {
+    const want = id === 'modelSel' ? c.model : ($(id).dataset.want || c.model);
+    for (const m of c.models) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = labels[m] || m;
+      if (m === want) o.selected = true;
+      $(id).appendChild(o);
+    }
+  }  // Language: the sheet has no language column, so the owner picks it here. Remembered, and the
   // two selects (campaign and single call) stay in step.
   let savedLang = 'hinglish';
   try { savedLang = localStorage.getItem('language') || savedLang; } catch (e) { /* ignore */ }
@@ -378,28 +410,30 @@ $('dial').onclick = async () => {
   if (!confirm(`Place a REAL phone call?
 
 Number: ${to}
+Agent: ${$('modelSel').selectedOptions[0] ? $('modelSel').selectedOptions[0].textContent : ''}
 Script for: ${who ? who.customer_name : ''} (${who ? who.order_id : ''})
 Cost: a few rupees per minute (Gemini bills every turn for the whole call so far).
 
 Only call numbers of people who expect it.`)) return;
-  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, to, language: $('lang').value });
+  const qs = new URLSearchParams({ voice: $('voice').value, model: $('modelSel').value, to, language: $('lang').value, build: window.BUILD || '' });
   const r = await fetch(`/api/calls/dial/${contactId}?${qs}`, { method: 'POST' });
   const j = await r.json();
   notify(r.ok ? `Dialing ${j.dialed}… Watch the Live calls panel.` : 'Could not dial: ' + (j.detail || r.status));
   if (r.ok && window.openSheet) window.openSheet(null);
 };
+// Add one contact by hand: the fields are the open campaign's sheet columns (campaigns.js draws them).
 $('m_add').onclick = async () => {
-  const row = {
-    customer_name: $('m_name').value, phone: $('m_phone').value, order_id: $('m_order').value,
-    product: $('m_product').value, quantity: $('m_qty').value || '1', amount: $('m_amount').value,
-    payment_mode: $('m_pay').value, language: $('m_lang').value,
-    address: $('m_address').value, delivery_date: $('m_date').value,
-  };
-  const r = await fetch('/api/contacts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row) });
-  const j = await r.json();
+  const cid = campaignId();
+  if (!cid) return;
+  const row = {};
+  for (const f of $('m-fields').querySelectorAll('[data-m]')) row[f.dataset.m] = f.value.trim();
+  if ($('m_lang') && $('m_lang').value) row.language = $('m_lang').value;
+  const r = await fetch(`/api/campaigns/${cid}/contacts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row) });
+  const j = await r.json().catch(() => ({}));
   if (!r.ok) return alert(j.detail || 'Could not add the contact');
-  for (const id of ['m_name', 'm_phone', 'm_order', 'm_product', 'm_qty', 'm_amount', 'm_address', 'm_date']) $(id).value = '';
+  for (const f of $('m-fields').querySelectorAll('[data-m]')) f.value = '';
   notify('Contact added.');
   await loadContacts();
+  if (window.loadCampaigns) window.loadCampaigns();
 };
 loadPlivo();

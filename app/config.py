@@ -1,5 +1,6 @@
 """Environment and settings. Loaded once at import."""
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,6 +20,9 @@ GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Aoede")
 AGENT_NAME = os.getenv("AGENT_NAME", "Gauri")            # used with female voices
 AGENT_NAME_MALE = os.getenv("AGENT_NAME_MALE", "Arjun")  # used with male voices
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "Vedic Vaibhav")
+# The company's online store, where customers place orders. They know the order by this name, so
+# "Vedic Vaibhav se" alone left them asking who was calling (call 97: "order to Vedic Shop se kiya").
+STORE_NAME = os.getenv("STORE_NAME", "Vedic Shop")
 # Gemini's tone matching. It leaks the model's private mood label into the turn, and on calls 61
 # and 62 the label was spoken aloud: "excitement" before the greeting, "calmness" before "ji",
 # "surprise (negative)" before "achha". A flatter read is better than that. AFFECTIVE_DIALOG=true
@@ -98,6 +102,11 @@ PHONE_END_SILENCE_MS = int(os.getenv("PHONE_END_SILENCE_MS", "900"))
 # ...and after a question whose answer is long (an address, a number, "what did you order"): the
 # customer thinks between parts, and call 53 showed a phone that cuts its own mic between bursts.
 PHONE_LONG_ANSWER_MS = int(os.getenv("PHONE_LONG_ANSWER_MS", "1800"))
+# ...but only for this long into the answer; after it the usual pause closes the turn. On call 101 the
+# customer answered "address batayein?" by repeating "900 ka order tha" with 1 s gaps, the long pause
+# never came, and the agent said nothing for 15 s. Real addresses ran 10 to 15 s (calls 55, 57, 71),
+# so 10 s keeps an address whole in all but the slowest cases.
+PHONE_LONG_TURN_SECONDS = float(os.getenv("PHONE_LONG_TURN_SECONDS", "10"))
 # If the customer has clearly spoken and the agent still has not replied after this many
 # seconds, we tell Gemini "the customer paused" so it answers instead of waiting forever.
 REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "6"))
@@ -119,7 +128,9 @@ RECORDINGS_DIR = DATA_DIR / "recordings"
 # Clips are made once per voice with Gemini text-to-speech (same voice names as the Live model)
 # and cached in data/fillers/<voice>/. FILLER_GENERATE=false forbids that paid call (a few paise
 # per voice); a voice-neutral keyboard tap is used when no clips exist.
-FILLERS = os.getenv("FILLERS", "true").lower() != "false"
+# Off unless FILLERS=true: on call 72 (25 Sep 2026) the owner found the "hmm" after every reply
+# unnecessary, and it also played after sounds that were not an answer at all.
+FILLERS = os.getenv("FILLERS", "false").lower() == "true"
 FILLER_GENERATE = os.getenv("FILLER_GENERATE", "true").lower() != "false"
 GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
 
@@ -152,6 +163,23 @@ OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
 # agent then invented an address to fill the gap. Set it to "" to let it detect again.
 OPENAI_TRANSCRIBE_LANGUAGE = os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "hi").strip()
 OPENAI_FALLBACK = os.getenv("OPENAI_FALLBACK", "true").lower() != "false" and bool(OPENAI_API_KEY)
+
+# The agents the owner picks between on the dashboard, for a single call or a whole campaign; the
+# server takes no other (a browser tab opened before a restart once sent a model no longer offered).
+# gemini-3.8-live has refused every session on this key so far ("1007 invalid argument" as the
+# greeting is sent: calls 38, 40, 56); the call then carries on with GEMINI_LIVE_MODEL, and the
+# dashboard shows the agent that actually answered.
+AGENT_LABELS = {
+    GEMINI_LIVE_MODEL: "Gemini 2.5 Flash",
+    "gemini-3.8-live": "Gemini 3.8 Live",
+    **({OPENAI_REALTIME_MODEL: "ChatGPT (" + OPENAI_REALTIME_MODEL + ")"} if OPENAI_API_KEY else {}),
+}
+OFFERED_MODELS = list(AGENT_LABELS)
+# Changes on every server start. The page sends it with every call it starts, and a page loaded before
+# the restart is refused with "reload the page": on 30 Sep 2026 a tab left open across restarts kept
+# starting calls on ChatGPT (calls 100 to 105) while the new code would have picked Gemini.
+PAGE_BUILD = str(int(time.time()))
+STALE_PAGE = "This page is older than the server (it was restarted). Reload the page (F5) and try again."
 # After Gemini fails for a reason a retry cannot fix, later calls go straight to OpenAI for this
 # long instead of spending three seconds each rediscovering it.
 PROVIDER_COOLDOWN_SECONDS = float(os.getenv("PROVIDER_COOLDOWN_SECONDS", "900"))
@@ -175,6 +203,7 @@ OPENAI_PRICE_PER_M = {
 # Add your own products here; matching ignores upper/lower case.
 PRONUNCIATION = {
     "Vedic Vaibhav": "वैदिक वैभव",
+    "Vedic Shop": "वैदिक शॉप",
     "Gauri": "गौरी",
     "Shri Yantra": "श्री यंत्र",
     "Sri Yantra": "श्री यंत्र",

@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS calls (
     usage TEXT,                 -- JSON token usage if reported
     error TEXT
 );
+CREATE TABLE IF NOT EXISTS campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    call_type TEXT,             -- a key of call_types.CALL_TYPES
+    facts TEXT,                 -- JSON: what the agent is told about this campaign (campaign invites)
+    settings TEXT,              -- JSON: voice, language, hours, tries... as last started
+    last_call_date TEXT,        -- YYYY-MM-DD: no calls are placed after this day (optional)
+    created_at TEXT
+);
 """
 
 
@@ -62,9 +71,21 @@ def init_db() -> None:
             "last_call_at": "TEXT",
             "next_try_at": "TEXT",             # set by the campaign for no-answer / busy retries
             "last_result": "TEXT",             # one line for the team: "busy", "confirmed", "customer hung up"
+            "campaign_id": "INTEGER",          # the campaign this contact belongs to
+            "extra": "TEXT",                   # JSON: the sheet's own columns beyond CONTACT_COLUMNS
         })
         # A server restart mid-campaign must not leave contacts stuck on "calling".
         conn.execute("UPDATE contacts SET status='pending' WHERE status='calling'")
+        # Contacts from before campaigns existed go into one campaign of their own call type, so
+        # the list, its results and its history stay exactly as they were.
+        loose = conn.execute("SELECT DISTINCT COALESCE(NULLIF(campaign, ''), 'order_confirmation') AS t "
+                             "FROM contacts WHERE campaign_id IS NULL").fetchall()
+        for r in loose:
+            cur = conn.execute("INSERT INTO campaigns (name, call_type, facts, settings, created_at) VALUES (?, ?, '{}', '{}', ?)",
+                               ("Order confirmation" if r["t"] == "order_confirmation" else r["t"].replace("_", " ").capitalize(),
+                                r["t"], now_iso()))
+            conn.execute("UPDATE contacts SET campaign_id=? WHERE campaign_id IS NULL "
+                         "AND COALESCE(NULLIF(campaign, ''), 'order_confirmation')=?", (cur.lastrowid, r["t"]))
 
 
 def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
@@ -77,7 +98,8 @@ def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
 # Contact statuses. The first group means "the campaign is done with this contact"; the second
 # group is the call-back queue (rung again when next_try_at comes, up to the campaign's tries);
 # "calling" is set while a call is ringing or in progress.
-FINAL_STATUSES = ("confirmed", "changed", "cancelled", "wrong_number", "do_not_call", "unclear")
+FINAL_STATUSES = ("confirmed", "changed", "cancelled", "not_ordered", "wrong_number", "do_not_call", "unclear",
+                  "interested", "not_interested", "already_booked", "needs_help")
 RETRY_STATUSES = ("no_answer", "busy", "dropped", "call_later")
 
 
@@ -107,34 +129,109 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def insert_contacts(rows: list[dict], campaign: str = "order_confirmation") -> int:
+def insert_contacts(rows: list[dict], campaign_id: int, call_type: str) -> int:
+    """Add rows to a campaign. A row's "extra" (the sheet's other columns) is kept as JSON."""
     with connect() as conn:
         for r in rows:
             conn.execute(
-                f"INSERT INTO contacts ({', '.join(CONTACT_COLUMNS)}, campaign, created_at) "
-                f"VALUES ({', '.join('?' for _ in CONTACT_COLUMNS)}, ?, ?)",
-                [str(r.get(c, "") or "") for c in CONTACT_COLUMNS] + [campaign, now_iso()],
+                f"INSERT INTO contacts ({', '.join(CONTACT_COLUMNS)}, campaign, campaign_id, extra, created_at) "
+                f"VALUES ({', '.join('?' for _ in CONTACT_COLUMNS)}, ?, ?, ?, ?)",
+                [str(r.get(c, "") or "") for c in CONTACT_COLUMNS]
+                + [call_type, campaign_id, json.dumps(r.get("extra") or {}, ensure_ascii=False), now_iso()],
             )
     return len(rows)
 
 
-def list_contacts() -> list[dict]:
-    """Every contact with a summary of its latest call (for the board on the dashboard)."""
+def _json(value, default):
+    try:
+        return json.loads(value) if value else default
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def list_contacts(campaign_id: int | None = None) -> list[dict]:
+    """Contacts with a summary of their latest call (for the call list), one campaign or all."""
+    where, args = ("WHERE k.campaign_id = ?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
         rows = conn.execute(
             "SELECT k.*, c.id AS last_call_id, c.outcome_details AS last_details, c.recording AS last_recording, "
-            "c.duration_sec AS last_duration, c.error AS last_error "
+            "c.duration_sec AS last_duration, c.error AS last_error, g.name AS campaign_name "
             "FROM contacts k LEFT JOIN calls c ON c.id = (SELECT id FROM calls WHERE contact_id = k.id ORDER BY id DESC LIMIT 1) "
-            "ORDER BY k.id DESC")
+            f"LEFT JOIN campaigns g ON g.id = k.campaign_id {where} ORDER BY k.id DESC", args)
         out = []
         for r in rows:
             d = dict(r)
-            try:
-                d["last_details"] = json.loads(d["last_details"]) if d["last_details"] else {}
-            except (TypeError, json.JSONDecodeError):
-                d["last_details"] = {}
+            d["last_details"] = _json(d["last_details"], {})
+            d["extra"] = _json(d.get("extra"), {})
             out.append(d)
         return out
+
+
+# --- campaigns -------------------------------------------------------------------------------------
+
+def _campaign_row(r) -> dict:
+    d = dict(r)
+    d["facts"] = _json(d.get("facts"), {})
+    d["settings"] = _json(d.get("settings"), {})
+    return d
+
+
+def create_campaign(name: str, call_type: str, facts: dict, last_call_date: str = "") -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO campaigns (name, call_type, facts, settings, last_call_date, created_at) VALUES (?, ?, ?, '{}', ?, ?)",
+            (name, call_type, json.dumps(facts, ensure_ascii=False), last_call_date or None, now_iso()))
+        return cur.lastrowid
+
+
+def get_campaign(campaign_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
+    return _campaign_row(row) if row else None
+
+
+def update_campaign(campaign_id: int, **fields) -> None:
+    """Change name, facts, settings or last_call_date."""
+    sets, args = [], []
+    for key in ("name", "facts", "settings", "last_call_date"):
+        if key in fields:
+            value = fields[key]
+            sets.append(f"{key}=?")
+            args.append(json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else (value or None))
+    if sets:
+        with connect() as conn:
+            conn.execute(f"UPDATE campaigns SET {', '.join(sets)} WHERE id=?", (*args, campaign_id))
+
+
+def delete_campaign(campaign_id: int) -> None:
+    """The campaign and its contacts. Call records stay (history and spending still count them)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM contacts WHERE campaign_id=?", (campaign_id,))
+        conn.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+
+
+def list_campaigns() -> list[dict]:
+    """Every campaign, newest first, with how its list stands."""
+    with connect() as conn:
+        camps = [_campaign_row(r) for r in conn.execute("SELECT * FROM campaigns ORDER BY id DESC")]
+        counts: dict[int, dict] = {}
+        for r in conn.execute("SELECT campaign_id, status, COUNT(*) AS n FROM contacts GROUP BY campaign_id, status"):
+            counts.setdefault(r["campaign_id"], {})[r["status"]] = r["n"]
+        last = {r["campaign_id"]: r["at"] for r in conn.execute(
+            "SELECT k.campaign_id, MAX(c.started_at) AS at FROM calls c JOIN contacts k ON k.id = c.contact_id GROUP BY k.campaign_id")}
+    for c in camps:
+        by = counts.get(c["id"], {})
+        c["by_status"] = by
+        c["total"] = sum(by.values())
+        c["pending"] = by.get("pending", 0)
+        c["last_call_at"] = last.get(c["id"])
+    return camps
+
+
+def do_not_call_phones() -> set[str]:
+    """Numbers that asked not to be called, in any campaign. No campaign rings them again."""
+    with connect() as conn:
+        return {r["phone"] for r in conn.execute("SELECT DISTINCT phone FROM contacts WHERE status='do_not_call' AND phone != ''")}
 
 
 def get_call(call_id: int) -> dict | None:
@@ -161,9 +258,12 @@ def get_contact(contact_id: int) -> dict | None:
         return dict(row) if row else None
 
 
-def clear_contacts() -> None:
+def clear_contacts(campaign_id: int | None = None) -> None:
     with connect() as conn:
-        conn.execute("DELETE FROM contacts")
+        if campaign_id:
+            conn.execute("DELETE FROM contacts WHERE campaign_id=?", (campaign_id,))
+        else:
+            conn.execute("DELETE FROM contacts")
 
 
 def clear_calls() -> None:
@@ -172,15 +272,19 @@ def clear_calls() -> None:
         conn.execute("UPDATE contacts SET status='pending', attempts=0, last_call_at=NULL, next_try_at=NULL, last_result=NULL")
 
 
-def requeue_contacts(ids: list[int] | None = None, statuses: tuple[str, ...] | None = None) -> int:
-    """Put contacts back in the queue to be called again (chosen by id, or by current status)."""
+def requeue_contacts(ids: list[int] | None = None, statuses: tuple[str, ...] | None = None,
+                     campaign_id: int | None = None) -> int:
+    """Put contacts back in the queue to be called again (chosen by id, or by current status,
+    within one campaign when campaign_id is given)."""
     with connect() as conn:
         if ids:
             marks = ",".join("?" for _ in ids)
             cur = conn.execute(f"UPDATE contacts SET status='pending', attempts=0, next_try_at=NULL WHERE id IN ({marks})", ids)
         elif statuses:
             marks = ",".join("?" for _ in statuses)
-            cur = conn.execute(f"UPDATE contacts SET status='pending', attempts=0, next_try_at=NULL WHERE status IN ({marks})", statuses)
+            scope, extra = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
+            cur = conn.execute(f"UPDATE contacts SET status='pending', attempts=0, next_try_at=NULL "
+                               f"WHERE status IN ({marks}){scope}", (*statuses, *extra))
         else:
             return 0
         return cur.rowcount
@@ -224,8 +328,9 @@ def callbacks() -> list[dict]:
     marks = ",".join("?" for _ in RETRY_STATUSES)
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT k.*, c.outcome_details AS last_details, c.id AS last_call_id FROM contacts k "
+            f"SELECT k.*, c.outcome_details AS last_details, c.id AS last_call_id, g.name AS campaign_name FROM contacts k "
             "LEFT JOIN calls c ON c.id = (SELECT id FROM calls WHERE contact_id = k.id ORDER BY id DESC LIMIT 1) "
+            "LEFT JOIN campaigns g ON g.id = k.campaign_id "
             f"WHERE k.status IN ({marks}) ORDER BY (k.next_try_at IS NULL) DESC, k.next_try_at, k.id", RETRY_STATUSES)
         out = []
         for r in rows:
@@ -238,35 +343,43 @@ def callbacks() -> list[dict]:
         return out
 
 
-def next_to_call(max_attempts: int) -> dict | None:
+# A number that asked not to be called in ANY campaign is skipped by every campaign.
+_NOT_BLOCKED = "phone NOT IN (SELECT phone FROM contacts WHERE status='do_not_call' AND phone != '')"
+
+
+def next_to_call(max_attempts: int, campaign_id: int | None = None) -> dict | None:
     """The next contact the campaign should dial: never-called contacts first (in sheet order),
     then no-answer / busy retries whose time has come."""
+    scope, sargs = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
-        row = conn.execute("SELECT * FROM contacts WHERE status='pending' ORDER BY id LIMIT 1").fetchone()
+        row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope} ORDER BY id LIMIT 1",
+                           sargs).fetchone()
         if row:
             return dict(row)
         marks = ",".join("?" for _ in RETRY_STATUSES)
         # A customer who asked to be called later is called later however many tries it took.
         row = conn.execute(
             f"SELECT * FROM contacts WHERE status IN ({marks}) AND (status='call_later' OR attempts < ?) "
-            "AND (next_try_at IS NULL OR next_try_at <= ?) ORDER BY next_try_at, id LIMIT 1",
-            (*RETRY_STATUSES, max_attempts, now_iso()),
+            f"AND (next_try_at IS NULL OR next_try_at <= ?) AND {_NOT_BLOCKED}{scope} ORDER BY next_try_at, id LIMIT 1",
+            (*RETRY_STATUSES, max_attempts, now_iso(), *sargs),
         ).fetchone()
         return dict(row) if row else None
 
 
-def contact_counts(max_attempts: int) -> dict:
+def contact_counts(max_attempts: int, campaign_id: int | None = None) -> dict:
     """How the list stands: by status, plus what the campaign still has to do."""
+    scope, sargs = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
-        by = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM contacts GROUP BY status")}
+        by = {r["status"]: r["n"] for r in conn.execute(
+            f"SELECT status, COUNT(*) AS n FROM contacts WHERE 1=1{scope} GROUP BY status", sargs)}
         marks = ",".join("?" for _ in RETRY_STATUSES)
         retry_left = conn.execute(
-            f"SELECT COUNT(*) AS n FROM contacts WHERE status IN ({marks}) AND (status='call_later' OR attempts < ?)",
-            (*RETRY_STATUSES, max_attempts)).fetchone()["n"]
+            f"SELECT COUNT(*) AS n FROM contacts WHERE status IN ({marks}) AND (status='call_later' OR attempts < ?){scope}",
+            (*RETRY_STATUSES, max_attempts, *sargs)).fetchone()["n"]
         retry_due = conn.execute(
             f"SELECT COUNT(*) AS n FROM contacts WHERE status IN ({marks}) AND (status='call_later' OR attempts < ?) "
-            "AND (next_try_at IS NULL OR next_try_at <= ?)",
-            (*RETRY_STATUSES, max_attempts, now_iso())).fetchone()["n"]
+            f"AND (next_try_at IS NULL OR next_try_at <= ?){scope}",
+            (*RETRY_STATUSES, max_attempts, now_iso(), *sargs)).fetchone()["n"]
     return {"by_status": by, "total": sum(by.values()), "pending": by.get("pending", 0),
             "retry_left": retry_left, "retry_due": retry_due,
             "to_call": by.get("pending", 0) + retry_left}
@@ -320,12 +433,14 @@ def finish_call(call_id: int, *, outcome: str | None, outcome_details: dict | No
         conn.execute(f"UPDATE contacts SET {', '.join(sets)} WHERE id=?", (*args, row["contact_id"]))
 
 
-def list_calls(limit: int = 100) -> list[dict]:
+def list_calls(limit: int = 100, campaign_id: int | None = None) -> list[dict]:
+    where, args = ("WHERE k.campaign_id = ?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
         rows = conn.execute(
-            "SELECT c.*, k.customer_name, k.order_id, k.phone FROM calls c "
-            "LEFT JOIN contacts k ON k.id = c.contact_id ORDER BY c.id DESC LIMIT ?",
-            (limit,),
+            "SELECT c.*, k.customer_name, k.order_id, k.phone, k.campaign_id, g.name AS campaign_name FROM calls c "
+            "LEFT JOIN contacts k ON k.id = c.contact_id LEFT JOIN campaigns g ON g.id = k.campaign_id "
+            f"{where} ORDER BY c.id DESC LIMIT ?",
+            (*args, limit),
         )
         out = []
         for r in rows:
@@ -472,10 +587,13 @@ def stats(period: str = "today") -> dict:
         "period": period, "calls": total, "answered": len(answered),
         "answer_rate": round(100 * len(answered) / total) if total else None,
         "confirmed": by.get("confirmed", 0), "changed": by.get("changed", 0),
+        "interested": by.get("interested", 0) + by.get("already_booked", 0),
+        "not_interested": by.get("not_interested", 0),
         "cancelled": by.get("cancelled", 0), "no_answer": by.get("no_answer", 0) + by.get("busy", 0),
         "busy": by.get("busy", 0), "dropped": by.get("dropped", 0), "call_later": by.get("call_later", 0),
         "call_back": call_back,
-        "needs_review": by.get("unclear", 0) + by.get("error", 0) + by.get("wrong_number", 0) + by.get("do_not_call", 0),
+        "needs_review": by.get("unclear", 0) + by.get("error", 0) + by.get("wrong_number", 0) + by.get("do_not_call", 0)
+        + by.get("not_ordered", 0),
         "talk_seconds": round(talk),
         "avg_seconds": round(talk / len(answered)) if answered else None,
         "cost_rs": round(sum(call_cost(r["channel"], r["duration_sec"], r["usage"]) for r in rows), 2),

@@ -23,22 +23,22 @@ from fastapi.responses import Response
 
 from . import db, fillers, vad
 from .config import (DIAL_ONLY_MY_NUMBER, FILLERS, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
-                     OPENAI_REALTIME_MODEL,
-                     PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
+                     OFFERED_MODELS, PAGE_BUILD, STALE_PAGE,
+                     PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_LONG_TURN_SECONDS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
                      PHONE_STUCK_SECONDS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
                      PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, Nudge, run_call
 from .openai_bridge import is_openai_model
-from .prompts import get_prompt, with_language
+from .call_types import get_prompt
+from .prompts import with_language
 
 log = logging.getLogger("plivo")
 router = APIRouter()
 
 PLIVO_API = "https://api.plivo.com/v1/Account"
 SEND_LEAD_SECONDS = 1.2   # how far ahead of real time we feed audio to the phone
-ALLOWED_MODELS = {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live",
-                  OPENAI_REALTIME_MODEL, "gpt-realtime-2.1", "gpt-realtime-2.1-mini"}
+ALLOWED_MODELS = set(OFFERED_MODELS)   # a dial asking for any other model gets the first of these
 CHUNK_BYTES = 6400  # 200 ms of 16 kHz 16-bit audio; well under Plivo's 16 KB base64 advice
 
 
@@ -133,7 +133,8 @@ class PendingCall:
         self.quiet_run = 0                    # quiet frames since the last loud one
         self.reply_pending = False            # the customer finished; the agent's reply is on its way
         self.reply_due = 0.0
-        self.preroll: deque = deque(maxlen=30)  # last 600 ms, replayed when speech starts
+        self.lost_replies = 0                 # replies in a row thrown away before a sound of them was played
+        self.preroll: deque = deque(maxlen=50)  # last second, replayed when speech starts
         self.speech_started = 0.0
         self.last_voiced = 0.0
         self.seg_peak, self.seg_voiced, self.seg_over_agent = 0, 0, False   # for the log line per reply
@@ -159,13 +160,19 @@ class PendingCall:
         self.silence: asyncio.Task | None = None
         self.fmt: dict = {"frames": 0}
         self.ids = {"stream": "", "call": ""}
+        self.clear_task: asyncio.Task | None = None   # cutting the agent's audio on a barge-in
         self.resample_state = None
         self.task: asyncio.Task | None = None
 
     async def send_audio(self, pcm24k: bytes) -> None:
         """Called by the agent. Only queues: it must never wait on the phone network, because a
         slow phone line would then stall the Gemini connection until it times out."""
+        if self.reply_pending and not self.in_speech:
+            # The first sound of a reply. A customer sound that began before it is not talking over the
+            # agent: counting it made a 0.1 s noise cut "850 rupaye" off as it began (call 90).
+            self.voiced_run = 0
         self.reply_pending = False
+        self.lost_replies = 0
         pcm16k, self.resample_state = audioop.ratecv(pcm24k, 2, 1, 24000, 16000, self.resample_state)
         for i in range(0, len(pcm16k), CHUNK_BYTES):
             self.outbox.put_nowait(pcm16k[i:i + CHUNK_BYTES])
@@ -318,7 +325,8 @@ class PendingCall:
         """Is the agent's voice still coming out of the customer's phone? On a line with echo
         (speakerphone) the tail arrives late, so allow longer before trusting the line again."""
         echo = self.echo_sum / max(1, self.echo_n)
-        return now < self.play_until + (0.8 if echo > 100 else 0.3)
+        # Audio still queued counts: it is about to play, though play_until has not caught up with it yet.
+        return not self.outbox.empty() or now < self.play_until + (0.8 if echo > 100 else 0.3)
 
     def boost(self, pcm: bytes) -> bytes:
         """Bring a soft or distant voice up to a normal level before the agent hears it."""
@@ -372,23 +380,35 @@ class PendingCall:
                     self.voiced_run = 0
             # How much sound counts as "the customer is talking":
             # - 120 ms normally: rules out clicks, pops and knocks.
-            # - 240 ms over the agent: a cough or a "hmm" must not cut the agent off mid-sentence.
+            # - 400 ms over the agent: a cough, a "hmm" or a knock must not cut the agent off mid-sentence.
+            #   Was 240 ms; on 30 Sep 2026 sounds of 0.0 to 0.2 s of voice still wiped whole replies (call 105).
             # - 400 ms while the agent is preparing its reply. Any start marker in that gap throws
             #   the reply away; on real calls a breath or a bump there cost 4 to 8 s of silence.
             #   A customer who really carries on talking easily passes 400 ms.
+            # - 900 ms while the agent is preparing its reply, once a reply has already been thrown away
+            #   like that. On call 90 each "hello?" threw away the reply to the one before, and the customer
+            #   heard nothing for 35 s. A real sentence still gets through; a "hello" waits for the reply.
             # The pre-roll is replayed when speech starts, so waiting loses no audio.
             self.seg_over_agent = self.agent_talking(now)
             if now > self.reply_due:
                 self.reply_pending = False
-            need = 12 if self.seg_over_agent else 20 if self.reply_pending else 6
+            need = 20 if self.seg_over_agent else (45 if self.lost_replies else 20) if self.reply_pending else 6
             if self.voiced_run < need:
                 self.stats["silenced"] += 1
                 return self.waiting_check(now)
+            if self.reply_pending and not self.seg_over_agent:
+                self.lost_replies += 1   # this start marker throws away the reply being prepared
             self.in_speech, self.voiced_run, self.quiet_run = True, 0, 0
             self.speech_started = self.last_voiced = now
             self.seg_peak, self.seg_voiced = 0, 0
             out = [ACTIVITY_START, *(self.boost(f) for f in self.preroll)]
             self.preroll.clear()
+            if self.seg_over_agent and self.meta.get("provider") == "openai":
+                # OpenAI finishes writing a reply in about a second, long before the phone has
+                # played it, and only reports a barge-in while it is still writing. So the agent
+                # talked straight over the customer (call 70). Cut the queued audio here instead.
+                log.info("customer talked over the agent; stopping its audio")
+                self.clear_task = asyncio.get_running_loop().create_task(self.send_event({"type": "interrupted"}))
             return out
         if voiced:
             self.last_voiced = now
@@ -404,7 +424,12 @@ class PendingCall:
         # The gated-line bonus only after a question with a long answer (an address, a number): a
         # "haan ji" has no second burst to wait for, and the bonus cost 0.6 s on every turn of call 54.
         long_answer = self.end_silence > PHONE_END_SILENCE_MS / 1000
-        pause = self.end_silence + (0.6 if self.gated_line and long_answer else 0.0)
+        if long_answer and now - self.speech_started > PHONE_LONG_TURN_SECONDS:
+            # Talking this long after "address batayein?" with no long pause: they are repeating
+            # something, not thinking between address parts (call 101). The usual pause closes it.
+            pause = PHONE_END_SILENCE_MS / 1000
+        else:
+            pause = self.end_silence + (0.6 if self.gated_line and long_answer else 0.0)
         if now - self.last_voiced >= pause or now - self.speech_started > 20:
             self.in_speech = False
             self.reply_pending, self.reply_due = True, now + 8   # cleared when the agent's audio arrives
@@ -483,6 +508,11 @@ class PendingCall:
             self.recorder = None
 
     async def send_event(self, evt: dict) -> None:
+        if evt.get("type") == "heard_nothing":
+            # Gemini heard no words in that sound (a "hmm", a breath) and its reply will be held back
+            # (live_bridge), so no reply is on its way: listen for the real answer as usual, not with
+            # the stricter bar that protects a reply in preparation.
+            self.reply_pending = False
         if evt.get("type") == "turn_complete":
             self.greeting_generated = True
             # After "address batayein?" the answer is long and comes with pauses; give it time.
@@ -560,8 +590,11 @@ async def _expire(token: str, seconds: float) -> None:
 
 
 @router.post("/api/calls/dial/{contact_id}")
-async def dial(contact_id: int, voice: str = GEMINI_VOICE, to: str = "", model: str = "", language: str = "") -> dict:
+async def dial(contact_id: int, voice: str = GEMINI_VOICE, to: str = "", model: str = "", language: str = "",
+               build: str = "") -> dict:
     """Place one real phone call. This costs money: Plivo per minute plus Gemini per minute."""
+    if build != PAGE_BUILD:
+        raise HTTPException(409, STALE_PAGE)
     missing = plivo_missing()
     if missing:
         raise HTTPException(400, f"Plivo is not set up yet. Missing: {', '.join(missing)}")
@@ -604,7 +637,7 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
 
     db.mark_calling(contact["id"])
     # Get the agent ready while the phone rings, so it can greet the moment they pick up.
-    pc = PendingCall(contact, voice, model if model in ALLOWED_MODELS else GEMINI_LIVE_MODEL, to_number)
+    pc = PendingCall(contact, voice, model if model in ALLOWED_MODELS else OFFERED_MODELS[0], to_number)
     pc.token = token
     pc.request_uuid = str(r.json().get("request_uuid") or "")   # lets us cancel while it is still ringing
     PENDING[token] = pc

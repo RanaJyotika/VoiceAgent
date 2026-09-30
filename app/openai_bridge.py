@@ -35,6 +35,7 @@ from websockets.asyncio.client import connect as ws_connect
 
 from .config import (OPENAI_API_KEY, OPENAI_REALTIME_MODEL, OPENAI_TRANSCRIBE_LANGUAGE,
                      OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICES, VOICES)
+from .prompts import OPENAI_ACCENT
 from .tools import TOOLS
 
 log = logging.getLogger("openai")
@@ -83,10 +84,10 @@ def _json_schema(node: Any) -> Any:
     return out
 
 
-def openai_tools() -> list[dict]:
-    """The same three tools the Gemini agent has, in OpenAI's shape."""
+def openai_tools(tools: list | None = None) -> list[dict]:
+    """The same tools the Gemini agent has on this call, in OpenAI's shape."""
     out = []
-    for tool in TOOLS:
+    for tool in tools if tools is not None else TOOLS:
         for fd in tool.function_declarations or []:
             out.append({"type": "function", "name": fd.name, "description": fd.description or "",
                         "parameters": _json_schema(fd.parameters) or {"type": "object", "properties": {}}})
@@ -450,7 +451,8 @@ def _session_payload(dialect: str, prompt: str, voice: str, tools: list[dict], m
     }}
 
 
-async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label: str, manual_vad: bool):
+async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label: str, manual_vad: bool,
+                      tools: list | None = None):
     """Open the socket and settle the session in one wire format. Returns a live session or
     raises, so the caller can try the other format."""
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
@@ -459,7 +461,7 @@ async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label:
     ws = await ws_connect(WS_URL.format(model=model), additional_headers=headers,
                           max_size=None, open_timeout=15, ping_interval=20)
     try:
-        await ws.send(json.dumps(_session_payload(dialect, prompt, voice, openai_tools(), manual_vad)))
+        await ws.send(json.dumps(_session_payload(dialect, prompt, voice, openai_tools(tools), manual_vad)))
         # The server answers session.updated when it liked the settings, or error when it did not.
         while True:
             evt = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
@@ -478,18 +480,21 @@ async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label:
 
 
 @contextlib.asynccontextmanager
-async def connect(*, model: str = "", prompt: str, voice: str, label: str = "", manual_vad: bool = True):
+async def connect(*, model: str = "", prompt: str, voice: str, label: str = "", manual_vad: bool = True,
+                  tools: list | None = None):
     """A live OpenAI session, as an async context manager so live_bridge can enter it exactly
     the way it enters a Gemini one."""
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not set in .env")
     model = model or OPENAI_REALTIME_MODEL
     oa_voice = voice_for(voice)
+    prompt = prompt + OPENAI_ACCENT   # same script as Gemini, plus which Hindi to speak
     last: Exception | None = None
     session = None
     for dialect in ("ga", "beta"):
         try:
-            session = await _try_dialect(model, dialect, prompt, voice=oa_voice, label=label, manual_vad=manual_vad)
+            session = await _try_dialect(model, dialect, prompt, voice=oa_voice, label=label, manual_vad=manual_vad,
+                                            tools=tools)
             log.info("%s: connected to %s (%s wire format, voice %s, transcriber %s%s, turns marked %s)",
                      label, model, dialect, oa_voice, OPENAI_TRANSCRIBE_MODEL,
                      f"/{OPENAI_TRANSCRIBE_LANGUAGE}" if OPENAI_TRANSCRIBE_LANGUAGE else "",
