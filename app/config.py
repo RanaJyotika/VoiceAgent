@@ -84,6 +84,20 @@ def plivo_missing() -> list[str]:
 # customer has finished speaking only when it hears a pause, so we turn low-level sound into
 # true silence before sending it on. Set NOISE_GATE=false to switch this off.
 NOISE_GATE = os.getenv("NOISE_GATE", "true").lower() != "false"
+# WebRTC noise suppression and echo cancellation on the customer's audio (app/line_audio.py), 6 Oct 2026.
+# "detector": our own listening (speech detector, barge-in, caller gate) hears the cleaned audio and the AI
+#   hears the original, since a speech model trained on noisy audio can understand cleaned audio worse.
+# "all": the AI hears the cleaned audio too. "off": no clean-up.
+AUDIO_CLEANUP = os.getenv("AUDIO_CLEANUP", "detector").lower()
+NOISE_SUPPRESSION = os.getenv("NOISE_SUPPRESSION", "true").lower() != "false"
+ECHO_CANCEL = os.getenv("ECHO_CANCEL", "true").lower() != "false"
+# The caller's voice fingerprint (app/voiceprint.py), owner 6 Oct 2026: is this voice the customer or someone else
+# near the phone? "log": only writes what it would decide; "on": decides; "off". Tested on our recordings with a
+# 0.6 s clip: under 0.12 is clearly someone else (about half of other voices, none of the caller's own clips);
+# 0.42 and over is clearly the caller.
+VOICEPRINT = os.getenv("VOICEPRINT", "log").lower()
+VOICEPRINT_OTHER = float(os.getenv("VOICEPRINT_OTHER", "0.12"))
+VOICEPRINT_CALLER = float(os.getenv("VOICEPRINT_CALLER", "0.42"))
 # Languages the customer is expected to speak, as a hint for the written transcript only
 # (e.g. "hi-IN,en-IN"). Off by default: on a real call it changed nothing (Hindi was still written
 # in Urdu and Gurmukhi script), and that call was the first to hit Gemini "1011 internal error".
@@ -98,40 +112,105 @@ PHONE_VAD = os.getenv("PHONE_VAD", "manual").lower()
 # Was 600 ms. On call 45 a customer said two sentences 0.8 s apart; the first went to Gemini as a
 # finished turn, the second interrupted the reply being made, and the answer came 5.6 s later.
 # A 900 ms pause keeps such sentences in one turn at the cost of 0.3 s on every reply.
-PHONE_END_SILENCE_MS = int(os.getenv("PHONE_END_SILENCE_MS", "900"))
+# 1 Oct 2026: down to 650 ms on test, the gap before every reply still felt too long. Now only for
+# sentences: a short answer has its own, shorter pause (PHONE_SHORT_END_MS). 800 ms was tried for
+# sentences; back to the owner's 650 ms for the final test (1 Oct 2026).
+# 5 Oct 2026, owner's test values (safe end of the ranges asked for), replayed over 73 recordings against the
+# old ones: pause before a reply 492 -> 345 ms, replies thrown away 128 -> 126, customer sound reaching the agent
+# 56.5% -> 51.8%. The shorter pauses alone split more sentences (156 replies thrown away); the higher
+# thresholds below (barge-in 180, preparing 500, after a lost reply 350) cancel that out.
+# 6 Oct 2026, owner's test values (sentence 150, short 120 under 1000 ms, long 500, preparing 700, after a lost
+# reply 400), replayed over 75 recordings with a 2.8 s reply: pause before a reply 345 -> 146 ms, but replies
+# thrown away by split sentences 119 -> 162, customer sound reaching the agent 52.3% -> 43.8%. 300/150 gave
+# 206 ms, 136 thrown away, 47.1%.
+# Back to 450 on 6 Oct 2026 (owner): at 150 ms calls 155-158 sent the agent 0.0-0.4 s scraps of the customer's
+# sentences ("site par | nahi, main cancel...") and the agents answered half sentences.
+PHONE_END_SILENCE_MS = int(os.getenv("PHONE_END_SILENCE_MS", "450"))   # 150 from earlier on 6 Oct (see below)
+# A turn with less voice than this is a short answer ("haan", "nahi", "hmm", "ji bolo"): nothing more is
+# coming, so it is closed after PHONE_SHORT_END_MS instead of waiting as for a sentence. Owner, 1 Oct 2026.
+# Replayed over 58 recordings: one 650 ms pause for everything closed turns after 660 ms on average
+# with 65 replies thrown away by split sentences; 350 ms short / 800 ms sentence: 557 ms and 64.
+PHONE_SHORT_TURN_MS = int(os.getenv("PHONE_SHORT_TURN_MS", "1000"))   # was 800 (6 Oct 2026)
+PHONE_SHORT_END_MS = int(os.getenv("PHONE_SHORT_END_MS", "250"))   # 120 earlier on 6 Oct, back to 250 with the above
 # ...and after a question whose answer is long (an address, a number, "what did you order"): the
 # customer thinks between parts, and call 53 showed a phone that cuts its own mic between bursts.
-PHONE_LONG_ANSWER_MS = int(os.getenv("PHONE_LONG_ANSWER_MS", "1800"))
+# Was 1800 ms; 900 ms on test from 1 Oct 2026.
+PHONE_LONG_ANSWER_MS = int(os.getenv("PHONE_LONG_ANSWER_MS", "500"))   # was 700 (6 Oct 2026), 900 before 5 Oct
 # ...but only for this long into the answer; after it the usual pause closes the turn. On call 101 the
 # customer answered "address batayein?" by repeating "900 ka order tha" with 1 s gaps, the long pause
 # never came, and the agent said nothing for 15 s. Real addresses ran 10 to 15 s (calls 55, 57, 71),
 # so 10 s keeps an address whole in all but the slowest cases.
 PHONE_LONG_TURN_SECONDS = float(os.getenv("PHONE_LONG_TURN_SECONDS", "10"))
+# Agent audio to the phone: how far ahead of real time it is fed, and the size of each piece.
+# A smaller lead and smaller pieces make the reply start and a barge-in cut sooner; too small and
+# a slow tunnel leaves gaps in the agent's voice. Were 1200 ms and 200 ms until 1 Oct 2026.
+PHONE_SEND_LEAD_MS = int(os.getenv("PHONE_SEND_LEAD_MS", "600"))
+PHONE_OUT_CHUNK_MS = int(os.getenv("PHONE_OUT_CHUNK_MS", "40"))   # was 80 (6 Oct 2026)
+# How much voice it takes to count as the customer talking (plivo_bridge.listen):
+# - over the agent. Was 400 ms: on 30 Sep 2026 coughs and bumps of 0.0 to 0.2 s wiped whole
+#   replies (call 105). 160 ms on test from 1 Oct 2026, for quicker interruptions.
+# - while the agent prepares its reply, once a reply has already been thrown away that way. Was
+#   900 ms: on call 90 each "hello?" threw away the reply to the one before. 260 ms was tried on
+#   1 Oct 2026 and on call 123 faint background voices threw away 12 replies in a row: back to 900.
+#   Owner set 250 ms again for the final test (1 Oct 2026); the caller gate now filters faint voices.
+PHONE_BARGEIN_MS = int(os.getenv("PHONE_BARGEIN_MS", "180"))   # was 160 (5 Oct 2026 test values)
+# - while the agent prepares its reply (before any reply was lost). Was fixed in code at 400 ms.
+PHONE_PREPARING_MS = int(os.getenv("PHONE_PREPARING_MS", "700"))   # was 500 (6 Oct 2026)
+PHONE_AFTER_LOST_REPLY_MS = int(os.getenv("PHONE_AFTER_LOST_REPLY_MS", "400"))   # was 350 (6 Oct 2026), 250 before 5 Oct
+# The caller's own level, locked from their first clear speech, decides whether a new voice is them or
+# someone in the room (call 123: the caller at 44-190% of it, the voices that killed replies at 4-15%).
+# Under LOW: background, ignored. LOW to HIGH: the caller only if it lasts 400 ms (900 ms after a lost
+# reply). Over HIGH: the caller. Tested on 54 recordings with scripts/replay.py before use.
+CALLER_GATE = os.getenv("CALLER_GATE", "true").lower() != "false"
+CALLER_GATE_LOW = float(os.getenv("CALLER_GATE_LOW", "0.15"))
+CALLER_GATE_HIGH = float(os.getenv("CALLER_GATE_HIGH", "0.40"))
+# How long a LOW-to-HIGH voice must last to count as the caller. Replayed over 58 recordings (1 Oct 2026):
+# no gate 71 replies thrown away, 400 ms 64, 600 ms 57; speech sent to the agent 58% -> 57%.
+CALLER_GATE_MID_MS = int(os.getenv("CALLER_GATE_MID_MS", "600"))
 # If the customer has clearly spoken and the agent still has not replied after this many
 # seconds, we tell Gemini "the customer paused" so it answers instead of waiting forever.
-REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "6"))
+REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "4"))   # was 5 (6 Oct 2026), 6 before 5 Oct
 # Manual mode safety nets, both counted from the moment the agent finishes a question:
 # - the line has carried loud sound for this long but nothing was recognised as speech (a hot,
 #   noisy speakerphone line: call 45 lost 25 to 33 s this way, three times) -> tell the agent the
 #   voice is unclear so it repeats the question, and listen more leniently for the rest of the call;
 # - the line has been quiet for this long -> tell the agent to ask "hello ji, awaaz aa rahi hai?".
 PHONE_STUCK_SECONDS = float(os.getenv("PHONE_STUCK_SECONDS", "8"))
-PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "12"))
+# Was 12 s; on call 118 the customer waited 15 s for a reply that never came. 3 s: owner, 1 Oct 2026.
+PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "3"))
+# ...and after that check has gone unanswered, this long again before the goodbye (unchanged at 12 s).
+PHONE_SILENT_GOODBYE_SECONDS = float(os.getenv("PHONE_SILENT_GOODBYE_SECONDS", "12"))
+# The customer said something Gemini could not make out ("<noise>"); the reply to it is held back.
+# If they then stay quiet this long, they are waiting for us: ask them to repeat. Call 118: a quiet
+# "nahi" was heard as noise and the agent said nothing until the 12 s silence nudge.
+PHONE_UNCLEAR_SECONDS = float(os.getenv("PHONE_UNCLEAR_SECONDS", "1.2"))
+# A loud sound after the agent's question that was not a voice (a distorted line, a muffled answer),
+# then quiet for this long: ask them to repeat instead of waiting for the 8 s stuck check. Owner, 1 Oct 2026.
+PHONE_NOISE_ASK_SECONDS = float(os.getenv("PHONE_NOISE_ASK_SECONDS", "1.2"))
 # Save each phone call's audio (the customer's side) as data/recordings/call_<id>.wav, so a bad
 # call can be listened to instead of guessed at from the log. Free; about 2 MB per minute.
 PHONE_RECORD = os.getenv("PHONE_RECORD", "true").lower() != "false"
 RECORDINGS_DIR = DATA_DIR / "recordings"
 
 # --- Filler sounds ---
-# About 3 s pass between the customer finishing and Gemini's first audio. A short "hmm" / "achha"
-# in the agent's own voice, played the moment the customer's turn closes, covers that wait.
-# Clips are made once per voice with Gemini text-to-speech (same voice names as the Live model)
-# and cached in data/fillers/<voice>/. FILLER_GENERATE=false forbids that paid call (a few paise
-# per voice); a voice-neutral keyboard tap is used when no clips exist.
-# Off unless FILLERS=true: on call 72 (25 Sep 2026) the owner found the "hmm" after every reply
-# unnecessary, and it also played after sounds that were not an answer at all.
-FILLERS = os.getenv("FILLERS", "false").lower() == "true"
-FILLER_GENERATE = os.getenv("FILLER_GENERATE", "true").lower() != "false"
+# A short "hmm" / "achha" / "ji" in the agent's own voice when its reply is slow (app/fillers.py). Off since
+# call 72 (25 Sep 2026: after every reply, and after sounds that were not answers); back on 6 Oct 2026 (owner)
+# with rules: only when the reply has not started FILLER_DELAY_MS after a real answer of at least
+# FILLER_MIN_VOICE_MS of voice, at most every other reply, at most FILLER_MAX_PER_CALL per call (0: no limit).
+# The clips are made once with scripts/make_fillers.py; nothing is generated during calls.
+FILLERS = os.getenv("FILLERS", "true").lower() != "false"
+# When, by how long the gap really is (owner, 6 Oct 2026, after call 159: at a fixed 0.7 s the "hmm" landed just
+# before ChatGPT's reply). Each call learns how long its agent takes to answer. A slow agent (FILLER_SLOW_MS or
+# more, Gemini's ~3.5 s) gets the filler FILLER_DELAY_MS into the wait; a fast one only when a reply runs
+# FILLER_LATE_MS past that call's usual time.
+FILLER_DELAY_MS = int(os.getenv("FILLER_DELAY_MS", "1200"))
+FILLER_SLOW_MS = int(os.getenv("FILLER_SLOW_MS", "2500"))
+FILLER_LATE_MS = int(os.getenv("FILLER_LATE_MS", "800"))
+FILLER_MIN_VOICE_MS = int(os.getenv("FILLER_MIN_VOICE_MS", "400"))
+FILLER_MAX_PER_CALL = int(os.getenv("FILLER_MAX_PER_CALL", "0"))
+# Which clips may be played (names in app/fillers.TEXTS). Only "hmm" by default: it carries no accent, and
+# words like "achha" came out with a southern sound in the ChatGPT voices (owner, 6 Oct 2026).
+FILLER_WORDS = [w.strip() for w in os.getenv("FILLER_WORDS", "hmm").split(",") if w.strip()]
 GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
 
 # --- Cost ---
@@ -188,6 +267,10 @@ OPENAI_VOICES = {
     "marin": "female", "coral": "female", "shimmer": "female", "sage": "female", "alloy": "female",
     "cedar": "male", "ash": "male", "echo": "male", "verse": "male", "ballad": "male",
 }
+# Which OpenAI voice speaks for Gauri (female) and Arjun (male); empty = the first of that gender above.
+# Calls 138, 150 and 153 on "marin" kept a South Indian sound, so another can be tried here without a code change.
+OPENAI_VOICE_FEMALE = os.getenv("OPENAI_VOICE_FEMALE", "").strip()
+OPENAI_VOICE_MALE = os.getenv("OPENAI_VOICE_MALE", "").strip()
 # USD per million tokens for OPENAI_REALTIME_MODEL. Cached input is billed at a tenth, which is
 # why it is counted separately: on these calls the repeated prompt is most of the bill.
 OPENAI_PRICE_PER_M = {

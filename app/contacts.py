@@ -21,6 +21,9 @@ EXTRA_ALIASES = {
     "booking_id": "order_id", "booking_no": "order_id",
     # the template's own headers (call_types Column labels)
     "puja_seva": "product", "puja_or_seva": "product", "payment_cod_prepaid": "payment_mode",
+    # abandoned-cart exports (the template's "Items in cart" and "Cart value", and what stores call them)
+    "items_in_cart": "product", "cart_items": "product", "cart": "product", "product_names": "product", "line_items": "product",
+    "cart_value": "amount", "cart_total": "amount", "cart_amount": "amount", "checkout_value": "amount", "total_price": "amount",
 }
 
 ALIASES = {
@@ -165,66 +168,82 @@ def _value(contact: dict, key: str) -> str:
 
 # What the customer said, in the team's words, by the result the agent recorded.
 RESPONSES = {
-    "confirmed": "Accepted", "interested": "Accepted", "changed": "Accepted with changes",
-    "cancelled": "Cancelled", "not_ordered": "Says they did not order", "not_interested": "Denied", "already_booked": "Already booked",
-    "needs_help": "Wants help to book", "call_later": "Call back later", "wrong_number": "Wrong number",
-    "do_not_call": "Do not call again", "unclear": "Unclear, needs review",
+    "confirmed": "Confirmed", "interested": "Interested", "changed": "Confirmed with changes",
+    "cancelled": "Cancelled", "not_ordered": "Says they did not order", "not_interested": "Not interested",
+    "already_booked": "Already booked", "needs_help": "Wants help", "call_later": "Call back later",
+    "wrong_number": "Wrong number", "do_not_call": "Do not call again", "unclear": "Unclear",
+    "wants_to_order": "Wants to order", "already_ordered": "Already ordered",
 }
-# How a call nobody picked up ended, by live_bridge.classify_unanswered's note.
+# How a call nobody picked up ended, by live_bridge.classify_unanswered's note (shown as the reason).
 NOT_PICKED_UP = {
-    "busy": "Line busy", "call rejected": "Call rejected", "no answer": "Not answered",
-    "switched off or not reachable": "Switched off / not reachable", "number does not exist": "Number does not exist",
+    "call rejected": "Call rejected", "switched off or not reachable": "Switched off / not reachable",
+    "number does not exist": "Number does not exist",
 }
 DETAIL_LABELS = {
     "not_interested_reason": "Reason", "cancel_reason": "Reason", "callback_time": "Call back",
-    "new_address": "New address", "new_delivery_date": "New delivery date", "new_product": "Product they named",
-    "mismatch": "Mismatch", "question": "Question", "notes": "Note",
+    "new_delivery_date": "New delivery date", "new_product": "Product they named", "mismatch": "Mismatch",
+    "question": "Question", "notes": "Note", "payment_preference": "Payment", "order_changes": "Changes asked for",
 }
+# A person must check these before acting: the customer changed something, disputed the record, or the
+# result is unclear. Owner, 5 Oct 2026: an address the customer dictated always needs a human to verify it.
+VERIFY_OUTCOMES = ("unclear", "changed", "not_ordered", "needs_help")
+VERIFY_DETAILS = ("new_address", "mismatch", "order_changes", "new_product", "new_delivery_date",
+                  "verify")   # set by our own checks, e.g. an address the customer never said yes to (call 135)
 
 
-def call_result(contact: dict, call: dict | None) -> tuple[str, str]:
-    """(call status, customer response) for one contact, from its latest call: did anyone pick up,
-    and if so what did they say. The response is empty when nobody answered."""
+def call_result(contact: dict, call: dict | None) -> tuple[str, str, str]:
+    """(call status, customer response, why) for one contact, from its latest call. The status is the
+    team's next step at a glance: Picked, Not answered, Caller busy, Call after some time or Needs human
+    verification (and Not called yet / Calling now / Call dropped / No valid phone number)."""
     from .live_bridge import classify_unanswered   # here: live_bridge pulls in the voice agent
     status = contact.get("status") or "pending"
     if status == "calling":
-        return "Calling now", ""
+        return "Calling now", "", ""
     if status == "pending":
-        return "Not called yet", ""             # never rung, or put back in the queue since its last call
+        return "Not called yet", "", ""         # never rung, or put back in the queue since its last call
     if not call:
         # A row the campaign could not ring at all is marked wrong_number without a call.
-        return ("No valid phone number" if status == "wrong_number" else "Not called yet"), ""
+        return ("No valid phone number" if status == "wrong_number" else "Not called yet"), "", ""
     if not call.get("duration_sec"):
         if call.get("error"):
-            return "Not called yet", ""          # our side failed before it rang; the campaign tries again
+            return "Not called yet", "", ""      # our side failed before it rang; the campaign tries again
         note = classify_unanswered(call.get("hangup_cause") or "")[1]
-        return NOT_PICKED_UP.get(note, "Not answered"), ""
+        if note == "busy":
+            return "Caller busy", "", ""
+        return "Not answered", "", NOT_PICKED_UP.get(note, "")
     outcome = call.get("outcome") or ""
     if outcome == "dropped":
-        return "Hung up without reason", ""     # picked up, then the call ended before any answer
-    return "Picked up", RESPONSES.get(outcome, outcome.replace("_", " ").capitalize())
+        return "Call dropped", "", "Picked up, then the call ended before an answer"
+    details = call.get("outcome_details") if isinstance(call.get("outcome_details"), dict) else {}
+    response = RESPONSES.get(outcome, outcome.replace("_", " ").capitalize())
+    if outcome == "call_later":
+        return "Call after some time", response, ""
+    if outcome in VERIFY_OUTCOMES or any(str(details.get(k) or "").strip() for k in VERIFY_DETAILS):
+        return "Needs human verification", response, ""
+    return "Picked", response, ""
 
 
 def build_results(contacts: list[dict], latest_call, call_type: CallType = DEFAULT, campaign_name: str = "") -> bytes:
     """What the team needs from a campaign, one row per contact: the customer's details, why we
-    called, whether they picked up, what they said and why. No transcripts: those stay on the
-    dashboard. latest_call(contact_id) -> the most recent call row for that contact, or None."""
-    reason = (f"Campaign: {campaign_name}" if campaign_name else "Campaign") if call_type.kind == "promotional" \
+    called, whether they picked up, what they said and why, and any address they dictated on the
+    call. No transcripts: those stay on the dashboard. latest_call(contact_id) -> the most recent
+    call row for that contact, or None."""
+    reason = (f"{call_type.name}: {campaign_name}" if campaign_name else call_type.name) if call_type.kind == "promotional" \
         else call_type.name
     header = [c.label for c in call_type.columns] + ["Call reason", "Call status", "Customer response",
-                                                     "Reason / details", "Called on", "Tries"]
+                                                     "Reason / details", "Address given on call", "Called on", "Tries"]
     wb = Workbook()
     ws = wb.active
     ws.title = "results"
     ws.append(header)
     for c in contacts:
         call = latest_call(c["id"])
-        line, response = call_result(c, call)
+        line, response, why = call_result(c, call)
         details = ((call or {}).get("outcome_details") or {}) if response else {}
         if not isinstance(details, dict):
             details = {}
         said = "; ".join(f"{DETAIL_LABELS.get(k, k.replace('_', ' ').capitalize())}: {details[k]}"
-                         for k in call_type.details if str(details.get(k) or "").strip())
+                         for k in call_type.details if k != "new_address" and str(details.get(k) or "").strip())
         when = c.get("last_call_at") or ""
         if when:
             try:
@@ -232,7 +251,7 @@ def build_results(contacts: list[dict], latest_call, call_type: CallType = DEFAU
             except ValueError:
                 pass
         ws.append([_value(c, col.key) for col in call_type.columns]
-                  + [reason, line, response, said, when, c.get("attempts") or 0])
+                  + [reason, line, response, said or why, str(details.get("new_address") or ""), when, c.get("attempts") or 0])
     for cell in ws[1]:
         cell.font = Font(bold=True)
     ws.freeze_panes = "A2"

@@ -67,8 +67,11 @@ async def _start_monitor() -> None:
 
 
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+async def index() -> Response:
+    # The browser kept running yesterday's scripts after a restart (new filters with nothing behind
+    # them). Never cache the page, and tag each script with this server's build so a restart fetches them fresh.
+    page = (STATIC / "index.html").read_text(encoding="utf-8").replace('.js"></script>', f'.js?v={PAGE_BUILD}"></script>')
+    return Response(page, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/config")
@@ -267,8 +270,13 @@ async def template(key: str) -> Response:
 
 
 @app.get("/api/calls")
-async def calls(campaign_id: int | None = None) -> list[dict]:
-    return db.list_calls(campaign_id=campaign_id)
+async def calls(campaign_id: int | None = None, day_from: str | None = None, day_to: str | None = None) -> list[dict]:
+    """day_from / day_to: Indian dates (YYYY-MM-DD), both included. A date range shows up to 1000 calls."""
+    try:
+        return db.list_calls(limit=1000 if day_from or day_to else 100,
+                             campaign_id=campaign_id, day_from=day_from, day_to=day_to)
+    except ValueError:
+        raise HTTPException(400, "Dates must look like 2026-10-05.")
 
 
 @app.get("/api/calls/{call_id}")

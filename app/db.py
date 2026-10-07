@@ -99,7 +99,7 @@ def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
 # group is the call-back queue (rung again when next_try_at comes, up to the campaign's tries);
 # "calling" is set while a call is ringing or in progress.
 FINAL_STATUSES = ("confirmed", "changed", "cancelled", "not_ordered", "wrong_number", "do_not_call", "unclear",
-                  "interested", "not_interested", "already_booked", "needs_help")
+                  "interested", "not_interested", "already_booked", "needs_help", "wants_to_order", "already_ordered")
 RETRY_STATUSES = ("no_answer", "busy", "dropped", "call_later")
 
 
@@ -433,13 +433,30 @@ def finish_call(call_id: int, *, outcome: str | None, outcome_details: dict | No
         conn.execute(f"UPDATE contacts SET {', '.join(sets)} WHERE id=?", (*args, row["contact_id"]))
 
 
-def list_calls(limit: int = 100, campaign_id: int | None = None) -> list[dict]:
-    where, args = ("WHERE k.campaign_id = ?", (campaign_id,)) if campaign_id else ("", ())
+def _ist_midnight(day: str, plus_days: int = 0) -> str:
+    """Start of an Indian day ('YYYY-MM-DD') as the UTC text started_at is stored in."""
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=IST) + timedelta(days=plus_days)
+    return start.astimezone(timezone.utc).isoformat()
+
+
+def list_calls(limit: int = 100, campaign_id: int | None = None,
+               day_from: str | None = None, day_to: str | None = None) -> list[dict]:
+    """Newest first. day_from and day_to are Indian dates, both days included."""
+    where, args = [], []
+    if campaign_id:
+        where.append("k.campaign_id = ?")
+        args.append(campaign_id)
+    if day_from:
+        where.append("c.started_at >= ?")
+        args.append(_ist_midnight(day_from))
+    if day_to:
+        where.append("c.started_at < ?")
+        args.append(_ist_midnight(day_to, 1))
     with connect() as conn:
         rows = conn.execute(
             "SELECT c.*, k.customer_name, k.order_id, k.phone, k.campaign_id, g.name AS campaign_name FROM calls c "
             "LEFT JOIN contacts k ON k.id = c.contact_id LEFT JOIN campaigns g ON g.id = k.campaign_id "
-            f"{where} ORDER BY c.id DESC LIMIT ?",
+            f"{'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY c.id DESC LIMIT ?",
             (*args, limit),
         )
         out = []
@@ -587,7 +604,7 @@ def stats(period: str = "today") -> dict:
         "period": period, "calls": total, "answered": len(answered),
         "answer_rate": round(100 * len(answered) / total) if total else None,
         "confirmed": by.get("confirmed", 0), "changed": by.get("changed", 0),
-        "interested": by.get("interested", 0) + by.get("already_booked", 0),
+        "interested": by.get("interested", 0) + by.get("already_booked", 0) + by.get("wants_to_order", 0) + by.get("already_ordered", 0),
         "not_interested": by.get("not_interested", 0),
         "cancelled": by.get("cancelled", 0), "no_answer": by.get("no_answer", 0) + by.get("busy", 0),
         "busy": by.get("busy", 0), "dropped": by.get("dropped", 0), "call_later": by.get("call_later", 0),

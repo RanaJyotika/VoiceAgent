@@ -216,6 +216,51 @@
   #board thead th { position: sticky; top: 0; background: var(--surface); z-index:1; }
   #cb-rows td { padding: 9px 10px; }
   #cb-rows .when { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  /* ================= history filters: campaign + date picker ================= */
+  .filterbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .filterbar select { flex:0 1 240px; }
+  .filterbar .hint { margin-left:auto; }
+  .datepick { position:relative; }
+  .datebtn { display:inline-flex; align-items:center; gap:8px; padding:9px 12px; white-space:nowrap; }
+  .datebtn svg { width:17px; height:17px; flex:0 0 17px; color: var(--accent); }
+  .datebtn .chev { width:15px; height:15px; color: var(--muted); transition: transform .15s; }
+  .datebtn[aria-expanded="true"] { border-color: var(--accent-2); }
+  .datebtn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  .datebtn.on { background: var(--lav); border-color: var(--lav-2); color: var(--accent); font-weight:600; }
+  .datepop { position:absolute; top: calc(100% + 6px); left:0; z-index: 40; display:flex; background: var(--surface); border:1px solid var(--line);
+             border-radius: 16px; box-shadow: 0 18px 40px -16px rgba(61,35,72,.35), 0 2px 6px rgba(61,35,72,.06); overflow:hidden; }
+  .dp-presets { display:flex; flex-direction:column; gap:2px; padding:10px; border-right:1px solid var(--line); background: var(--bg); min-width: 138px; }
+  .dp-presets button { border:0; background:transparent; text-align:left; padding:7px 10px; border-radius:8px; font-size:13.5px; color: var(--fg); white-space:nowrap; }
+  .dp-presets button:hover { background: var(--lav); }
+  .dp-presets button[aria-pressed="true"] { background: var(--plum); color:#fff; }
+  .dp-cal { padding: 12px 14px 12px; position:relative; }
+  .dp-nav { position:absolute; top:10px; left:10px; right:10px; display:flex; justify-content:space-between; pointer-events:none; }
+  .dp-nav button { pointer-events:auto; width:32px; height:32px; padding:0; display:grid; place-items:center; border-radius:8px; border-color: transparent; }
+  .dp-nav button:hover:not(:disabled) { background: var(--lav); border-color: transparent; }
+  .dp-nav svg { width:17px; height:17px; }
+  .dp-months { display:flex; gap:22px; }
+  .dp-month h4 { margin:0 0 8px; text-align:center; font: 600 14px/32px var(--serif); color: var(--plum); }
+  .dp-grid { display:grid; grid-template-columns: repeat(7, 36px); row-gap:2px; }
+  .dp-grid .dow { font-size:11px; font-weight:600; color: var(--faint); text-align:center; padding:4px 0; text-transform:uppercase; letter-spacing:.04em; }
+  .dp-grid button { height:34px; padding:0; border:0; border-radius:0; background:transparent; font-size:13px; color: var(--fg); font-variant-numeric: tabular-nums; position:relative; }
+  .dp-grid button:hover:not(:disabled) { background: var(--lav); border-radius:8px; }
+  .dp-grid button.today { font-weight:700; color: var(--accent); }
+  .dp-grid button.today::after { content:""; position:absolute; left:50%; bottom:4px; width:4px; height:4px; margin-left:-2px; border-radius:50%; background: currentColor; }
+  .dp-grid button.mid { background: var(--lav); }
+  .dp-grid button.start, .dp-grid button.end { background: var(--plum); color:#fff; border-radius:8px; }
+  .dp-grid button.start.range { border-radius: 8px 0 0 8px; } .dp-grid button.end.range { border-radius: 0 8px 8px 0; }
+  .dp-grid button:disabled { color: var(--lav-2); cursor: default; }
+  .dp-foot { display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  .dp-foot .hint { margin-right:auto; }
+  .dp-foot button { padding:7px 14px; font-size:13.5px; }
+  @media (max-width: 760px) {
+    .datepop { position:fixed; left:16px; right:16px; top:auto; bottom:16px; flex-direction:column; max-height: calc(100vh - 32px); overflow:auto; }
+    .dp-presets { flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:1px solid var(--line); }
+    .dp-months { display:block; }
+    .dp-months .dp-month + .dp-month { display:none; }
+    .dp-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+    .filterbar .hint { margin-left:0; flex-basis:100%; }
+  }
   #cb-rows input[type="datetime-local"] { font: inherit; font-size:13px; padding:5px 8px; border-radius:8px; border:1px solid var(--line); }
   #cb-rows .due { color: var(--good); font-weight:600; font-size:12.5px; }
   #cb-rows .acts { display:flex; gap:6px; flex-wrap:wrap; }
@@ -620,11 +665,38 @@
           <h2>History</h2>
           <span class="hint">Every call, newest first, with its transcript.</span>
           <div class="right">
-            <select id="hist-camp" aria-label="Campaign" style="flex:0 1 220px"><option value="">All campaigns</option></select>
             <button id="clearcalls" class="danger">Clear history</button>
           </div>
         </div>
         <section class="card" id="history">
+          <div class="filterbar">
+            <select id="hist-camp" aria-label="Campaign"><option value="">All campaigns</option></select>
+            <div class="datepick">
+              <button id="dp-btn" class="datebtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="dp-pop">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
+                <span id="dp-label">All dates</span>
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div id="dp-pop" class="datepop" role="dialog" aria-label="Choose dates" hidden>
+                <div class="dp-presets" id="dp-presets">
+                  <button data-preset="">All dates</button><button data-preset="today">Today</button><button data-preset="yesterday">Yesterday</button>
+                  <button data-preset="7">Last 7 days</button><button data-preset="30">Last 30 days</button><button data-preset="month">This month</button>
+                </div>
+                <div class="dp-cal">
+                  <div class="dp-nav">
+                    <button id="dp-prev" aria-label="Previous month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+                    <button id="dp-next" aria-label="Next month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+                  </div>
+                  <div class="dp-months" id="dp-months"></div>
+                  <div class="dp-foot">
+                    <span id="dp-pick" class="hint"></span>
+                    <button id="dp-cancel">Cancel</button><button id="dp-apply" class="primary">Apply</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <span id="hist-hint" class="hint">Showing the latest 100 calls.</span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>#</th><th>Type</th><th>Started</th><th>Customer</th><th>Campaign</th><th>Length</th><th>Outcome</th><th>Cost</th><th>Transcript</th></tr></thead>

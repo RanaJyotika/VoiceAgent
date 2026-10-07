@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable
 
-from .config import BUSINESS_NAME, STORE_NAME
-from .prompts import (GOODBYE, REPLY_WRONG, TAKING_AN_ADDRESS, compose, delivery_line, forms, missing_block,
+from .config import BUSINESS_NAME, PRONUNCIATION, STORE_NAME
+from .prompts import (GOODBYE, REPLY_WRONG, TAKING_AN_ADDRESS, amount_line, compose, delivery_line, forms, missing_block,
                       persona)
 
 # Set by us from the phone line, never by the agent: nobody answered, or the call ended before
@@ -63,10 +63,14 @@ class CallType:
     # The call's main question, as a pattern over the agent's words ("kya aapka order confirm hai?"). A clear
     # yes to it is kept when the call ends before mark_outcome (calls 88 and 92 confirmed, then were lost).
     main_question: str = ""
+    # Results refused once if the agent asked nothing after its opening (calls 133, 134 closed on the first reply).
+    probe_first: tuple[str, ...] = ()
     summary_keys: tuple[str, ...] = field(default=("notes",))   # detail shown as the call's one-line result
     description: str = ""                 # one line on the dashboard: what this call does
     columns: tuple[Column, ...] = ()      # the contact sheet for this type
     facts: tuple[Fact, ...] = ()          # asked once per campaign
+    # The exact first line for the ChatGPT agent, (contact, voice) -> text; "" or None: it makes its own from step 1.
+    greeting: Callable[[dict, str], str] | None = None
 
     def public(self) -> dict:
         """What the dashboard needs to know about this type."""
@@ -118,7 +122,7 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 - Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
 - Product: {contact.get('product') or 'MISSING'}
 - Quantity: {contact.get('quantity') or '1'}
-- Amount: {('Rs ' + str(contact.get('amount'))) if contact.get('amount') else 'MISSING'}
+- Amount: {amount_line(contact, 'MISSING')}
 - Payment: {payment_line}
 - Delivery address: {contact.get('address') or 'MISSING'}
 - Expected delivery: {delivery_line(contact.get('delivery_date'))}
@@ -134,7 +138,11 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         f'- They did not place this order: never offer to cancel. Ask once "kya yeh <name> ji ka number hai?" Not theirs: wrong number. '
         f'Theirs: "koi baat nahi ji, main team ko bata {deti} hoon, team check kar legi. dhanyavaad ji, aapka din shubh ho", '
         'mark_outcome "not_ordered", end_call.',
-        f'- "{BUSINESS_NAME} kaun? Maine to {STORE_NAME} se order kiya": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store hai." Then your question again.',
+        f'- "{BUSINESS_NAME} kaun? Maine to {STORE_NAME} se order kiya": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store hai." Then your question again. '
+        # Call 119: "kisi aur site se kiya tha" was closed as not ordered at once.
+        f'"Maine to kisi aur site se kiya tha": the same, then "kya aapne <product> order kiya tha?"; only a no to that is "did not place this order".',
+        # Call 120 called this off topic and hung up.
+        f'- "Aur kya-kya products hain?": not off topic. "ji, saare products {STORE_NAME} par dekh sakte hain." Then your question again.',
     ]
     replies_last = ['- A bare "nahi" to "kya aapka order confirm hai?": "achha ji, kya galat hai isme?"']
 
@@ -142,8 +150,8 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # 102 the agent never came back to the missing address after the customer disputed the amount.
     flow = f"""THE USUAL ORDER
 1. Greet, then wait: "namaste <name> ji, main {agent_name}, {BUSINESS_NAME} se. bas aapke order ka ek chhota sa confirmation call hai, ek minute baat ho sakti hai?"
-2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?" If an address is on record, add only its area and city ("aur delivery <area>, <city> mein hogi").
-3. Address, if it is MISSING or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
+2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?"
+3. Address, every time (call 122 skipped it). On record: ask it as its own question, "aur delivery <area>, <city> mein hi karni hai na?", and get a yes. MISSING, or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
 4. Close in one turn, then mark_outcome, then end_call:
    - all correct: "ji, order confirm ho gaya" (+ "delivery <date> tak aa jayegi" if Expected delivery gives a date) + "dhanyavaad ji, aapka din shubh ho."
    - after a mismatch: "ji, team verify karke order aage badhayegi. dhanyavaad ji, aapka din shubh ho."
@@ -271,7 +279,7 @@ def _booking_prompt(contact: dict, voice: str, facts: dict | None = None) -> str
 - Temple: {_xv(contact, 'temple') or 'not on record'}
 - Date: {_date_line(_xv(contact, 'puja_date'))}
 - Devotee names (sankalp): {_xv(contact, 'devotee_names') or 'not on record'}
-- Amount: {('Rs ' + str(contact.get('amount'))) if contact.get('amount') else 'not on record'}
+- Amount: {amount_line(contact, 'not on record')}
 - Payment: {payment_line}
 - Notes: {contact.get('notes') or 'none'}
 {other}{missing}"""
@@ -473,7 +481,136 @@ CAMPAIGN_INVITE = CallType(
 )
 
 
-CALL_TYPES: dict[str, CallType] = {t.key: t for t in (ORDER_CONFIRMATION, BOOKING_CONFIRMATION, CAMPAIGN_INVITE)}
+# --- abandoned cart -------------------------------------------------------------------------------
+
+def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
+    agent_name, _ = persona(voice)
+    f = forms(voice)
+    deti = f["deti"]
+    answers = str((facts or {}).get("answers") or "").strip()
+    other = _block("Other details from the sheet:", _other_details(contact, set()))
+    missing = "" if (contact.get("address") or "").strip() else \
+        "\nMISSING (ask; never guess)\n- Address: none on record, so never say one; take it at step 4.\n"
+
+    intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products. The customer "
+             f"put items in their cart on {STORE_NAME} but did not finish the order. You remind them, help if something stopped "
+             "them, and if they want it, take the order for the team to place. Friendly and short, never a sales push.")
+
+    details = f"""CART DETAILS
+- Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
+- In the cart: {contact.get('product') or 'MISSING (ask "aap kya order karna chahte the ji?")'}
+- Quantity: {contact.get('quantity') or '1'}
+- Cart value: {amount_line(contact, 'not on record (never name a price)')}
+- Address on record: {contact.get('address') or 'MISSING'}
+- Notes: {contact.get('notes') or 'none'}
+- Answers to common questions: {answers or 'none'}
+{other}{missing}"""
+
+    # Calls 133 and 134 closed on the customer's first sentence ("Vedic Vaibhav se order kiya tha", "kisi aur site se
+    # kiya tha"). Owner, 5 Oct 2026: stay with the customer and their questions until there is a clear yes or no.
+    replies_first = [
+        '- Wants it ("haan", "order karna hai", "bhej do"), or asks how to pay: step 3.',
+        # Call 140: two "repeat kar dijiye" / "kya order tha?" got the item name and a goodbye.
+        '- "Repeat kar dijiye", "kya order tha?", or a sound you could not make out: say the item and price again in one '
+        'short sentence, then "kya yeh order aap rakhna chahte hain?" Never take it as a no.',
+        f'- "{BUSINESS_NAME} se order kiya tha" or "{STORE_NAME} kya hai?": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi part hai, '
+        'unka online store." Then ALREADY ORDERED.',
+        '- Already ordered ("maine order kar diya"): ALREADY ORDERED.',
+        # Call 182: "baad mein kharidungi, abhi nahi" was recorded as call_later.
+        '- No, not now, "baad mein le lunga", bought it elsewhere, or any excuse: NOT INTERESTED, never call_later.',
+        '- Something stopped them (payment failed, website problem, delivery charge, a question): answer from CART DETAILS if you can, '
+        'put the problem in question, then "toh kya yeh order aap rakhna chahte hain?" A yes: step 3. If only the team can solve it: '
+        f'"main team ko bata {deti} hoon, team aapki madad kar degi", goodbye, mark_outcome "needs_help", end_call. '
+        # Call 167: a freebie question after a clear yes ended the call as needs_help, with no order taken.
+        'After their yes, never needs_help: "yeh team confirm kar degi", put it in question, and carry on with the order.',
+        REPLY_WRONG,
+    ]
+    replies_last = ['- A bare "nahi" to "kya yeh order aap rakhna chahte hain?": NOT INTERESTED.',
+                    '- Until you have a clear yes or a clear no to "kya yeh order aap rakhna chahte hain?", never say goodbye: answer '
+                    'what they said, then ask it again. After a clear yes, never ask it again (call 167 asked it seven times).']
+
+    # Owner, 6 Oct 2026: the opening checks it is the right person first. Calls 155-158 gave the whole offer in one
+    # breath and three of four times the customer asked "aap kahan se bol rahe hain?".
+    # Owner, 7 Oct 2026 (call 173): steps 2-5 in the owner's words; online payment is paid on the site, no address.
+    # Owner, 7 Oct 2026 (call 167): say where you call from in the greeting, and the name only once, in the question.
+    flow = f"""THE USUAL ORDER
+1. Greet, say where you call from and check you have the right person, nothing else, then wait: "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon. kya meri baat <name> ji se ho rahi hai?" The name only there, not after "namaste". (Name MISSING: start at step 2 with "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon.")
+2. After "haan" / "ji boliye" / "bolo": say exactly this, with nothing before it, then wait: "ji, aapne cart mein ek <items> add kiya tha, <quantity> quantity mein, <amount> rupaye mein. kya yeh order aap rakhna chahte hain?" Leave out the amount if it is not on record. If they ask who is calling: "ji, main {agent_name}, {BUSINESS_NAME} se", then this turn.
+3. On a yes: "theek hai ji. payment cash on delivery karenge ya online?" A change they ask for (another item, a different quantity) goes in order_changes; say it back and get a yes.
+   - Online: "theek hai ji, aap site par jaakar hi online pay kar dijiye. dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference "online", then end_call.
+   - Cash on delivery: step 4.
+4. Address. On record: "theek hai ji. delivery <area>, <city> mein hi karni hai na?" and get a yes. MISSING, or they say it changed: "theek hai ji. delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS).
+5. Close in one turn, with exactly these words and nothing added: "dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference "cash on delivery", then end_call.
+{GOODBYE} Never end_call while a question of yours is unanswered."""
+
+    already_ordered = f"""ALREADY ORDERED
+Check it was this cart: "achha ji, kya aapne yahi <items> order kar liya hai?" (never "order confirm kar liya?": it sounds like "shall I confirm it?"). A clear yes: "bahut achha ji. dhanyavaad ji, aapka din shubh ho", mark_outcome "already_ordered", end_call. They ordered something else, or earlier: "ji, toh kya aap <items> bhi order karna chahenge?" and go by their answer. Anything else (a question about price or charges, a "nahi"): answer it, then "toh kya yeh order aap rakhna chahte hain?" Never go to step 3 or 4 before a yes to that."""
+
+    not_interested = f"""NOT INTERESTED
+Never push and never argue, but always ask once what stopped them, even when they gave a reason. Say exactly this, nothing before or after it: "achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?" ("kisi aur site se le liya": "achha ji, wahan se kyun liya, koi khaas wajah?") Then stop and wait for their answer: no goodbye in the same turn.
+Their answer is their second no (owner, call 183): never ask "kya yeh order aap rakhna chahte hain?" again, and never offer a lower price or any change. Say only: "theek hai ji, dhanyavaad. aapka din shubh ho." (A question in their answer: answer it in one sentence first, in the same turn.) mark_outcome "not_interested" with not_interested_reason in their words ("not given" if they would not say), then end_call. Only if they say on their own that they want it after all: step 3."""
+
+    rules = ['- You cannot place the order, take payment, send a link or give a discount yourself: "team place kar degi" is the most you say.']
+
+    return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
+                   details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
+                   sections=[TAKING_AN_ADDRESS, already_ordered, not_interested], rules=rules,
+                   not_mine='not the person named, or "maine kuch cart mein nahi dala"', topic="aapke order")
+
+
+def _cart_greeting(contact: dict, voice: str) -> str:
+    """Step 1 word for word, in Devanagari. Call 177: left to itself, ChatGPT opened with "ठीक है, मैं सबसे पहले
+    अभिवादन के साथ शुरू करता हूँ..." before the greeting."""
+    name = str(contact.get("customer_name") or "").strip()
+    if not name:
+        return ""   # step 1 then runs straight into step 2: left to the agent
+    rahi = "रही" if forms(voice)["rahi"] == "rahi" else "रहा"
+    return (f"नमस्ते जी, मैं {PRONUNCIATION.get(BUSINESS_NAME, BUSINESS_NAME)} से बात कर {rahi} हूँ। "
+            f"क्या मेरी बात {name} जी से हो रही है?")
+
+
+ABANDONED_CART = CallType(
+    key="abandoned_cart",
+    name="Abandoned cart",
+    kind="promotional",
+    outcomes=("wants_to_order", "not_interested", "already_ordered", "needs_help", "call_later", "wrong_number",
+              "do_not_call", "unclear"),
+    positive=("wants_to_order",),
+    details={
+        "payment_preference": "Cash on delivery or online, as the customer said, when they want to order.",
+        "order_changes": "Changes to the cart the customer asked for (an item added or removed, another quantity), for the team.",
+        "new_address": "Delivery address the customer gave or corrected on this call, after you read it back and they said yes.",
+        "not_interested_reason": "Why they do not want it, in their words; 'not given' if they would not say.",
+        "question": "A problem or question only the team can handle (payment failed, website trouble, something you could not answer).",
+        **COMMON_DETAILS,
+    },
+    build_prompt=_cart_prompt,
+    greeting=_cart_greeting,
+    takes_address=True,
+    confirm_question="kya yeh order aap rakhna chahte hain?",
+    # Also "chahengi" to a woman (Gemini, call 160) and "karwana / kara chahenge" (ChatGPT, call 159).
+    # And "karna chahte hain" (ChatGPT, call 168).
+    main_question=r"(order|ऑर्डर)\s+(\S+\s+){0,3}(chahenge|chahengi|chahte|चाहेंगे|चाहेंगी|चाहते)",
+    probe_first=("not_interested", "already_ordered"),
+    summary_keys=("not_interested_reason", "question", "order_changes", "callback_time", "notes"),
+    description="Call customers who left items in their cart: remind them, help, and take the order and address for the team.",
+    columns=(
+        Column("customer_name", "Customer name", True, "Ramesh Kumar"),
+        Column("phone", "Phone", True, "PUT 10 DIGIT NUMBER"),
+        Column("product", "Items in cart", True, "Rudraksha Mala 108 beads"),
+        Column("quantity", "Quantity", False, "1"),
+        Column("amount", "Cart value", False, "1499"),
+        Column("address", "Address", False, "12 MG Road, Indore, MP 452001"),
+        Column("notes", "Notes", False, ""),
+    ),
+    facts=(
+        Fact("answers", "Answers to common customer questions (optional)", long=True,
+             hint="Sabhi products original hain. Cash on delivery available hai. Delivery 5-7 din mein."),
+    ),
+)
+
+
+CALL_TYPES: dict[str, CallType] = {t.key: t for t in (ORDER_CONFIRMATION, BOOKING_CONFIRMATION, CAMPAIGN_INVITE, ABANDONED_CART)}
 DEFAULT = ORDER_CONFIRMATION
 
 

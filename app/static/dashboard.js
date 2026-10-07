@@ -42,6 +42,8 @@
     not_interested: ['', 'x', 'Not interested'],
     already_booked: ['good', 'check', 'Already booked'],
     needs_help: ['warning', 'help', 'Wants help'],
+    wants_to_order: ['good', 'check', 'Wants to order'],
+    already_ordered: ['good', 'check', 'Already ordered'],
     error: ['critical', 'alert', 'Error'],
     none: ['', 'minus', 'No outcome'],
     // contact statuses that are not call outcomes
@@ -449,7 +451,7 @@
   window.resetCampaignForm = () => { formFor = null; };
   const CALLBACK_STATUSES = ['no_answer', 'busy', 'dropped', 'call_later'];
   const PICKED_UP = ['confirmed', 'changed', 'cancelled', 'not_ordered', 'call_later', 'dropped', 'unclear', 'do_not_call',
-    'interested', 'not_interested', 'already_booked', 'needs_help'];
+    'interested', 'not_interested', 'already_booked', 'needs_help', 'wants_to_order', 'already_ordered'];
   // Row 1: where each contact is in the run. Row 2: the exact result. One filter active at a time.
   const STAGE_FILTERS = {
     all: ['All', '', 'minus', () => true],

@@ -34,8 +34,8 @@ from typing import Any
 from websockets.asyncio.client import connect as ws_connect
 
 from .config import (OPENAI_API_KEY, OPENAI_REALTIME_MODEL, OPENAI_TRANSCRIBE_LANGUAGE,
-                     OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICES, VOICES)
-from .prompts import OPENAI_ACCENT
+                     OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICE_FEMALE, OPENAI_VOICE_MALE, OPENAI_VOICES, VOICES)
+from .prompts import openai_accent
 from .tools import TOOLS
 
 log = logging.getLogger("openai")
@@ -43,6 +43,19 @@ log = logging.getLogger("openai")
 WS_URL = "wss://api.openai.com/v1/realtime?model={model}"
 RATE = 24000          # what the Realtime API takes and returns
 MIN_COMMIT_MS = 120   # the API rejects a commit with less than ~100 ms of audio in the buffer
+# Calls 150 and 151 (6 Oct 2026): the opening ran straight on into step 2 ("...ek minute baat ho sakti hai?
+# Ji, aapne ... order kiya tha") without waiting for "haan ji, boliye". Added to the opening reply's instructions.
+OPENING_ONLY = ("\n\nTHIS TURN ONLY: the call has just been answered. Say step 1 of THE USUAL ORDER and nothing more, "
+                "then stop right after its question and wait for the customer to answer (for example 'haan ji, boliye'). "
+                "Nothing from step 2 in this turn. Say it ONCE, written only in Devanagari: never in English letters, "
+                "never twice. Say 'namaste ji' in a normal, even tone, with no stress on it.")   # call 172: said the line in English letters, then again in Devanagari
+# Call 177: answering the opening note itself, it said "ठीक है, मैं सबसे पहले अभिवादन के साथ शुरू करता हूँ..." first.
+# When the call type gives the exact line, no note is sent: the reply's own instructions hold the line.
+OPENING_EXACT = ("\n\nTHE CALL HAS JUST BEEN ANSWERED. Your first words are exactly this line, word for word, in Devanagari, "
+                 "in a normal, even tone, and nothing before or after it (the name the Hindi way): {line}")
+# Whisper writes the customer's words down after the model has already answered. On call 150 the cancel check
+# ran 0.2 s before "कैंसिल कर दो" arrived and refused a real cancellation, so a tool call waits this long at most.
+TRANSCRIPT_WAIT_SECONDS = 2.0
 
 
 def is_openai_model(model: str) -> bool:
@@ -53,6 +66,9 @@ def voice_for(gemini_voice: str) -> str:
     """An OpenAI voice of the same gender as the Gemini voice chosen on the dashboard, so the
     agent stays Gauri (female) or Arjun (male) whichever provider answers the call."""
     want = VOICES.get(gemini_voice, "female")
+    chosen = OPENAI_VOICE_FEMALE if want == "female" else OPENAI_VOICE_MALE
+    if chosen:
+        return chosen
     for name, gender in OPENAI_VOICES.items():
         if gender == want:
             return name
@@ -166,11 +182,32 @@ class _Message:
 class OpenAISession:
     """One Realtime conversation, presenting the handful of methods live_bridge calls."""
 
-    def __init__(self, ws, dialect: str, call_label: str = "", manual_vad: bool = True) -> None:
+    def __init__(self, ws, dialect: str, call_label: str = "", manual_vad: bool = True, prompt: str = "",
+                 greeting: str = "") -> None:
         self.ws = ws
         self.dialect = dialect          # "ga" or "beta"
         self.label = call_label
         self.manual_vad = manual_vad    # we mark the turns (phone) rather than the server (browser)
+        self.prompt = prompt            # the session instructions, repeated in the opening reply's own
+        self.greeting = greeting        # the exact first line, when the call type gives one
+        self._awaiting_tx: set = set()  # customer turns committed whose transcript has not arrived yet
+        self._held_tool: _Message | None = None   # a tool call waiting for that transcript
+        self._release: asyncio.Task | None = None
+        self._got_audio = False         # the reply being made has produced sound
+        # A reply's first spoken part is held until we know whether a second one follows it. Calls 167, 173, 177
+        # and 179: the model spoke a lead-in of its own ("aaiye, ab main ise saaf-saaf khatm kar deta hoon") as a
+        # separate part, then the real reply. When a second spoken part comes, the first is never played.
+        self._first_item = ""           # the reply's first spoken part
+        self._held: list = []           # its messages (sound and words), in order, not yet passed on
+        self._holding = False
+        self._held_text = ""
+        # Only one spoken part of a reply is ever played. Call 180: the greeting came as two identical parts
+        # ("...ho rahi hai?नमस्ते जी...") and both were played.
+        self._played_item = ""
+        self._dropped_text = ""
+        self._tools_spoke = False       # the reply that called the tools waiting for answers had sound in it
+        self._retried = False           # an empty reply was already asked for again this customer turn
+        self._retry = False
         self._tool_buf: list = []       # function calls of the response being read
         self._warned_vad = False
         self._delta_items: set = set()  # customer turns whose transcript already arrived in pieces
@@ -227,24 +264,35 @@ class OpenAISession:
             self._appended_ms = 0.0
             return
         self._appended_ms = 0.0
+        self._retried = False   # a new customer turn: an empty reply to it may be asked for again once
         await self._send({"type": "input_audio_buffer.commit"})
-        await self._send({"type": "response.create"})
-        self._responding = True
+        await self._reply()
 
-    async def _say_user_text(self, text: str) -> None:
+    async def _reply(self, instructions: str = "") -> None:
+        payload: dict = {"type": "response.create"}
+        if instructions:
+            payload["response"] = {"instructions": instructions}   # replaces the session's for this reply only
+        await self._send(payload)
+        self._responding, self._got_audio = True, False
+
+    async def _say_user_text(self, text: str, instructions: str = "") -> None:
         """A text turn: the opening instruction, a typed test reply, or a note from the phone line."""
         await self._send({"type": "conversation.item.create",
                           "item": {"type": "message", "role": "user",
                                    "content": [{"type": "input_text", "text": text}]}})
-        await self._send({"type": "response.create"})
-        self._responding = True
+        await self._reply(instructions)
 
     async def send_client_content(self, turns=None, turn_complete: bool = True) -> None:
         """Gemini's way of starting the call. Same thing here: one user turn, then a reply."""
         text = ""
         for part in getattr(turns, "parts", None) or []:
             text += getattr(part, "text", "") or ""
-        await self._say_user_text(text)
+        # live_bridge's OPENING ("Say your first turn now"), not a reconnect's "[The line is back...]".
+        opening = "first turn" in text and self.prompt
+        if opening and self.greeting:
+            await self._reply(self.prompt + OPENING_EXACT.format(line=self.greeting))
+            return
+        await self._say_user_text(text, self.prompt + OPENING_ONLY if opening else "")
 
     async def send_tool_response(self, *, function_responses) -> None:
         ending = False
@@ -254,14 +302,21 @@ class OpenAISession:
                                        "call_id": getattr(fr, "id", "") or "",
                                        "output": json.dumps(getattr(fr, "response", {}) or {}, ensure_ascii=False)}})
             self._pending_tools = max(0, self._pending_tools - 1)
-            ending = ending or getattr(fr, "name", "") == "end_call"
+            ending = ending or (getattr(fr, "name", "") == "end_call"
+                                and (getattr(fr, "response", {}) or {}).get("status") == "ending")
         if ending:
             # The goodbye has already been spoken and the line is about to close. Asking for
             # another reply here makes the agent start talking over its own hang-up.
             return
-        # The model has its answer; let it carry on speaking.
-        await self._send({"type": "response.create"})
-        self._responding = True
+        plain = all(set((getattr(fr, "response", {}) or {})) <= {"status"}
+                    and (getattr(fr, "response", {}) or {}).get("status") == "recorded" for fr in function_responses or [])
+        if plain and self._tools_spoke:
+            # A result simply written down, by a reply that already said its piece: asking for more makes it say the
+            # same thing again (call 159: "...team tak pahuncha dungi" then "ji, main team ko bata dungi...").
+            await self._q.put(_Message(server_content=_ServerContent(turn_complete=True)))
+            return
+        # The model has something to act on (a refusal, a next step) or has not spoken yet: let it carry on.
+        await self._reply()
 
     # ---- receiving ----
 
@@ -272,7 +327,19 @@ class OpenAISession:
             async for raw in self.ws:
                 evt = json.loads(raw)
                 for msg in self._translate(evt):
+                    if msg.tool_call is not None and self._awaiting_tx:
+                        # The checks on this tool call read the customer's words; let them arrive first.
+                        self._held_tool = msg
+                        self._release = asyncio.create_task(self._release_tool_later())
+                        continue
                     await self._q.put(msg)
+                if self._held_tool is not None and not self._awaiting_tx:
+                    await self._release_tool()
+                if self._retry:
+                    # Call 151: a reply came back with no sound in it, and the agent sat silent for 11 s
+                    # until the silence check asked "hello ji?". Ask for it again, once per customer turn.
+                    self._retry, self._retried = False, True
+                    await self._reply()
                 if self._closed is not None:
                     await self._q.put(None)      # a fatal error event: wake receive() with it
                     return
@@ -285,6 +352,22 @@ class OpenAISession:
             self._closed = ConnectionError("the OpenAI realtime socket closed")
             await self._q.put(None)
 
+    async def _release_tool(self) -> None:
+        msg, self._held_tool = self._held_tool, None
+        if self._release is not None and self._release is not asyncio.current_task():
+            self._release.cancel()
+        self._release = None
+        if msg is not None:
+            await self._q.put(msg)
+
+    async def _release_tool_later(self) -> None:
+        await asyncio.sleep(TRANSCRIPT_WAIT_SECONDS)
+        if self._held_tool is not None:
+            log.info("%s: the customer's transcript did not come within %.0f s; checking the tool call without it",
+                     self.label, TRANSCRIPT_WAIT_SECONDS)
+            self._awaiting_tx.clear()   # a transcript that never comes must not hold up later tool calls
+            await self._release_tool()
+
     def _translate(self, evt: dict) -> list[_Message]:
         kind = evt.get("type", "")
         out: list[_Message] = []
@@ -292,27 +375,61 @@ class OpenAISession:
         if kind in ("response.audio.delta", "response.output_audio.delta"):
             data = base64.b64decode(evt.get("delta") or "")
             if data:
-                out.append(_Message(server_content=_ServerContent(
-                    model_turn=_ModelTurn(parts=[_Part(inline_data=_Blob(data=data))]))))
+                self._got_audio = True
+                self._spoken(evt, _Message(server_content=_ServerContent(
+                    model_turn=_ModelTurn(parts=[_Part(inline_data=_Blob(data=data))]))), out)
 
         elif kind in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
             if evt.get("delta"):
-                out.append(_Message(server_content=_ServerContent(output_transcription=_Text(evt["delta"]))))
+                self._spoken(evt, _Message(server_content=_ServerContent(output_transcription=_Text(evt["delta"]))), out)
+                if self._holding and evt.get("item_id") == self._first_item:
+                    self._held_text += evt["delta"]
+                    # A question is the reply itself, never a lead-in: play it now. Unless it is in English letters
+                    # (call 172: the greeting in English letters, then again in Devanagari): wait for a second part.
+                    deva = sum(1 for ch in self._held_text if "ऀ" <= ch <= "ॿ")
+                    latin = sum(1 for ch in self._held_text if ch.isascii() and ch.isalpha())
+                    if "?" in self._held_text and deva >= latin:
+                        out.extend(self._held)
+                        self._held, self._holding, self._played_item = [], False, self._first_item
+
+        elif kind == "response.created":
+            self._first_item, self._held, self._holding, self._held_text = "", [], True, ""
+            self._played_item, self._dropped_text = "", ""
+
+        elif kind == "response.output_item.added":
+            item = evt.get("item") or {}
+            if (item.get("type") == "message" and self._holding and self._first_item
+                    and item.get("id") != self._first_item):
+                log.info("%s: not played (a lead-in before the reply): %s", self.label, self._held_text.strip()[:200])
+                self._held, self._holding = [], False
 
         elif kind == "conversation.item.input_audio_transcription.delta":
             if evt.get("delta"):
-                self._delta_items.add(evt.get("item_id") or "")
-                out.append(_Message(server_content=_ServerContent(input_transcription=_Text(evt["delta"]))))
+                item, text = evt.get("item_id") or "", evt["delta"]
+                if item not in self._delta_items:
+                    # Each stretch of speech is transcribed on its own, and the first piece has no space in
+                    # front: call 153 wrote "site par" + "nahi" as "परनहीं", and the check never saw the no.
+                    text = " " + text.lstrip()
+                self._delta_items.add(item)
+                out.append(_Message(server_content=_ServerContent(input_transcription=_Text(text))))
+
+        elif kind == "input_audio_buffer.committed":
+            if evt.get("item_id"):
+                self._awaiting_tx.add(evt["item_id"])
+
+        elif kind == "conversation.item.input_audio_transcription.failed":
+            self._awaiting_tx.discard(evt.get("item_id") or "")
 
         elif kind == "conversation.item.input_audio_transcription.completed":
             # The finished transcript repeats everything the deltas already carried. Adding both
             # wrote every customer turn down twice ("160036160036" on call 60), which doubled the
             # tokens and left the agent reading digits that were never said.
             item = evt.get("item_id") or ""
+            self._awaiting_tx.discard(item)
             if item in self._delta_items:
                 self._delta_items.discard(item)
             elif evt.get("transcript"):
-                out.append(_Message(server_content=_ServerContent(input_transcription=_Text(evt["transcript"]))))
+                out.append(_Message(server_content=_ServerContent(input_transcription=_Text(" " + evt["transcript"].strip()))))
 
         elif kind == "input_audio_buffer.speech_started":
             if self.manual_vad:
@@ -342,11 +459,24 @@ class OpenAISession:
         elif kind == "response.done":
             self._responding = False
             resp = evt.get("response") or {}
+            status = resp.get("status") or ""
+            if self._holding and status != "cancelled":
+                out.extend(self._held)   # only one spoken part: it was the reply
+            self._held, self._holding = [], False
+            if self._dropped_text.strip():
+                log.info("%s: not played (a second spoken part of the same reply): %s", self.label,
+                         self._dropped_text.strip()[:200])
+            if not self._got_audio and not self._tool_buf and status != "cancelled":
+                log.warning("%s: the reply came back with no sound (status %s, %s)%s", self.label, status,
+                            json.dumps(resp.get("status_details") or {}, ensure_ascii=False)[:200],
+                            "; already asked again once" if self._retried else "; asking for it again")
+                self._retry = not self._retried
             usage = self._usage(resp.get("usage") or {})
             if usage is not None:
                 out.append(_Message(usage_metadata=usage))
             if self._tool_buf:
                 self._pending_tools = len(self._tool_buf)
+                self._tools_spoke = self._got_audio
                 out.append(_Message(tool_call=_ToolCall(function_calls=self._tool_buf)))
                 self._tool_buf = []
             else:
@@ -363,6 +493,21 @@ class OpenAISession:
                 self._closed = RuntimeError(f"OpenAI billing: {err.get('message')}")
 
         return out
+
+    def _spoken(self, evt: dict, msg: _Message, out: list) -> None:
+        """Pass on a piece of the reply's sound or words, or hold it while it belongs to the first spoken part."""
+        item = evt.get("item_id") or ""
+        if self._holding and not self._first_item:
+            self._first_item = item
+        if self._holding and item == self._first_item:
+            self._held.append(msg)
+        elif self._played_item and item != self._played_item:
+            sc = msg.server_content
+            if sc is not None and sc.output_transcription is not None:
+                self._dropped_text += sc.output_transcription.text
+        else:
+            self._played_item = item
+            out.append(msg)
 
     def _usage(self, u: dict) -> _Usage | None:
         if not u:
@@ -452,7 +597,7 @@ def _session_payload(dialect: str, prompt: str, voice: str, tools: list[dict], m
 
 
 async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label: str, manual_vad: bool,
-                      tools: list | None = None):
+                      tools: list | None = None, greeting: str = ""):
     """Open the socket and settle the session in one wire format. Returns a live session or
     raises, so the caller can try the other format."""
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
@@ -469,7 +614,7 @@ async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label:
             if kind in ("session.updated", "session.created"):
                 if kind == "session.created":
                     continue   # the greeting event; the answer to our update is still coming
-                return OpenAISession(ws, dialect, label, manual_vad=manual_vad)
+                return OpenAISession(ws, dialect, label, manual_vad=manual_vad, prompt=prompt, greeting=greeting)
             if kind == "error":
                 err = evt.get("error") or {}
                 raise RuntimeError(f"{err.get('code')}: {err.get('message')}")
@@ -481,20 +626,20 @@ async def _try_dialect(model: str, dialect: str, prompt: str, voice: str, label:
 
 @contextlib.asynccontextmanager
 async def connect(*, model: str = "", prompt: str, voice: str, label: str = "", manual_vad: bool = True,
-                  tools: list | None = None):
+                  tools: list | None = None, greeting: str = ""):
     """A live OpenAI session, as an async context manager so live_bridge can enter it exactly
     the way it enters a Gemini one."""
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not set in .env")
     model = model or OPENAI_REALTIME_MODEL
     oa_voice = voice_for(voice)
-    prompt = prompt + OPENAI_ACCENT   # same script as Gemini, plus which Hindi to speak
+    prompt = prompt + openai_accent(voice)   # same script as Gemini, plus which Hindi to speak, in the agent's gender
     last: Exception | None = None
     session = None
     for dialect in ("ga", "beta"):
         try:
             session = await _try_dialect(model, dialect, prompt, voice=oa_voice, label=label, manual_vad=manual_vad,
-                                            tools=tools)
+                                            tools=tools, greeting=greeting)
             log.info("%s: connected to %s (%s wire format, voice %s, transcriber %s%s, turns marked %s)",
                      label, model, dialect, oa_voice, OPENAI_TRANSCRIBE_MODEL,
                      f"/{OPENAI_TRANSCRIBE_LANGUAGE}" if OPENAI_TRANSCRIBE_LANGUAGE else "",

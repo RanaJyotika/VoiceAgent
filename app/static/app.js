@@ -75,13 +75,139 @@ async function loadContacts() {
 }
 window.loadContacts = loadContacts;
 
+// ---- history filters: campaign + dates ----
+// Days are Indian dates (YYYY-MM-DD): the server counts days in Indian time, whatever this PC's clock says.
+const istDay = (back = 0) => new Date(Date.now() + 330 * 60000 - back * 86400000).toISOString().slice(0, 10);
+const fmtDate = (day, year = true) => new Date(day + 'T00:00:00Z').toLocaleDateString('en-IN',
+  { timeZone: 'UTC', day: 'numeric', month: 'short', ...(year ? { year: 'numeric' } : {}) });
+const addMonths = (ym, n) => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
+const PRESETS = { '': 'All dates', today: 'Today', yesterday: 'Yesterday', 7: 'Last 7 days', 30: 'Last 30 days', month: 'This month' };
+
+// A preset is worked out afresh on every refresh, so "Today" moves on at midnight; 'custom' keeps its days.
+let histDates = { preset: '', from: '', to: '' };
+function presetRange(p) {
+  const t = istDay();
+  if (p === 'today') return [t, t];
+  if (p === 'yesterday') return [istDay(1), istDay(1)];
+  if (p === '7' || p === '30') return [istDay(Number(p) - 1), t];
+  if (p === 'month') return [t.slice(0, 8) + '01', t];
+  return ['', ''];
+}
+// [from, to], both days included; '' means all dates.
+const historyDates = () => histDates.preset === 'custom' ? [histDates.from, histDates.to] : presetRange(histDates.preset);
+const rangeText = (from, to) => !from ? 'All dates' : from === to ? fmtDate(from)
+  : `${fmtDate(from, from.slice(0, 4) !== to.slice(0, 4))} – ${fmtDate(to)}`;
+
+let callsSeq = 0;
 async function loadCalls() {
+  const seq = ++callsSeq;
+  const q = new URLSearchParams();
   const camp = $('hist-camp').value;
-  const rows = await fetch(camp ? `/api/calls?campaign_id=${camp}` : '/api/calls').then(r => r.json());
+  const [from, to] = historyDates();
+  if (camp) q.set('campaign_id', camp);
+  if (from) q.set('day_from', from);
+  if (to) q.set('day_to', to);
+  const rows = await fetch(`/api/calls?${q}`).then(r => r.json());
+  if (seq !== callsSeq) return;   // the filter changed while this was loading; the newer answer wins
   if (window.renderCalls) window.renderCalls(rows);
+  $('nocalls').textContent = camp || from ? 'No calls match these filters.' : 'No calls yet.';
+  const cap = from ? 1000 : 100;
+  $('hist-hint').textContent = rows.length >= cap ? `Showing the latest ${cap} calls.` : `${rows.length} call${rows.length === 1 ? '' : 's'}`;
   if (window.loadStats) window.loadStats();
 }
 window.loadCalls = loadCalls;
+
+// The date picker: presets on the left, two months on the right (one on a phone).
+// Click one day for that day, or a first and a last day for a range, then Apply.
+const dp = { a: '', b: '', hover: '', view: '' };   // a, b: the days picked; view: the first month shown (YYYY-MM)
+const monthsShown = () => matchMedia('(max-width: 760px)').matches ? 1 : 2;
+
+function paintRange() {
+  const [lo, hi] = dp.a && !dp.b && dp.hover ? [dp.a, dp.hover].sort() : [dp.a, dp.b || dp.a];
+  for (const b of $('dp-months').querySelectorAll('[data-day]')) {
+    const d = b.dataset.day, on = !!lo && d >= lo && d <= hi;
+    b.classList.toggle('start', on && d === lo);
+    b.classList.toggle('end', on && d === hi);
+    b.classList.toggle('mid', on && d > lo && d < hi);
+    b.classList.toggle('range', on && lo !== hi);
+    b.setAttribute('aria-pressed', String(on));
+  }
+  const n = lo ? Math.round((Date.parse(hi) - Date.parse(lo)) / 86400000) + 1 : 0;
+  $('dp-pick').textContent = !dp.a ? 'Click a day, or a first and a last day.'
+    : !dp.b ? `${fmtDate(dp.a)}. Click another day for a range, or Apply.`
+    : `${rangeText(lo, hi)}${n > 1 ? ` (${n} days)` : ''}`;
+  $('dp-apply').disabled = !dp.a;
+}
+
+function renderPicker() {
+  const today = istDay();
+  let html = '';
+  for (let i = 0; i < 2; i++) {
+    const ym = addMonths(dp.view, i);
+    const first = new Date(ym + '-01T00:00:00Z');
+    const lead = (first.getUTCDay() + 6) % 7;   // weeks start on Monday
+    const days = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+    let cells = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d) => `<span class="dow">${d}</span>`).join('') + '<span></span>'.repeat(lead);
+    for (let n = 1; n <= days; n++) {
+      const day = `${ym}-${String(n).padStart(2, '0')}`;
+      cells += `<button type="button" data-day="${day}" class="${day === today ? 'today' : ''}" aria-label="${fmtDate(day)}"${day > today ? ' disabled' : ''}>${n}</button>`;
+    }
+    html += `<div class="dp-month"><h4>${first.toLocaleDateString('en-IN', { timeZone: 'UTC', month: 'long', year: 'numeric' })}</h4><div class="dp-grid">${cells}</div></div>`;
+  }
+  $('dp-months').innerHTML = html;
+  $('dp-next').disabled = addMonths(dp.view, monthsShown() - 1) >= today.slice(0, 7);
+  for (const b of $('dp-presets').children) b.setAttribute('aria-pressed', String(histDates.preset !== 'custom' && b.dataset.preset === histDates.preset));
+  paintRange();
+}
+
+function openPicker() {
+  [dp.a, dp.b] = historyDates();
+  dp.hover = '';
+  dp.view = addMonths((dp.b || istDay()).slice(0, 7), 1 - monthsShown());   // the chosen (or current) month on the right
+  $('dp-pop').hidden = false;
+  $('dp-btn').setAttribute('aria-expanded', 'true');
+  renderPicker();
+}
+function closePicker() {
+  $('dp-pop').hidden = true;
+  $('dp-btn').setAttribute('aria-expanded', 'false');
+}
+function setHistDates(next) {
+  histDates = next;
+  const [from, to] = historyDates();
+  $('dp-label').textContent = next.preset === 'custom' ? rangeText(from, to) : PRESETS[next.preset];
+  $('dp-btn').classList.toggle('on', !!from);
+  closePicker();
+  loadCalls();
+}
+
+$('dp-btn').onclick = () => ($('dp-pop').hidden ? openPicker() : closePicker());
+$('dp-prev').onclick = () => { dp.view = addMonths(dp.view, -1); renderPicker(); };
+$('dp-next').onclick = () => { dp.view = addMonths(dp.view, 1); renderPicker(); };
+$('dp-cancel').onclick = closePicker;
+$('dp-apply').onclick = () => setHistDates({ preset: 'custom', from: dp.a, to: dp.b || dp.a });
+$('dp-presets').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-preset]');
+  if (b) setHistDates({ preset: b.dataset.preset, from: '', to: '' });
+});
+$('dp-months').addEventListener('click', (e) => {
+  const day = e.target.closest('[data-day]')?.dataset.day;
+  if (!day) return;
+  if (!dp.a || dp.b) { dp.a = day; dp.b = ''; }        // start a new pick
+  else if (day < dp.a) { dp.b = dp.a; dp.a = day; }   // picked backwards: turn it round
+  else dp.b = day;
+  paintRange();
+});
+$('dp-months').addEventListener('mouseover', (e) => {
+  const day = e.target.closest('[data-day]')?.dataset.day;
+  if (day && day !== dp.hover && dp.a && !dp.b) { dp.hover = day; paintRange(); }
+});
+$('dp-months').addEventListener('dblclick', (e) => {   // double-click: just that day, straight away
+  const day = e.target.closest('[data-day]')?.dataset.day;
+  if (day) setHistDates({ preset: 'custom', from: day, to: day });
+});
+document.addEventListener('mousedown', (e) => { if (!$('dp-pop').hidden && !e.target.closest('.datepick')) closePicker(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('dp-pop').hidden) { closePicker(); $('dp-btn').focus(); } });
 
 // ---- upload: preview first, import on confirm ----
 let previewFilter = 'all';

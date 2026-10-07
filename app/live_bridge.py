@@ -21,12 +21,13 @@ from google.genai import types
 
 from . import db, openai_bridge
 from .db import IST
-from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
+from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
                      TRANSCRIPT_LANGUAGES)
 from .call_types import DEFAULT as DEFAULT_CALL_TYPE, CallType, call_type_for
+from .prompts import forms
 from .tools import tools_for
 
 log = logging.getLogger("bridge")
@@ -66,9 +67,11 @@ _ANY_LETTER = re.compile(r"[^\W\d_]")
 _L, _R = r"(?<![\wऀ-෿])", r"(?![\wऀ-෿])"
 _YES = re.compile(_L + r"(haan|han|ha|haa|hanji|ji|jee|sahi|sahee|theek|thik|ok|okay|yes|yeah|confirm|bilkul|kar do|kar dijiye|"
                   r"kardo|karo|done|right|correct|हाँ|हां|हा|जी|हाँजी|हांजी|सही|ठीक|बिल्कुल|कर दो|कर दीजिए|"
-                  r"ਹਾਂ|ਹਾਂਜੀ|ਜੀ|ਸਹੀ|ਠੀਕ|ਬਿਲਕੁਲ)" + _R, re.IGNORECASE)   # last group: Punjabi script (call 71)
-_NO = re.compile(_L + r"(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|नई|गलत|मत|कैंसल|कैंसिल|कैन्सल|केंसल|"
-                 r"ਨਹੀਂ|ਨਹੀ|ਗਲਤ|ਕੈਂਸਲ)" + _R, re.IGNORECASE)
+                  r"जीजी|हन्जी|हंजी|हंदी|कंफर्म|कन्फर्म|कनफर्म|"   # "haan ji" as the transcriber wrote it on calls 167-168
+                  r"ਹਾਂ|ਹਾਂਜੀ|ਜੀ|ਸਹੀ|ਠੀਕ|ਬਿਲਕੁਲ|"   # Punjabi script (call 71)
+                  r"ہاں|ہاںجی|جی|صحیح|ٹھیک|بالکل|کر دو)" + _R, re.IGNORECASE)   # Urdu script: Gemini writes Hindi in it (calls 134, 137)
+_NO = re.compile(_L + r"(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|नई|नाई|गलत|मत|कैंसल|कैंसिल|कैन्सल|केंसल|"   # नाई: "nahi" on call 182
+                 r"ਨਹੀਂ|ਨਹੀ|ਗਲਤ|ਕੈਂਸਲ|نہیں|نہی|غلط|کینسل|مت)" + _R, re.IGNORECASE)
 
 
 def heard_nothing(customer_text: str) -> bool:
@@ -81,6 +84,14 @@ def heard_nothing(customer_text: str) -> bool:
     if _NOTHING.match(bare):
         return True
     return _ANY_LETTER.search(bare) is not None and _OUR_LETTERS.search(bare) is None
+
+
+def only_noise(customer_text: str) -> bool:
+    """Stricter than heard_nothing, for holding a reply back: the transcript is only '<noise>' or punctuation.
+    A transcript in a foreign script still means the customer spoke, and Gemini answers the audio, not the
+    transcript: on call 121 "haan ji bolo" came back in Thai, and the right reply was held back."""
+    t = customer_text.strip()
+    return bool(t) and _NOTHING.match(t.replace("<noise>", "").replace("[noise]", "")) is not None
 
 
 def said_yes(customer_text: str) -> bool:
@@ -168,7 +179,8 @@ def expects_long_answer(agent_text: str) -> bool:
 # baat nahi ji, koi khaas wajah?"), and the note sent after that reply then made the agent say "sorry
 # ji, aapki awaaz nahi aayi" straight after it, to someone who had not spoken. So the reply to such a
 # turn is held back, never played (run_call), and the agent speaks up only when it keeps happening.
-# What it is told, by how many such turns in a row; the first is left alone, the customer is still to answer.
+# What it is told, by how many such turns in a row. The first gets no note here: the customer may go
+# on to answer, and if they wait instead, the phone line asks them to repeat (PHONE_UNCLEAR_SECONDS).
 INAUDIBLE_NOTES = {
     2: "[Note from the phone line: again a sound from the customer's side with no words in it; you still have no answer "
        "to your question. Say 'sorry ji, awaaz saaf nahi aa rahi' and ask that question again, in fewer words.]",
@@ -183,13 +195,18 @@ INAUDIBLE_NOTES = {
 }
 # Goes with the customer's next words (or the next note from the line) after a reply was held back,
 # so the agent does not take their answer as a reply to something they never heard.
-UNHEARD_NOTE = ("[Note from the phone line: your last reply was NOT played to the customer. It answered a sound with no "
-                "words in it (a breath, a 'hmm', background noise). Treat that reply as never said: anything it asked, you "
+UNHEARD_NOTE = ("[Note from the phone line: your last reply was NOT played to the customer. It answered a sound that was "
+                "not the customer talking to you (a breath, a 'hmm', background noise, or another person near the phone). Treat that reply as never said: anything it asked, you "
                 "have NOT asked. What the customer says now answers the last thing they heard from you, which was: "
                 "\"{question}\". Reply to their words as an answer to that.]")
 
 # Did the agent ask why? Only turns the customer heard count (a held-back reply is not in the transcript).
-_ASKED_WHY = re.compile(r"wajah|kyun|kyon|kyu\b|reason|kaaran|वजह|क्यों|क्यूँ|क्यू|कारण", re.IGNORECASE)
+_ASKED_WHY = re.compile(r"wajah|kyun|kyon|kyu\b|reason|kaaran|dikkat|वजह|क्यों|क्यूँ|क्यू|कारण|दिक्कत", re.IGNORECASE)
+# Goes with the customer's answer to the main question while the reason has not been asked yet. Call 145:
+# a "nai" (written "ใน") to "kya aap yeh order karna chahenge?" went straight to the goodbye, and the
+# result check comes only after the goodbye has been spoken.
+ASK_WHY_NOTE = ("[Note from the phone line: if this answer is a no, do not say goodbye yet. First ask once: 'koi baat "
+                "nahi ji. agar bura na maanein toh, koi khaas wajah?' and wait for their answer.]")
 # A "reason" made only of these words is a no said again, not a reason: on call 77 the agent recorded
 # not_interested_reason "not interested" without having asked.
 _NO_WORDS = {"nahi", "nahin", "nhi", "no", "not", "interested", "interest", "hoon", "hu", "hai", "hain", "main", "mai",
@@ -215,13 +232,97 @@ def last_question(transcript: list[dict[str, str]]) -> str:
 # Results that throw an order or a booking away. Refused unless the customer said a no somewhere.
 NEEDS_A_NO = ("cancelled", "not_ordered")
 
+# A cancellation needs the customer asking for one. Any "nahi" was enough before, and on call 120
+# "pichhla order abhi tak nahi aaya" let the agent cancel an order the customer only complained about.
+_CANCEL = re.compile(_L + r"(cancel\w*|कैंसल|कैंसिल|कैन्सल|केंसल|केंचल|कैंचल|केंसिल|कैन्सिल|केन्सल|केन्सिल|ਕੈਂਸਲ|کینسل|nahi chahiye|nahin chahiye|nhi chahiye|नहीं चाहिए|"
+                     r"नही चाहिए|ਨਹੀਂ ਚਾਹੀਦਾ|نہیں چاہیے|mat bhejo|mat bhejna|मत भेजो|मत भेजना|nahi rakhna|नहीं रखना|"
+                     r"wapas le lo|वापस ले लो)" + _R, re.IGNORECASE)
+_KEEP_QUESTION = re.compile(r"rakhna|रखना|cancel|कैंसल|कैंसिल", re.IGNORECASE)
+
+
+def asked_to_cancel(turns: list[dict[str, str]]) -> bool:
+    """The customer asked to cancel, or opened their answer to "order rakhna chahenge?" with a no."""
+    agent = ""
+    for t in turns:
+        if t["role"] == "agent":
+            agent = t["text"]
+        elif _CANCEL.search(t["text"]):
+            return True
+        elif _KEEP_QUESTION.search(agent):
+            head = " ".join(t["text"].split()[:3])
+            if _NO.search(head) or "نہیں" in head:
+                return True
+    return False
+
+
+# "Not ordered" drops the order too, so it needs the customer saying they did not order it. Any "nahi"
+# was enough before: on call 121 "nahi, mere ko to laga Vedic Vaibhav ki site" closed a real order.
+_NAHI = r"(nahi|nahin|nhi|नहीं|नही|ਨਹੀਂ|نہیں)"
+_ORDERED = r"(kiya|किया|ਕੀਤਾ|کیا|mangaya|मंगाया|mangwaya|मंगवाया|manga|मंगा)"
+_NOT_ORDERED = re.compile(_ORDERED + r"\s*(hi|ही|ਹੀ)?\s*" + _NAHI + "|" + _NAHI + r"\s*" + _ORDERED +
+                          r"|did ?n[o']?t order|not ordered|never ordered", re.IGNORECASE)
+_NUMBER_CHECK = re.compile(r"(number|नंबर|ਨੰਬਰ)\s*(hai|है|ਹੈ)", re.IGNORECASE)   # "kya yeh <name> ji ka number hai?"
+# The agent's own questions, sentence by sentence: did it ask about the address, did it say a mismatch back?
+_ADDRESS_WORDS = re.compile(r"address|एड्रेस|पता|delivery|डिलीवरी", re.IGNORECASE)
+# The agent taking an abandoned cart's order: the payment question or the close that sends it to the team.
+_TAKING_ORDER = re.compile(r"payment|पेमेंट|cash on delivery|कैश ऑन|team ko bhej|टीम को भेज", re.IGNORECASE)
+# A refusal without a "nahi" in it ("rehne do", "chhodo").
+_REFUSAL = re.compile(r"rehne do|rahne do|chhod|chod do|रहने दो|छोड़|छोड", re.IGNORECASE)
+# The customer asking for a call later (busy now), as opposed to buying later ("baad mein kharidungi", call 182).
+_CALL_BACK = re.compile(r"call|phone|फोन|फ़ोन|कॉल|busy|बिज़ी|बिजी|व्यस्त|baat kar|बात कर|meeting|मीटिंग|drive|ड्राइव",
+                        re.IGNORECASE)
+# A no given as a reason (call 143): "maine kisi aur site se mangwaya tha", "aapka price bahut zyada".
+# The transcriber writes "site" as "साइड".
+_DECLINE_REASON = re.compile(r"(kisi aur|kahin aur|kahi aur|dusri|doosri|dusre|doosre|another|other|किसी और|कहीं और|कही और|"
+                             r"दूसरी|दूसरे)\s+(site|side|website|jagah|dukaan|shop|app|साइट|साइड|वेबसाइट|जगह|दुकान|शॉप|ऐप)|"
+                             r"bahar se|बाहर से|mehenga|mehnga|mahanga|costly|expensive|महंगा|महँगा|मेहंगा|"
+                             r"(price|daam|dam|rate|keemat|kimat|प्राइस|दाम|रेट|कीमत|क़ीमत)\s+(\S+\s+){0,2}"
+                             r"(zyada|jyada|jada|high|ज्यादा|ज़्यादा|जादा|हाई)", re.IGNORECASE)
+# The abandoned cart's check that the customer already ordered: "kya aapne yahi <items> order kar liya hai?"
+_ALREADY_CHECK = re.compile(r"(order|ऑर्डर)\s*(kar|कर)\s*(liya|li|diya|di|लिया|ली|दिया|दी)", re.IGNORECASE)
+# The opening's "kya meri baat <name> ji se ho rahi hai?" (owner, 6 Oct 2026): not a question about the order.
+_IDENTITY = re.compile(r"baat\s+\S+.{0,20}(ho rahi|ho rahi hai)|बात\s+\S+.{0,20}हो रही", re.IGNORECASE)
+_SAY_BACK = re.compile(r"hisaab|हिसाब|mutabik|मुताबिक|anusaar|अनुसार|matlab|मतलब|toh aap|तो आप", re.IGNORECASE)
+
+
+def agent_questions(turns: list[dict[str, str]]) -> list[str]:
+    """Every question sentence the agent said on the call."""
+    out = []
+    for t in turns:
+        if t["role"] == "agent":
+            out += [s for s in re.split(r"(?<=[?।.!])\s*", t["text"]) if s.strip().endswith("?")]
+    return out
+
+
+# Complaint words: the customer's own lines with these go into the notes, so the team sees them
+# even when the agent wrote nothing (call 120: fake products, an order that never came, no notes).
+_COMPLAINT = re.compile(r"nakli|नकली|ਨਕਲੀ|نقلی|fraud|फ्रॉड|फ्राड|फ्रोड|fake|फेक|duplicate|डुप्लीकेट|dhokha|धोखा|kharab|खराब|"
+                        r"ਖਰਾਬ|nahi aaya|नहीं आया|नही आया|ਨਹੀਂ ਆਇਆ|refund|रिफंड", re.IGNORECASE)
+
 _GOODBYE = re.compile(r"dhanyavaad|dhanyawad|dhanyavad|धन्यवाद|shubh ho|शुभ हो", re.IGNORECASE)
+# The closing line as the last words of a turn ("... dhanyavaad ji, aapka din shubh ho."): the call is over.
+_FINAL_GOODBYE = re.compile(r"(shubh ho|शुभ हो)[\s.!।]*$", re.IGNORECASE)
+# Call 135: the agent said the closing line but never called end_call; 3 s later the silence check had it ask
+# "hello ji, meri awaaz aa rahi hai?" and say the goodbye again. Owner: after the closing line, hang up.
+GOODBYE_HANGUP_SECONDS = 0.0   # owner, 7 Oct 2026: cut the call the moment the goodbye has played
+# Call 176: a question and the goodbye in one turn ("koi dikkat aayi? ... aapka din shubh ho"). Owner: hear the answer,
+# note it, say goodbye, then hang up; if they say nothing, hang up this long after the goodbye finishes.
+ASK_BYE_WAIT_SECONDS = 5.0
 
 
 def said_goodbye(transcript: list[dict[str, str]]) -> bool:
     """The last thing the customer heard from the agent was its goodbye."""
     said = next((t["text"] for t in reversed(transcript) if t["role"] == "agent"), "")
     return _GOODBYE.search(said) is not None
+
+
+def closing_line(state: "CallState", outcome: str | None) -> str:
+    """The goodbye the agent is told to say when it recorded a result without saying one (calls 178, 183)."""
+    if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
+        return "theek hai ji, dhanyavaad. aapka din shubh ho."   # owner, 7 Oct 2026 (call 182)
+    voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
+    gayi = forms(voice)["gayi"] if voice else "gayi"
+    return (f"achha ji, samajh {gayi}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
 
 
 def yes_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
@@ -237,6 +338,43 @@ def yes_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
             if later and said_yes(later[0]) and not any(_NO.search(x) for x in later[1:]):
                 return later[0]
             return ""
+    return ""
+
+
+def ever_yes_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
+    """The customer's clear yes to the main question at any point in the call, even if it was asked again later."""
+    if not pattern:
+        return ""
+    asked = re.compile(pattern, re.IGNORECASE)
+    for i, t in enumerate(transcript):
+        if t["role"] == "agent" and asked.search(t["text"]):
+            answer = next((x["text"] for x in transcript[i + 1:] if x["role"] == "customer" and not heard_nothing(x["text"])), "")
+            if said_yes(answer) and "?" not in answer:   # call 168: "...क्या नाम बताया जी?" is a question, not a yes
+                return answer
+    return ""
+
+
+_OPENING_NO = {"nahi", "nahin", "nai", "nhi", "no", "nope", "na", "नहीं", "नही", "नई", "ना", "ਨਹੀਂ", "ਨਹੀ", "نہیں"}
+
+
+def no_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
+    """The customer's clear no to the call's main question, if they gave one and never said yes after it.
+    Call 139: "kya aap wahi order karna chahenge?" "नहीं", then they hung up, and the call was saved as
+    dropped and queued to be rung again."""
+    if not pattern:
+        return ""
+    asked = re.compile(pattern, re.IGNORECASE)
+    no, at = "", -1
+    for i, t in enumerate(transcript):
+        if t["role"] == "agent" and asked.search(t["text"]):
+            j = next((k for k in range(i + 1, len(transcript)) if transcript[k]["role"] == "customer"
+                      and not heard_nothing(transcript[k]["text"])), None)
+            # The answer must open with the no: "पर वो बोल ही नहीं रही" (call 90) has a नहीं in it but refuses nothing.
+            words = re.findall(r"[^\s.,;:!?।|\"'()\-]+", transcript[j]["text"].lower()) if j is not None else []
+            if words and words[0] in _OPENING_NO and not said_yes(transcript[j]["text"]):
+                no, at = transcript[j]["text"], j
+    if no and not any(t["role"] == "customer" and said_yes(t["text"]) for t in transcript[at + 1:]):
+        return no
     return ""
 
 
@@ -259,11 +397,18 @@ _hints_ok = True # set to False once a model refuses the transcript language hin
 
 ACTIVITY_START = object()
 ACTIVITY_END = object()
+# Sent just before ACTIVITY_END when the voice fingerprint says the turn was someone else near the phone, not the
+# customer (plivo_bridge, VOICEPRINT=on): the reply to it is held back like the reply to a sound with no words.
+NOT_CALLER = object()
 
 
 class Nudge(str):
     """A note from the audio source for the agent's ears only, e.g. "the line has been noisy for
     8 seconds". Goes to Gemini as a text turn; never spoken and never in the transcript."""
+
+
+GOODBYE_NOTE = Nudge("[Note from the system: you have said goodbye and the customer heard it. Say nothing more. "
+                     "Call mark_outcome with the result of this call now, then end_call.]")
 
 
 def is_billing_error(exc: BaseException) -> bool:
@@ -343,15 +488,26 @@ class CallState:
     inaudible_total: int = 0
     held: bool | None = None            # the reply in progress answers a turn with no words and is not played (None: not decided yet)
     unheard: bool = False               # a reply was held back and the agent has not been told yet
+    not_caller: bool = False            # the voice fingerprint says this turn was someone else, not the customer
     answering: str = "note"             # what the next reply answers: the customer's "speech" or a "note" (phone only)
     noise_told: bool = False            # the phone line was told this turn carried no words
     confirm_refusals: int = 0           # mark_outcome "confirmed" sent back for want of a clear yes
     denial_refusals: int = 0            # mark_outcome "cancelled" / "not_ordered" sent back for want of a no
     reason_refused: bool = False        # mark_outcome "not_interested" sent back once because why was never asked
+    probe_refused: bool = False         # a call type's probe_first result sent back once: nothing asked after the opening
+    help_refused: bool = False          # an abandoned cart's needs_help sent back once: the customer had said yes
+    later_refused: bool = False         # call_later sent back once: the customer never asked for a call back
+    goodbye_refusals: int = 0           # end_call sent back because the goodbye was never said
     record_pending: bool = False        # a mark_outcome was sent back and nothing has been recorded since
     end_refusals: int = 0               # end_call refused while record_pending (at most twice a call)
     loose_address_refusals: int = 0     # mark_outcome sent back for a new_address that record_address never took
     question_refusals: int = 0          # end_call sent back because it came with an unanswered question
+    goodbye_at: float | None = None     # the closing line was heard but the agent did not hang up (call 135)
+    ask_bye_at: float | None = None     # a question and the goodbye in one turn: waiting for the answer (call 176)
+    address_yes_refusals: int = 0       # a positive result sent back: the address question got no clear yes (call 135)
+    order_refusals: int = 0             # "already_ordered" sent back: no clear yes to the check, or the order was being taken
+    address_refusals: int = 0           # mark_outcome sent back because the address on record was never asked about
+    say_back_refusals: int = 0          # mark_outcome sent back because a mismatch was never said back
     reconnects: int = 0                 # reconnects to the current provider (reset when the call changes provider)
     drops: int = 0                      # times the line dropped and the call carried on (any provider)
     error: str | None = None
@@ -506,7 +662,13 @@ async def run_call(
         if state.held is not None:
             return
         said = state._in_buf.strip()
-        state.held = may_hold_back() and bool(said) and heard_nothing(said)
+        if manual_vad and state.answering == "speech" and state.not_caller:
+            # Someone else near the phone: their words get no answer, and the customer, who said nothing, is told nothing.
+            state.held, state.unheard = True, True
+            log.info("call %s: that turn was another voice, not the customer (%r); holding back the reply to it",
+                     call_id, said[:40])
+            return
+        state.held = may_hold_back() and bool(said) and only_noise(said)
         if not state.held:
             if said and may_hold_back():
                 state.inaudible_streak = 0
@@ -521,11 +683,30 @@ async def run_call(
         if note:
             incoming_audio.put_nowait(Nudge(note))   # also cuts the held-back reply short
 
+    async def hang_up_after_goodbye() -> None:
+        """The closing line was heard and no end_call came with it: end the call ourselves, a moment
+        after the goodbye has finished playing, whether or not the agent records a result in between."""
+        await asyncio.sleep(max(0.0, state.speech_until - time.monotonic()) + GOODBYE_HANGUP_SECONDS)
+        if not state.ended:
+            log.info("call %s: no end_call after the goodbye; hanging up", call_id)
+            state.ended = True
+            incoming_audio.put_nowait(None)   # stops the session; the phone line hangs up after it
+
+    async def hang_up_if_no_answer() -> None:
+        """A question and the goodbye came in one turn: give the customer a moment to answer it, else hang up."""
+        mark = state.ask_bye_at
+        await asyncio.sleep(max(0.0, state.speech_until - time.monotonic()) + ASK_BYE_WAIT_SECONDS)
+        if not state.ended and state.ask_bye_at is not None and state.ask_bye_at == mark:
+            log.info("call %s: no answer to the question asked with the goodbye; hanging up", call_id)
+            state.goodbye_at = time.monotonic()   # a finished call, not a dropped one
+            state.ended = True
+            incoming_audio.put_nowait(None)
+
     def drop_held_reply() -> None:
         """A held-back reply is over: keep it out of the transcript (nobody heard it), but in the log."""
         text = clean_agent_text(state._out_buf)
         if text:
-            log.info("call %s: not played (it answered a sound with no words): %s", call_id, text[:200])
+            log.info("call %s: not played (it answered a sound that was not the customer): %s", call_id, text[:200])
         state._out_buf = ""
 
     async def session_once(prompt: str, opening: str, first: bool) -> None:
@@ -541,7 +722,8 @@ async def run_call(
                 # everything below this line is shared with Gemini.
                 session = await stack.enter_async_context(openai_bridge.connect(
                     model=model, prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad,
-                    tools=tools_for(state.call_type)))
+                    tools=tools_for(state.call_type),
+                    greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else ""))
                 attempts = []
             for n, (fast, hints) in enumerate(attempts):
                 try:
@@ -592,25 +774,46 @@ async def run_call(
                         return
                     if chunk is ACTIVITY_START:
                         in_activity = True
-                        state.answering, state.noise_told = "speech", False
+                        state.answering, state.noise_told, state.not_caller = "speech", False, False
+                        state.ask_bye_at = None   # they are answering the question asked with the goodbye
                         log.info("call %s: customer started talking at %.1fs", call_id, time.monotonic() - state.started)
                         await session.send_realtime_input(activity_start=types.ActivityStart())
                         if state.unheard:
                             # Their words follow a reply they never heard; say so inside the same turn.
                             state.unheard = False
                             await session.send_realtime_input(text=UNHEARD_NOTE.format(question=last_question(state.transcript)))
+                        # Gemini only: ChatGPT took it as a line to say, whatever the customer had said (calls 155, 157).
+                        if (state.provider == "gemini" and "not_interested" in state.call_type.outcomes
+                                and state.call_type.main_question
+                                and re.search(state.call_type.main_question, last_question(state.transcript), re.IGNORECASE)
+                                and not any(t["role"] == "agent" and _ASKED_WHY.search(t["text"]) for t in state.transcript)):
+                            log.info("call %s: reason not asked yet; reminding the agent to ask it before any goodbye", call_id)
+                            await session.send_realtime_input(text=ASK_WHY_NOTE)
+                        continue
+                    if chunk is NOT_CALLER:
+                        state.not_caller = True
                         continue
                     if chunk is ACTIVITY_END:
                         if in_activity:   # a marker left over from before a reconnect has no start
                             in_activity = False
                             log.info("call %s: customer stopped talking at %.1fs", call_id, time.monotonic() - state.started)
                             await session.send_realtime_input(activity_end=types.ActivityEnd())
+                            if meta is not None:   # for the phone line's per-turn timing line
+                                meta.update(started=state.started, turn_sent=time.monotonic(), first_event=None)
                         continue
                     if isinstance(chunk, Nudge):
                         # A note from the phone line ("noisy for 8 s, nothing understood"). With
                         # our own speech detection a text turn has to sit inside start/end marks.
+                        if state.goodbye_at is not None and chunk is not GOODBYE_NOTE:
+                            continue   # the call is over: no "hello ji, meri awaaz aa rahi hai?" after the goodbye
                         if in_activity:
                             continue   # the customer is mid-sentence; that audio matters more
+                        if state.ask_bye_at is not None:
+                            continue   # goodbye already said: wait quietly for the answer, or hang up
+                        if chunk is not GOODBYE_NOTE and state.speaking and time.monotonic() < state.speech_until + 10:
+                            # Call 170: OpenAI paused mid-reply, the line looked quiet for 3 s, and the nudge (sent as
+                            # "customer started talking") cancelled the rest of the agent's sentence.
+                            continue
                         note = str(chunk)
                         if state.unheard:
                             state.unheard = False
@@ -663,6 +866,8 @@ async def run_call(
                     async for msg in session.receive():
                         if state.ended:
                             return
+                        if meta is not None and meta.get("turn_sent") and not meta.get("first_event"):
+                            meta["first_event"] = time.monotonic()
                         if msg.usage_metadata is not None:
                             state.note_usage(msg.usage_metadata)
                         sc = msg.server_content
@@ -684,23 +889,23 @@ async def run_call(
                                 state.add_input_text(sc.input_transcription.text)
                                 await send_event({"type": "transcript", "role": "customer",
                                                   "text": sc.input_transcription.text, "partial": True})
-                                if may_hold_back() and not state.noise_told and heard_nothing(state._in_buf):
+                                if may_hold_back() and not state.noise_told and only_noise(state._in_buf):
                                     # No words in it: the reply to it will be held back, so the phone line
                                     # can stop waiting for one.
                                     state.noise_told = True
-                                    await send_event({"type": "heard_nothing"})
+                                    await send_event({"type": "heard_nothing", "first": state.inaudible_streak == 0})
                             if sc.output_transcription is not None and sc.output_transcription.text:
                                 reply_begins()
                                 state.add_output_text(sc.output_transcription.text)
-                                if not state.held:
+                                if not state.held and state.goodbye_at is None:
                                     await send_event({"type": "transcript", "role": "agent",
                                                       "text": sc.output_transcription.text, "partial": True})
                             if sc.model_turn is not None:
                                 for part in sc.model_turn.parts or []:
                                     if part.inline_data is not None and part.inline_data.data:
                                         reply_begins()
-                                        if state.held:
-                                            continue
+                                        if state.held or state.goodbye_at is not None:
+                                            continue   # not played: unheard noise, or after the goodbye
                                         if not state.speaking:
                                             state.speaking = True
                                             state.idle_since = None
@@ -722,6 +927,29 @@ async def run_call(
                                     log.info("call %s: held-back reply finished; still waiting for the customer's answer", call_id)
                                 else:
                                     log.info("call %s: agent turn complete, now waiting for the customer", call_id)
+                                    if state.goodbye_at is not None:
+                                        text = clean_agent_text(state._out_buf)
+                                        if text:
+                                            log.info("call %s: not played (after the goodbye): %s", call_id, text[:200])
+                                        state._out_buf = ""
+                                    elif (not state.ended and not state.record_pending   # a sent-back result: let it fix that
+                                          and _FINAL_GOODBYE.search(clean_agent_text(state._out_buf))
+                                          # Call 176: "koi dikkat aayi? ... dhanyavaad ji, aapka din shubh ho" in one turn;
+                                          # the customer's answer to that question must still be heard.
+                                          and "?" not in clean_agent_text(state._out_buf)):
+                                        state.goodbye_at = time.monotonic()
+                                        log.info("call %s: goodbye said without end_call; %shanging up %.0fs after it finishes "
+                                                 "at the latest", call_id, "" if state.outcome else "asking for the result, ",
+                                                 GOODBYE_HANGUP_SECONDS)
+                                        if not state.outcome:   # call 138: recorded already, then asked and recorded again
+                                            incoming_audio.put_nowait(GOODBYE_NOTE)
+                                        asyncio.create_task(hang_up_after_goodbye())
+                                    elif (not state.ended and _FINAL_GOODBYE.search(clean_agent_text(state._out_buf))
+                                          and "?" in clean_agent_text(state._out_buf)):
+                                        state.ask_bye_at = time.monotonic()
+                                        log.info("call %s: a question and the goodbye in one turn; waiting %.0fs for the answer",
+                                                 call_id, ASK_BYE_WAIT_SECONDS)
+                                        asyncio.create_task(hang_up_if_no_answer())
                                 state.held, state.noise_told = None, False
                                 # The pause that closes the customer's next turn follows the last question
                                 # they actually heard (a held-back reply leaves nothing of its own).
@@ -739,7 +967,9 @@ async def run_call(
                                 # Wait for the goodbye to actually finish in the customer's ear,
                                 # not merely for the model to stop producing it. Capped so a
                                 # runaway reply cannot hold the line open.
-                                left = min(20.0, max(0.0, state.speech_until - time.monotonic()) + 0.4)
+                                # Owner, 7 Oct 2026: cut the call the moment the goodbye has played (no extra margin;
+                                # the phone side waits for its own playback to finish).
+                                left = min(20.0, max(0.0, state.speech_until - time.monotonic()))
                                 log.info("call %s: waiting %.1fs for the goodbye to finish", call_id, left)
                                 await asyncio.sleep(left)
                                 return
@@ -876,6 +1106,24 @@ async def run_call(
             state.outcome_details = details
             log.info("call %s: no result recorded, but the customer said yes to the main question; saved as %s",
                      call_id, state.outcome)
+        elif not state.outcome and (no := no_to_main_question(state.transcript, state.call_type.main_question)):
+            # A clear no, then the line went: a finished call, not a dropped one to ring again (call 139).
+            refused = "not_interested" in state.call_type.outcomes
+            state.outcome = "not_interested" if refused else "unclear"
+            result = f"customer said no ({no!r}) to the main question, then the call ended"
+            complaints = [t["text"][:120] for t in state.transcript if t["role"] == "customer" and _COMPLAINT.search(t["text"])]
+            if complaints:
+                result += " (customer said: " + " | ".join(complaints[-3:]) + ")"
+            state.outcome_details = {**(state.outcome_details or {}), "outcome": state.outcome, "notes": result,
+                                     **({"not_interested_reason": "not given (call ended)"} if refused else {})}
+            log.info("call %s: no result recorded, but the customer said no to the main question; saved as %s",
+                     call_id, state.outcome)
+        elif not state.outcome and state.goodbye_at is not None:
+            # We hung up after the goodbye and the agent never recorded a result: not a dropped call to
+            # ring again, a finished one a person should check.
+            state.outcome = "unclear"
+            result = "the agent said goodbye without recording a result; team to check the call"
+            state.outcome_details = {**(state.outcome_details or {}), "outcome": "unclear", "notes": result}
         elif not state.outcome:
             # Someone answered but the call ended with nothing recorded: the customer hung up or the
             # line dropped -> call back later. If the agent itself failed mid-way, a person looks first.
@@ -1081,32 +1329,84 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": "new_address has no valid 6-digit PIN code. Do not end the call yet. "
                     "Ask the customer for the PIN code digit by digit, read the full address back, then call mark_outcome again. "
                     "If they cannot give it, call mark_outcome again and say in notes that the team must take the address."}
-        if outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2)):
+        # Call 160: "haan ji, kar do confirm" three replies back, then a garbled answer to the address question; only
+        # the last two replies were looked at, the order was refused after the goodbye and the agent asked again.
+        if (outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2))
+                and not yes_to_main_question(state.transcript, state.call_type.main_question)):
             # No clear yes on record: the model is confirming on silence or noise (call 53 did exactly this).
             state.confirm_refusals += 1
-            if state.confirm_refusals <= 2:
+            goodbye_said = _GOODBYE.search(clean_agent_text(state._out_buf)) is not None
+            if goodbye_said:
+                log.info("call %s: mark_outcome %s taken as unclear; no yes was heard, but the goodbye was already said",
+                         state.call_id, outcome)
+            # Call 168: four re-asks (two here, two on the address) for a customer who had said "haan ji" each time
+            # through a garbled transcript. Owner: finish the call quickly. One re-ask per call across both checks.
+            if state.confirm_refusals + state.address_yes_refusals <= 1 and not goodbye_said:
                 state.record_pending = True
                 log.info("call %s: mark_outcome %s refused; no clear yes from the customer (last: %r)",
                          state.call_id, outcome, state.recent_customer_turns(1))
                 return {"status": "not recorded", "reason": "The customer has NOT clearly said yes: their last replies were inaudible "
-                        f"or not an agreement. Do not confirm. Ask once more, in a few words, '{state.call_type.confirm_question}' and "
+                        f"or not an agreement. Do not confirm. Ask it simply, in a few words, '{state.call_type.confirm_question}', with no lead-in such as 'let me ask clearly', and "
                         "wait for a clear haan. If you still cannot hear them, say 'awaaz nahi aa rahi, team aapse baat kar legi', call "
                         "mark_outcome with outcome 'unclear' and notes 'could not hear the customer's confirmation', and end_call."}
-            outcome = "unclear"
-            args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") + " (confirmation was not clearly heard)").strip()}
-        if outcome in NEEDS_A_NO and not any(_NO.search(t) for t in state.recent_customer_turns(50)):
+            if ever_yes_to_main_question(state.transcript, state.call_type.main_question):
+                # They said yes to the main question earlier; only the last replies were unclear. Keep it, for the team to check.
+                args = {**args, "verify": "yes not clearly heard at the end of the call",
+                        "notes": ((args.get("notes") or "") + " (final yes not clearly heard)").strip()}
+            else:
+                outcome = "unclear"
+                args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") + " (confirmation was not clearly heard)").strip()}
+        turns = state.transcript + ([{"role": "customer", "text": state._in_buf.strip()}] if state._in_buf.strip() else [])
+        if outcome == "cancelled":
+            said_no = asked_to_cancel(turns)
+        elif outcome == "not_ordered":
+            said_no = (any(t["role"] == "customer" and _NOT_ORDERED.search(t["text"]) for t in turns)
+                       and any(_NUMBER_CHECK.search(q) for q in agent_questions(turns)))
+        elif outcome == "not_interested":
+            # Call 140: a 0.3 s sound (written "นี่") was taken as a no, and two "ek baar repeat kar dijiye" never got
+            # the offer again: the call closed as not interested with no no in it.
+            said_no = any(t["role"] == "customer" and not heard_nothing(t["text"])
+                          and (_NO.search(t["text"]) or _REFUSAL.search(t["text"]) or _DECLINE_REASON.search(t["text"])
+                               or _CANCEL.search(t["text"]))   # call 153: "main cancel karna chahti hoon" to a cart
+                          for t in turns)
+        else:
+            said_no = True
+        if not said_no and outcome == "not_ordered" and state.denial_refusals < 2:
+            state.denial_refusals += 1
+            state.record_pending = True
+            log.info("call %s: mark_outcome not_ordered refused; no clear 'maine order nahi kiya' or no number check (last: %r)",
+                     state.call_id, state.recent_customer_turns(1))
+            return {"status": "not recorded", "reason": "The customer has NOT clearly said they did not place this order "
+                    "('maine order nahi kiya'), or you have not asked 'kya yeh <name> ji ka number hai?' yet. A 'nahi' to "
+                    "something else is not that: they may have ordered on the website under another name. Do not record "
+                    "'not_ordered'. Ask once, plainly: 'kya aapne <product> order kiya tha?' If they did not, ask "
+                    "'kya yeh <name> ji ka number hai?' and go by their answer. If you still cannot tell, say 'team aapse "
+                    "baat kar legi', call mark_outcome with outcome 'unclear', and end_call."}
+        if not said_no:
             # Throwing an order away needs the customer's own "nahi" or "cancel" somewhere in the call. On
             # call 100 the transcript was gibberish and the agent recorded "not ordered" all the same.
             state.denial_refusals += 1
-            if state.denial_refusals <= 2:
+            # Call 143: the goodbye was already spoken, so the refusal had the agent say "dhanyavaad ji, aapka din
+            # shubh ho. Maaf kijiye, main sun nahi paayi..." Once the goodbye is out, write it down as unclear.
+            goodbye_said = _GOODBYE.search(clean_agent_text(state._out_buf)) is not None
+            if goodbye_said:
+                log.info("call %s: mark_outcome %s taken as unclear; no no was heard, but the goodbye was already said",
+                         state.call_id, outcome)
+            if state.denial_refusals <= 2 and not goodbye_said:
                 state.record_pending = True
                 log.info("call %s: mark_outcome %s refused; the customer never said no or cancel (last: %r)",
                          state.call_id, outcome, state.recent_customer_turns(1))
-                return {"status": "not recorded", "reason": f"The customer has NOT said 'nahi', 'cancel' or that they did not "
-                        f"order: nothing they said on this call was a no. Do not record '{outcome}'. You may have misheard them. "
-                        "Ask them plainly, in a few words, what they want ('ji, aap order rakhna chahte hain ya cancel karna "
-                        "chahte hain?') and go by their answer. If you still cannot make it out, say 'awaaz saaf nahi aa rahi, "
-                        "team aapse baat kar legi', call mark_outcome with outcome 'unclear', and end_call."}
+                heard = ("The customer has NOT asked to cancel: a worry, a complaint or a question is not a cancellation."
+                         if outcome == "cancelled" else
+                         "The customer has NOT said no: a sound, a question or 'repeat kar dijiye' is not a no. If they asked "
+                         "you to repeat, say the offer again in one short sentence." if outcome == "not_interested" else
+                         "The customer has NOT said 'nahi', 'cancel' or that they did not order: nothing they said on this call was a no.")
+                ask = (f"'{state.call_type.confirm_question}'" if outcome == "not_interested"
+                       else "'ji, aap order rakhna chahte hain ya cancel karna chahte hain?'")
+                return {"status": "not recorded", "reason": f"{heard} Do not record '{outcome}'. You may have misheard them. "
+                        f"Ask them plainly, in a few words, what they want ({ask}) and go by their answer. If you still "
+                        "cannot make it out, say 'awaaz saaf nahi aa rahi, team aapse baat kar legi', call mark_outcome with "
+                        "outcome 'unclear', and end_call."}
             outcome = "unclear"
             args = {**args, "outcome": outcome,
                     "notes": ((args.get("notes") or "") + " (the agent took it as a no, but no no was heard)").strip()}
@@ -1114,6 +1414,17 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             # The script asks the reason once. On call 77 the agent skipped it and closed on a bare "no",
             # because a question it had asked in a held-back (unplayed) reply was still in its own memory.
             heard = [t["text"] for t in state.transcript if t["role"] == "agent"] + [clean_agent_text(state._out_buf)]
+            asked_at = next((i for i in range(len(state.transcript) - 1, -1, -1) if state.transcript[i]["role"] == "agent"
+                             and _ASKED_WHY.search(state.transcript[i]["text"])), None)
+            answered = (asked_at is not None and not _ASKED_WHY.search(clean_agent_text(state._out_buf)) and any(
+                t["role"] == "customer" and not heard_nothing(t["text"]) for t in state.transcript[asked_at + 1:]))
+            if any(_ASKED_WHY.search(t) for t in heard) and not answered and not state._in_buf.strip():
+                # Call 176: the reason was asked in the same turn as the goodbye, and the call closed before the answer.
+                state.reason_refused = state.record_pending = True
+                log.info("call %s: mark_outcome not_interested refused; the reason was asked but not yet answered", state.call_id)
+                return {"status": "not recorded", "reason": "You asked why, but the customer has not answered yet. Do not "
+                        "end the call and do not say goodbye. Wait for their answer, then call mark_outcome with their reason "
+                        "in their words."}
             if not any(_ASKED_WHY.search(t) for t in heard):
                 state.reason_refused = state.record_pending = True
                 log.info("call %s: mark_outcome not_interested refused; the reason was never asked (recorded: %r)",
@@ -1122,12 +1433,135 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                         "Do not end the call. Ask once, gently: 'koi baat nahi ji. agar bura na maanein toh, koi khaas wajah?' and wait. "
                         "If their reason is a misunderstanding that CAMPAIGN DETAILS answer, clear it up once as NOT INTERESTED says. "
                         "Then call mark_outcome again with their reason in their words, or 'not given' if they would not say."}
+        if outcome in state.call_type.probe_first and not state.probe_refused:
+            # Calls 133 and 134 (abandoned cart): "Vedic Vaibhav se order kiya tha" and "kisi aur site se kiya tha"
+            # were closed on the spot. Owner: handle the customer until a clear yes or no.
+            agent = [t["text"] for t in state.transcript if t["role"] == "agent"] + [clean_agent_text(state._out_buf)]
+            main = re.compile(state.call_type.main_question, re.IGNORECASE) if state.call_type.main_question else None
+            if not [q for q in agent_questions([{"role": "agent", "text": t} for t in agent[1:]])
+                    if not (main and main.search(q)) and not _IDENTITY.search(q)]:
+                state.probe_refused = state.record_pending = True
+                log.info("call %s: mark_outcome %s refused; nothing was asked after the opening", state.call_id, outcome)
+                check = ("Check it was this cart (ALREADY ORDERED): 'achha ji, kya aapne yahi <items> order kar liya hai?' "
+                         f"If they named {BUSINESS_NAME}, first: 'ji, {STORE_NAME} {BUSINESS_NAME} ka hi part hai.'"
+                         if outcome == "already_ordered" else
+                         "Ask once what stopped them (NOT INTERESTED): 'achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?'")
+                return {"status": "not recorded", "reason": "Do not end the call yet: you have asked nothing since the opening. "
+                        f"{check} Wait for their answer, then go by it and call mark_outcome again."}
+        if outcome == "needs_help" and state.call_type.key == "abandoned_cart" and not state.help_refused:
+            # Call 167: "haan ji, main yeh order lena chahti hoon", then a freebie question; the agent asked again,
+            # heard "nahi haan ji", and closed as needs_help with no order taken.
+            yes = ever_yes_to_main_question(state.transcript, state.call_type.main_question)
+            if yes and _GOODBYE.search(clean_agent_text(state._out_buf)) is None:
+                state.help_refused = state.record_pending = True
+                log.info("call %s: mark_outcome needs_help refused; the customer already said yes (%r)", state.call_id, yes)
+                return {"status": "not recorded", "reason": f"The customer already said yes to the order ('{yes}'). Do not end "
+                        "the call and do not ask whether they want it again. Say 'yeh team confirm kar degi' about their "
+                        "question and carry on with the order: payment (step 3), address (step 4), then the close (step 5) "
+                        "with mark_outcome 'wants_to_order' and their question in question."}
+        if outcome == "call_later":
+            # Call 182: "nahi, main baad mein kharidungi, abhi nahi" was recorded as call_later, with the agent's own
+            # "aap kis samay wapas call karwana chahenge?" as the time. Buying later is a no, not a call back.
+            when = str(args.get("callback_time") or "").strip()
+            asked = any(t["role"] == "customer" and _CALL_BACK.search(t["text"]) for t in turns)
+            if ("?" in when or not asked) and not state.later_refused:
+                state.later_refused = True
+                if _GOODBYE.search(clean_agent_text(state._out_buf)) is None:
+                    state.record_pending = True
+                    log.info("call %s: mark_outcome call_later refused; the customer never asked for a call back (time: %r)",
+                             state.call_id, when)
+                    return {"status": "not recorded", "reason": "The customer has not asked to be called back. 'call_later' "
+                            "is only for a customer who is busy now and asks for a call later, with the time THEY gave. "
+                            "'Baad mein le lungi', 'abhi nahi' about the order is a no: record 'not_interested' with their "
+                            "reason. If they did ask for a call back, ask 'ji, kis samay call karein?', wait, and record "
+                            "call_later with their answer."}
+                # The goodbye is already out: write down what they said, not a call back.
+                said_no = any(t["role"] == "customer" and _NO.search(t["text"]) for t in turns)
+                outcome = "not_interested" if said_no else "unclear"
+                args = {**args, "outcome": outcome, "callback_time": "",
+                        "notes": ((args.get("notes") or "") + " (recorded as call back, but the customer never asked for one)").strip()}
+            elif "?" in when:
+                args = {**args, "callback_time": "", "notes": ((args.get("notes") or "") + " (no call-back time given)").strip()}
         if state.inaudible_total >= 2:
             args = {**args, "notes": ((args.get("notes") or "") + f" (customer was inaudible {state.inaudible_total} times on this call)").strip()}
+        asked = agent_questions(turns)
+        if args.get("mismatch") and not any(_SAY_BACK.search(q) for q in asked) and state.say_back_refusals < 2:
+            # Call 122: "maine to prepaid kiya tha" went straight to the close, never said back or agreed.
+            state.say_back_refusals += 1
+            state.record_pending = True
+            log.info("call %s: mark_outcome refused; the mismatch was never said back", state.call_id)
+            return {"status": "not recorded", "reason": "You have not said the difference back to the customer. Do not "
+                    "close yet. Say it back in one sentence and check (MISMATCH a: 'achha, toh aapke hisaab se ..., sahi?'), "
+                    "wait for their yes, then carry on with step 3 and call mark_outcome again."}
+        contact = (ACTIVE.get(state.call_id) or {}).get("contact") or {}
+        # Owner, 7 Oct 2026: a cart paid online is paid on the site, so the address is not asked on the call.
+        paid_online = state.call_type.key == "abandoned_cart" and "online" in str(args.get("payment_preference") or "").lower()
+        if (state.call_type.takes_address and not paid_online and str(contact.get("address") or "").strip() and not state.address
+                and (outcome in state.call_type.positive or args.get("mismatch"))
+                and not any(_ADDRESS_WORDS.search(q) for q in asked)):
+            # Call 122: the address on record was only mentioned in passing (and dropped on a repeat), never asked about.
+            state.address_refusals += 1
+            if state.address_refusals <= 2:
+                state.record_pending = True
+                log.info("call %s: mark_outcome refused; the address on record was never asked about", state.call_id)
+                return {"status": "not recorded", "reason": "You have not checked the delivery address. Do not close yet. "
+                        "Ask it as its own question (step 3): 'aur delivery <area>, <city> mein hi karni hai na?' and wait. "
+                        "If it is wrong, take it again (TAKING AN ADDRESS). Then call mark_outcome again."}
+            args = {**args, "notes": ((args.get("notes") or "") + " (address on record was not checked on the call)").strip()}
+        if state.call_type.takes_address and outcome in state.call_type.positive and not state.address:
+            # Call 135: "aur delivery Mohali mein hi karni hai na?" got only noise back and the order was closed on it.
+            asked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
+                             and any(_ADDRESS_WORDS.search(q) for q in agent_questions([turns[i]]))), None)
+            answer = "" if asked_at is None else next(
+                (t["text"] for t in turns[asked_at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])), "")
+            if asked_at is not None and not said_yes(answer):
+                state.address_yes_refusals += 1
+                if state.confirm_refusals + state.address_yes_refusals <= 1:
+                    state.record_pending = True
+                    log.info("call %s: mark_outcome %s refused; no clear yes to the address question (answer: %r)",
+                             state.call_id, outcome, answer)
+                    return {"status": "not recorded", "reason": "The customer has not clearly said yes to the delivery address: "
+                            "their answer was noise or not a yes. Do not close. Ask again, in a few words and with no lead-in "
+                            "such as 'ek baar phir check karti hoon': 'ji, delivery <area>, <city> mein hi karni hai na?' and wait. If it is wrong, take it again (TAKING AN ADDRESS). "
+                            "Then call mark_outcome again."}
+                args = {**args, "verify": "address not confirmed on the call",
+                        "notes": ((args.get("notes") or "") + " (customer's yes to the address was not heard)").strip()}
+        if outcome == "already_ordered":
+            # Call 135: the agent took the order (payment, address), then recorded already_ordered. Call 137: the
+            # customer answered "kya aapne yahi keychain order kar liya hai?" with a price question, the agent moved
+            # on to the address, and took the "haan ji" to THAT as "already ordered". Only a yes to the check counts.
+            took_order = (any(_TAKING_ORDER.search(t["text"]) for t in turns if t["role"] == "agent")
+                          or any(_ADDRESS_WORDS.search(q) for q in agent_questions(turns)))
+            checked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
+                               and any(_ALREADY_CHECK.search(q) for q in agent_questions([turns[i]]))), None)
+            answer = "" if checked_at is None else next(
+                (t["text"] for t in turns[checked_at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])), "")
+            if took_order or not said_yes(answer):
+                state.order_refusals += 1
+                if state.order_refusals <= 2:
+                    state.record_pending = True
+                    log.info("call %s: mark_outcome already_ordered refused; took the order: %s, answer to the check: %r",
+                             state.call_id, took_order, answer)
+                    return {"status": "not recorded", "reason": "Not recorded: 'already_ordered' needs a clear yes to 'kya aapne "
+                            "yahi <items> order kar liya hai?' and is never right once you have asked about payment or the "
+                            "address. If they agreed to order, the result is 'wants_to_order'. If you are not sure, ask plainly: "
+                            "'ji, kya aapne yeh pehle hi order kar diya hai, ya main aapka order team ko bhej doon?' and go by "
+                            "their answer. Then call mark_outcome again."}
+                outcome = "unclear"
+                args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") +
+                                                              " (recorded 'already ordered' without a clear yes to it; check)").strip()}
+        complaints =[t["text"][:120] for t in turns if t["role"] == "customer" and _COMPLAINT.search(t["text"])]
+        if complaints:
+            args = {**args, "notes": ((args.get("notes") or "") + " (customer said: " + " | ".join(complaints[-3:]) + ")").strip()}
         state.outcome = outcome
         state.outcome_details = args
         state.record_pending = False
         await send_event({"type": "outcome", "outcome": state.outcome, "details": args})
+        if not clean_agent_text(state._out_buf).strip() and not said_goodbye(state.transcript):
+            # Call 178: the reason was written down with nothing said, and the reply asked for after it was
+            # "theek hai, main aapki baat samajh rahi hoon. dekhti hoon, phir aage badhte hain." Owner: say the goodbye.
+            return {"status": "recorded", "next": f"Say only this, nothing before or after it: '{closing_line(state, outcome)}' "
+                    "Then end_call."}
         return {"status": "recorded"}
     if name == "end_call":
         # A call that the agent ends within seconds of pick-up, before the customer has said
@@ -1145,8 +1579,18 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             log.info("call %s: end_call refused; the result was sent back and nothing is recorded yet", state.call_id)
             return {"status": "refused", "reason": "Nothing has been recorded: your mark_outcome was sent back. Do not hang up. "
                     "Do what its reply asked, then call mark_outcome again, and only then end_call."}
-        asking = clean_agent_text(state._out_buf).rstrip().endswith("?")
-        if asking and not state.held and state.question_refusals < 2:
+        said = clean_agent_text(state._out_buf).rstrip()
+        if (state.outcome and _GOODBYE.search(said) is None and not said_goodbye(state.transcript)
+                and state.goodbye_refusals < 2):
+            # Call 183: mark_outcome and end_call 0.6 s apart with nothing spoken; the line went dead with no goodbye.
+            state.goodbye_refusals += 1
+            log.info("call %s: end_call refused; the goodbye was never said", state.call_id)
+            return {"status": "refused", "reason": "You have not said goodbye. Do not hang up yet. Say only this, nothing "
+                    f"before or after it: '{closing_line(state, state.outcome)}' Then end_call."}
+        # Also a question with the goodbye straight after it in the same turn (call 120: "kya aap cancellation
+        # rakhna chahti hain? theek hai ji, maine cancellation request raise kar di hai... dhanyavaad").
+        asking = said.endswith("?") or ("?" in said and _GOODBYE.search(said.rsplit("?", 1)[1]) is not None)
+        if asking and not state.held and state.goodbye_at is None and state.question_refusals < 2:
             # Call 98: "achha ji, kya poochhna chahte hain?" and the line went dead in the same breath.
             state.question_refusals += 1
             log.info("call %s: end_call refused; it came with a question the customer has not answered: %r",

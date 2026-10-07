@@ -13,6 +13,8 @@ dependencies = [
     "websockets>=13",
     "onnxruntime>=1.20",   # runs the Silero speech detector (app/models/silero_vad.onnx)
     "numpy>=2.0",
+    "livekit>=1.1",        # its rtc.AudioProcessingModule: WebRTC noise suppression + echo cancellation (app/line_audio.py)
+    "sherpa-onnx>=1.12",   # runs the caller voice fingerprint model (app/voiceprint.py)
 ]
 
 [tool.uv]
