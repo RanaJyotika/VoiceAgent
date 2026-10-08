@@ -27,7 +27,7 @@ from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, F
                      VOICEPRINT_CALLER, VOICEPRINT_OTHER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
                      OFFERED_MODELS, PAGE_BUILD, STALE_PAGE, CALLER_GATE, CALLER_GATE_HIGH, CALLER_GATE_LOW, CALLER_GATE_MID_MS, PHONE_AFTER_LOST_REPLY_MS, PHONE_BARGEIN_MS, PHONE_PREPARING_MS,
                      PHONE_OUT_CHUNK_MS, PHONE_SEND_LEAD_MS, PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_LONG_TURN_SECONDS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
-                     PHONE_SILENT_GOODBYE_SECONDS, PHONE_STUCK_SECONDS, PHONE_UNCLEAR_SECONDS, PHONE_NOISE_ASK_SECONDS,
+                     PHONE_SILENT_GOODBYE_SECONDS, PHONE_STUCK_SECONDS, PHONE_REPLY_LATE_SECONDS, PHONE_UNCLEAR_SECONDS, PHONE_NOISE_ASK_SECONDS,
                      PHONE_SHORT_END_MS, PHONE_SHORT_TURN_MS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
                      PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
@@ -158,6 +158,8 @@ class PendingCall:
         self.quiet_run = 0                    # quiet frames since the last loud one
         self.reply_pending = False            # the customer finished; the agent's reply is on its way
         self.reply_due = 0.0
+        self.reply_late = 0.0                 # when a reply passed its deadline with no sound of it (call 194)
+        self.late_nudges = 0                  # "reply now" notes so far this call
         self.lost_replies = 0                 # replies in a row thrown away before a sound of them was played
         self.preroll: deque = deque(maxlen=50)  # last second, replayed when speech starts
         self.speech_started = 0.0
@@ -210,6 +212,7 @@ class PendingCall:
             # agent: counting it made a 0.1 s noise cut "850 rupaye" off as it began (call 90).
             self.voiced_run = 0
         self.reply_pending = False
+        self.reply_late = 0.0
         self.lost_replies = 0
         self.filler_due = 0.0   # the reply has come
         if self.turn_t and "first_audio" not in self.turn_t:
@@ -406,7 +409,21 @@ class PendingCall:
                 self.noise_wait, self.last_noise_at = self.noise_wait + 1, now
         waited = now - self.wait_since
         note = ""
-        if (self.noise_wait >= 15 and now - self.last_noise_at >= PHONE_NOISE_ASK_SECONDS
+        if self.reply_late and not self.last_loud and self.late_nudges < 2:
+            # Call 194: the customer said "haan ji bolo", the reply never came, and they heard 13 s of nothing and
+            # then "hello ji, meri awaaz aa rahi hai?". They did answer: what is missing is the agent's reply.
+            late = now - (self.turn_t.get("end") or self.reply_late) if self.turn_t else PHONE_REPLY_LATE_SECONDS
+            self.reply_late, self.late_nudges = 0.0, self.late_nudges + 1
+            log.info("no sound of the agent's reply %.1fs after the customer's turn; asking it to reply now (late nudge %s)",
+                     late, self.late_nudges)
+            note = (f"[Note from the phone line: the customer has heard nothing from you for {late:.0f} seconds and is waiting "
+                    "for your reply. Say it now, starting straight with the reply itself: no line about what you are doing. "
+                    "Do not ask whether they can hear you.]")
+        elif self.reply_late:
+            self.reply_late = 0.0
+        if note:
+            pass   # the missing reply comes first; the checks below are about the customer
+        elif (self.noise_wait >= 15 and now - self.last_noise_at >= PHONE_NOISE_ASK_SECONDS
                 and self.loud_wait < 50 and not self.last_loud):
             # "No speech": 0.3 s or more of loud sound with no voice in it (a muffled or distorted answer),
             # then quiet. They answered and are waiting; nothing reached the agent, so ask them to repeat.
@@ -457,7 +474,7 @@ class PendingCall:
         if not note:
             return []
         self.nudged = True
-        self.reply_pending, self.reply_due = True, now + 8   # the agent's reply is on its way
+        self.reply_pending, self.reply_due = True, now + PHONE_REPLY_LATE_SECONDS   # the agent's reply is on its way
         self.pending_nudge = True
         return [Nudge(note)]
 
@@ -546,6 +563,8 @@ class PendingCall:
             # protects the reply being prepared, not the lower barge-in one.
             self.seg_over_agent = self.agent_talking(now) and not (self.reply_pending and now < self.filler_until)
             if now > self.reply_due:
+                if self.reply_pending:
+                    self.reply_late = now   # its deadline passed with no sound of it: waiting_check says so
                 self.reply_pending = False
             need = (BARGEIN_FRAMES if self.seg_over_agent
                     else (AFTER_LOST_REPLY_FRAMES if self.lost_replies else PREPARING_FRAMES) if self.reply_pending else 6)
@@ -610,7 +629,7 @@ class PendingCall:
         pause = self.end_pause(now)
         if now - self.last_voiced >= pause or now - self.speech_started > 20:
             self.in_speech = False
-            self.reply_pending, self.reply_due, self.pending_nudge = True, now + 8, False   # cleared when the agent's audio arrives
+            self.reply_pending, self.reply_due, self.pending_nudge = True, now + PHONE_REPLY_LATE_SECONDS, False   # cleared when the agent's audio arrives
             self.turn_t = {"last_voice": self.last_voiced, "end": now}
             if self.caller_level and len(self.seg_levels) >= 25:
                 # The caller came through louder than the locked level (moved closer): follow them up,

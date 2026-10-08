@@ -218,7 +218,8 @@ def _common_replies(f: dict[str, str], details_title: str, topic: str) -> list[s
         f'A bad experience ("nakli bheja tha", "kharab product aaya tha"): "maaf kijiye ji, aapko aisa experience hua. hamari poori koshish rehti hai '
         f'ki original quality ka product hi pahunche. aapki yeh baat main team tak pahuncha {f["deti"]} hoon." '
         f'Add a fact from {details_title} only if it answers the worry (cash on delivery: "aur payment aap delivery par hi karenge"). '
-        'Never the same words twice in a call. Note it, then ask your question again.',
+        'Never the same words twice in a call. Note it, then ask your question again; if nothing is left to ask (they said no '
+        'and you have asked why), the goodbye instead, in the same turn.',
         f'- Line trouble ("hello?", "awaaz aa rahi hai?", "aapki awaaz nahi aa rahi"): "ji, main sun {f["rahi"]} hoon" and repeat your last point in a few words.',
         '- Nothing you could make out (noise, half a word, "<noise>"): "sorry ji, awaaz saaf nahi aayi" and ask again, shorter. Never agree to what you did not hear.',
         '- Busy: ask when to call back (if vague: "aaj shaam ya kal subah?"), goodbye, mark_outcome "call_later" with callback_time, end_call.',
@@ -244,6 +245,10 @@ def _rules(not_mine: str, own: list[str], details_title: str) -> list[str]:
         "- Never ask for card numbers, UPI PINs, OTPs or passwords.",
         f'- Wrong number ({not_mine}): "sorry ji, galti se call lag gaya. dhanyavaad ji", mark_outcome "wrong_number", end_call. '
         '"Call mat karna": "ji, maaf kijiye. dhanyavaad ji", mark_outcome "do_not_call", end_call.',
+        # Call 193: someone else answered ("jyotika ji toh bahar gayi hai") and the agent went on about the order. Owner's line.
+        '- Someone else answered and the person named is not there ("woh bahar gayi hain", "abhi busy hain", "unse baat nahi ho '
+        'sakti"): say only "theek hai ji, thodi der baad connect karte hain. dhanyavaad ji.", mark_outcome "call_later" with '
+        'callback_time as they said (else "thodi der baad"), end_call. Nothing about the order to them, no other question.',
         *own,
         "- Use your tools silently: never say \"note kar rahi hoon\", \"record kar rahi hoon\" or anything about the system.",
         "- Promise nothing you cannot do yourself: no dates, no WhatsApp or SMS, no certificates or discounts, nothing about removing "

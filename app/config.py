@@ -175,11 +175,18 @@ REPLY_WATCHDOG_SECONDS = float(os.getenv("REPLY_WATCHDOG_SECONDS", "4"))   # was
 #   noisy speakerphone line: call 45 lost 25 to 33 s this way, three times) -> tell the agent the
 #   voice is unclear so it repeats the question, and listen more leniently for the rest of the call;
 # - the line has been quiet for this long -> tell the agent to ask "hello ji, awaaz aa rahi hai?".
-PHONE_STUCK_SECONDS = float(os.getenv("PHONE_STUCK_SECONDS", "8"))
+# 8 s until 8 Oct 2026; owner: when the audio is not clear, ask to repeat at once.
+PHONE_STUCK_SECONDS = float(os.getenv("PHONE_STUCK_SECONDS", "4"))
 # Was 12 s; on call 118 the customer waited 15 s for a reply that never came. 3 s: owner, 1 Oct 2026.
-PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "3"))
-# ...and after that check has gone unanswered, this long again before the goodbye (unchanged at 12 s).
-PHONE_SILENT_GOODBYE_SECONDS = float(os.getenv("PHONE_SILENT_GOODBYE_SECONDS", "12"))
+# 1.5 s: owner, 8 Oct 2026 (call 194): if the customer says nothing, ask "meri awaaz aa rahi hai?" within 1-2 s.
+# Counted from when the agent's voice has finished playing on the phone (plus 0.3 s for the line's tail).
+PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "1.5"))
+# ...and after that check has gone unanswered, this long again before the goodbye (12 s until 8 Oct 2026).
+PHONE_SILENT_GOODBYE_SECONDS = float(os.getenv("PHONE_SILENT_GOODBYE_SECONDS", "4"))
+# The customer finished and no sound of the agent's reply has come after this long: the reply is stuck. Call 194:
+# the reply to "haan ji bolo" never came, the silence checks waited 8 s for it plus 3 s, and the customer heard 13 s
+# of nothing. 95% of 180 logged replies started within 4.6 s. After this the agent is told to reply now.
+PHONE_REPLY_LATE_SECONDS = float(os.getenv("PHONE_REPLY_LATE_SECONDS", "5"))
 # The customer said something Gemini could not make out ("<noise>"); the reply to it is held back.
 # If they then stay quiet this long, they are waiting for us: ask them to repeat. Call 118: a quiet
 # "nahi" was heard as noise and the agent said nothing until the 12 s silence nudge.

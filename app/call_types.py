@@ -548,7 +548,12 @@ Check it was this cart: "achha ji, kya aapne yahi <items> order kar liya hai?" (
 
     not_interested = f"""NOT INTERESTED
 Never push and never argue, but always ask once what stopped them, even when they gave a reason. Say exactly this, nothing before or after it: "achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?" ("kisi aur site se le liya": "achha ji, wahan se kyun liya, koi khaas wajah?") Then stop and wait for their answer: no goodbye in the same turn.
-Their answer is their second no (owner, call 183): never ask "kya yeh order aap rakhna chahte hain?" again, and never offer a lower price or any change. Say only: "theek hai ji, dhanyavaad. aapka din shubh ho." (A question in their answer: answer it in one sentence first, in the same turn.) mark_outcome "not_interested" with not_interested_reason in their words ("not given" if they would not say), then end_call. Only if they say on their own that they want it after all: step 3."""
+Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya yeh order aap rakhna chahte hain?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
+- A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then the goodbye. The complaint is their reason.
+- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "iski jaankari team aapko de degi", then the goodbye.
+- A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): "theek hai ji, dhanyavaad. aapka din shubh ho."
+- Only if they say on their own that they want it after all: step 3.
+mark_outcome "not_interested" with not_interested_reason in exactly their words, never your own reading of them ("not given" if they would not say), then end_call."""
 
     rules = ['- You cannot place the order, take payment, send a link or give a discount yourself: "team place kar degi" is the most you say.']
 

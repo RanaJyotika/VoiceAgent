@@ -222,6 +222,17 @@ def bare_no(reason: str) -> bool:
     return not any(w not in _NO_WORDS for w in words)
 
 
+def probe_answer(turns: list[dict[str, str]]) -> str:
+    """What the customer said after the agent last asked why ("koi dikkat aayi thi kya?"), as one line.
+    "" when it was never asked or not answered yet."""
+    asked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
+                     and _ASKED_WHY.search(turns[i]["text"])), None)
+    if asked_at is None:
+        return ""
+    return " ".join(t["text"].strip() for t in turns[asked_at + 1:]
+                    if t["role"] == "customer" and not heard_nothing(t["text"])).strip()
+
+
 def last_question(transcript: list[dict[str, str]]) -> str:
     """The end of the last thing the customer heard the agent say: the question they are answering."""
     said = next((t["text"] for t in reversed(transcript) if t["role"] == "agent"), "")
@@ -271,6 +282,17 @@ _REFUSAL = re.compile(r"rehne do|rahne do|chhod|chod do|रहने दो|छ�
 # The customer asking for a call later (busy now), as opposed to buying later ("baad mein kharidungi", call 182).
 _CALL_BACK = re.compile(r"call|phone|फोन|फ़ोन|कॉल|busy|बिज़ी|बिजी|व्यस्त|baat kar|बात कर|meeting|मीटिंग|drive|ड्राइव",
                         re.IGNORECASE)
+# Someone else answered and says the person named is not there (call 193: "jyotika ji toh bahar gayi hai"). Third-person
+# forms only, so a customer's own "main busy hoon" is not taken as this.
+_NOT_AVAILABLE = re.compile(r"bahar\s+(gayi|gaye|gaya|gai|hai|hain)|बाहर\s+(गई|गयी|गए|गया|है|हैं)|"
+                            r"ghar\s+(par|pe|mein)\s+nahi|घर\s+(पर|पे|में)\s+नहीं|"
+                            r"(woh|wo|vo|unka|unki|unse|unko)\s+(\S+\s+){0,3}(nahi hai|nahi hain|nahi ho|busy|vyast)|"
+                            r"(वो|वह|उनसे|उनका|उनकी|उनको)\s+(\S+\s+){0,3}(नहीं है|नहीं हैं|नहीं हो|बिज़ी|बिजी|व्यस्त)|"
+                            r"available\s+nahi|अवेलेबल\s+नहीं|अवेलेबर\s+नहीं|"
+                            r"unse baat nahi|उनसे बात नहीं|baat nahi ho (sakti|payegi|rahi)|बात नहीं हो (सकती|पाएगी|रही)|"
+                            r"baad mein (call|phone) (karna|kariye|karo|karein)|बाद में (कॉल|फोन|फ़ोन) (करना|करिए|करो|करें|कीजिए)",
+                            re.IGNORECASE)
+AWAY_LINE = "theek hai ji, thodi der baad connect karte hain. dhanyavaad ji."   # owner, 8 Oct 2026 (call 193)
 # A no given as a reason (call 143): "maine kisi aur site se mangwaya tha", "aapka price bahut zyada".
 # The transcriber writes "site" as "साइड".
 _DECLINE_REASON = re.compile(r"(kisi aur|kahin aur|kahi aur|dusri|doosri|dusre|doosre|another|other|किसी और|कहीं और|कही और|"
@@ -296,12 +318,46 @@ def agent_questions(turns: list[dict[str, str]]) -> list[str]:
 
 # Complaint words: the customer's own lines with these go into the notes, so the team sees them
 # even when the agent wrote nothing (call 120: fake products, an order that never came, no notes).
-_COMPLAINT = re.compile(r"nakli|नकली|ਨਕਲੀ|نقلی|fraud|फ्रॉड|फ्राड|फ्रोड|fake|फेक|duplicate|डुप्लीकेट|dhokha|धोखा|kharab|खराब|"
+_COMPLAINT = re.compile(r"nakli|नकली|ਨਕਲੀ|نقلی|fraud|फ्रॉड|फ्राड|फ्रोड|fake|फेक|फ़ेक|फैक|scam|स्कैम|ghatiya|घटिया|"
+                        r"duplicate|डुप्लीकेट|dhokha|धोखा|kharab|खराब|"
                         r"ਖਰਾਬ|nahi aaya|नहीं आया|नही आया|ਨਹੀਂ ਆਇਆ|refund|रिफंड", re.IGNORECASE)
+
+# A problem with the site, the price, delivery or payment, named in answer to "koi dikkat aayi thi kya?". The transcriber
+# writes "site" as "साइड".
+_PROBLEM = re.compile(r"site|side|website|साइट|साइड|वेबसाइट|price|daam|keemat|kimat|कीमत|क़ीमत|दाम|प्राइस|mehenga|mehnga|"
+                      r"महंगा|महँगा|delivery|डिलीवरी|payment|पेमेंट|quality|क्वालिटी", re.IGNORECASE)
+
+# Call 195 (ChatGPT): its answer to "koi dikkat aayi thi kya?" got a 13 s and then a 16 s speech, the order question
+# twice more and a certificate that is in no record. Sent as this one reply's own instructions, not as a message:
+# ChatGPT spoke a quoted note out loud whatever the customer said (calls 155, 157).
+CART_CLOSE_HINT = ("\n\nTHIS REPLY ONLY: the customer is answering what stopped them. That is their second no. At most two "
+                   "short sentences, ending in 'dhanyavaad ji, aapka din shubh ho.': a doubt or complaint gets the complaint "
+                   "reply from LISTEN FIRST, a question gets a one-sentence answer from CART DETAILS, anything else gets only "
+                   "'theek hai ji, dhanyavaad. aapka din shubh ho.' Never ask about the order again, never explain the store, "
+                   "say nothing that is not in CART DETAILS. Speak first, then call mark_outcome 'not_interested' and "
+                   "end_call. Only if they now clearly want it: step 3. If you could not make out their words: 'sorry ji, "
+                   "samajh nahi aaya, ek baar phir bata dijiye'.")
+
+
+def closing_hint(state: "CallState") -> str:
+    """Extra instructions for the reply to the customer's answer to the cart's why-question (ChatGPT only)."""
+    if state.provider != "openai" or state.call_type.key != "abandoned_cart" or state.outcome:
+        return ""
+    last = next((t["text"] for t in reversed(state.transcript) if t["role"] == "agent"), "")
+    return CART_CLOSE_HINT if any(_ASKED_WHY.search(q) for q in agent_questions([{"role": "agent", "text": last}])) else ""
+
 
 _GOODBYE = re.compile(r"dhanyavaad|dhanyawad|dhanyavad|धन्यवाद|shubh ho|शुभ हो", re.IGNORECASE)
 # The closing line as the last words of a turn ("... dhanyavaad ji, aapka din shubh ho."): the call is over.
 _FINAL_GOODBYE = re.compile(r"(shubh ho|शुभ हो)[\s.!।]*$", re.IGNORECASE)
+# "... dhanyavaad ji." as the last words: the close of the wrong-number and person-away lines. Counts as the end of
+# the call only once a result is recorded (see turn_ends_call), so a passing thanks mid-call does not hang up.
+_FINAL_THANKS = re.compile(r"(dhanyavaad|dhanyawad|dhanyavad|धन्यवाद)\s*(ji|जी)?[\s.!।]*$", re.IGNORECASE)
+
+
+def turn_ends_call(text: str, state: "CallState") -> bool:
+    """The agent's turn ended in its goodbye: "shubh ho", or "dhanyavaad ji" with the result already recorded."""
+    return _FINAL_GOODBYE.search(text) is not None or (bool(state.outcome) and _FINAL_THANKS.search(text) is not None)
 # Call 135: the agent said the closing line but never called end_call; 3 s later the silence check had it ask
 # "hello ji, meri awaaz aa rahi hai?" and say the goodbye again. Owner: after the closing line, hang up.
 GOODBYE_HANGUP_SECONDS = 0.0   # owner, 7 Oct 2026: cut the call the moment the goodbye has played
@@ -318,11 +374,16 @@ def said_goodbye(transcript: list[dict[str, str]]) -> bool:
 
 def closing_line(state: "CallState", outcome: str | None) -> str:
     """The goodbye the agent is told to say when it recorded a result without saying one (calls 178, 183)."""
+    voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
+    f = forms(voice)   # an unknown voice gets the feminine forms
+    if outcome == "not_interested" and _COMPLAINT.search(probe_answer(state.transcript)):
+        # Call 191: "aapki site fake product bhejti hai" to "koi dikkat aayi thi?" got only "theek hai ji, dhanyavaad".
+        # The complaint reply (owner's words, 1 Oct 2026), then the goodbye.
+        return (f"ji, aapki chinta samajh {f['sakti']} hoon. hamari poori koshish rehti hai ki original quality ka product hi "
+                f"pahunche. aapki yeh baat main team tak pahuncha {f['deti']} hoon. dhanyavaad ji, aapka din shubh ho.")
     if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
         return "theek hai ji, dhanyavaad. aapka din shubh ho."   # owner, 7 Oct 2026 (call 182)
-    voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
-    gayi = forms(voice)["gayi"] if voice else "gayi"
-    return (f"achha ji, samajh {gayi}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
+    return (f"achha ji, samajh {f['gayi']}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
 
 
 def yes_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
@@ -497,6 +558,8 @@ class CallState:
     probe_refused: bool = False         # a call type's probe_first result sent back once: nothing asked after the opening
     help_refused: bool = False          # an abandoned cart's needs_help sent back once: the customer had said yes
     later_refused: bool = False         # call_later sent back once: the customer never asked for a call back
+    last_tool_at: float = 0.0           # when the agent last called a tool (a reply is on its way after it)
+    away_refused: bool = False          # not_interested sent back once: the person named is not on the line
     goodbye_refusals: int = 0           # end_call sent back because the goodbye was never said
     record_pending: bool = False        # a mark_outcome was sent back and nothing has been recorded since
     end_refusals: int = 0               # end_call refused while record_pending (at most twice a call)
@@ -797,6 +860,9 @@ async def run_call(
                         if in_activity:   # a marker left over from before a reconnect has no start
                             in_activity = False
                             log.info("call %s: customer stopped talking at %.1fs", call_id, time.monotonic() - state.started)
+                            if (hint := closing_hint(state)):
+                                log.info("call %s: answer to the why-question; this reply is told to close in one short turn", call_id)
+                                session.next_hint = hint
                             await session.send_realtime_input(activity_end=types.ActivityEnd())
                             if meta is not None:   # for the phone line's per-turn timing line
                                 meta.update(started=state.started, turn_sent=time.monotonic(), first_event=None)
@@ -815,6 +881,24 @@ async def run_call(
                             # "customer started talking") cancelled the rest of the agent's sentence.
                             continue
                         note = str(chunk)
+                        if "heard nothing from you for" in note and time.monotonic() - state.last_tool_at < 4:
+                            # Call 195: the reply was late because of a tool round trip, not stuck; the note collided with it.
+                            log.info("call %s: late-reply note skipped; a tool call is being answered", call_id)
+                            continue
+                        if "meri awaaz aa rahi hai" in note and not state.record_pending:
+                            heard = next((t["text"] for t in reversed(state.transcript) if t["role"] == "agent"), "")
+                            if state.outcome:
+                                # Call 191: the result was recorded, the goodbye still to come, and the 3 s silence check
+                                # had the agent ask "hello ji, meri awaaz aa rahi hai?" instead of saying it.
+                                note = ("[Note from the system: the result is recorded and the customer is waiting for you. "
+                                        "Do not ask whether they can hear you. Say only this, nothing before or after it: "
+                                        f"'{closing_line(state, state.outcome)}' Then end_call.]")
+                            elif heard and "?" not in heard and _GOODBYE.search(heard) is None:
+                                # Their silence answers a turn that asked them nothing: there is nothing to say "hello" about.
+                                note = ("[Note from the phone line: nothing has been heard from the customer for a few seconds, "
+                                        "and your last turn asked them nothing, so they are waiting for you. Do not ask whether "
+                                        "they can hear you. Ask your question now, in one short sentence; if the call is "
+                                        "finished, say the goodbye instead.]")
                         if state.unheard:
                             state.unheard = False
                             note = UNHEARD_NOTE.format(question=last_question(state.transcript)) + " " + note
@@ -933,7 +1017,7 @@ async def run_call(
                                             log.info("call %s: not played (after the goodbye): %s", call_id, text[:200])
                                         state._out_buf = ""
                                     elif (not state.ended and not state.record_pending   # a sent-back result: let it fix that
-                                          and _FINAL_GOODBYE.search(clean_agent_text(state._out_buf))
+                                          and turn_ends_call(clean_agent_text(state._out_buf), state)
                                           # Call 176: "koi dikkat aayi? ... dhanyavaad ji, aapka din shubh ho" in one turn;
                                           # the customer's answer to that question must still be heard.
                                           and "?" not in clean_agent_text(state._out_buf)):
@@ -958,6 +1042,7 @@ async def run_call(
                                 await send_event({"type": "turn_complete", "long_answer": long_answer})
                         if msg.tool_call is not None:
                             reply_begins()
+                            state.last_tool_at = time.monotonic()
                             responses = []
                             for fc in msg.tool_call.function_calls or []:
                                 result = await handle_tool(fc.name, dict(fc.args or {}), state, send_event)
@@ -1357,6 +1442,20 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                 outcome = "unclear"
                 args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") + " (confirmation was not clearly heard)").strip()}
         turns = state.transcript + ([{"role": "customer", "text": state._in_buf.strip()}] if state._in_buf.strip() else [])
+        away = next((t["text"] for t in turns if t["role"] == "customer" and _NOT_AVAILABLE.search(t["text"])), "")
+        if (outcome in ("not_interested", "unclear", "needs_help") and away
+                and not ever_yes_to_main_question(turns, state.call_type.main_question)):
+            # Call 193: someone else answered ("jyotika ji toh bahar gayi hai"); the agent went on about the order and saved
+            # not_interested with a reason nobody said. Owner: say the line and call back later.
+            if not state.away_refused and _GOODBYE.search(clean_agent_text(state._out_buf)) is None:
+                state.away_refused = state.record_pending = True
+                log.info("call %s: mark_outcome %s refused; the person named is not on the line (%r)", state.call_id, outcome, away[:80])
+                return {"status": "not recorded", "reason": f"The person named is not on the line ('{away[:80]}'), so this is not "
+                        f"a no. Ask nothing more. Say only this, nothing before or after it: '{AWAY_LINE}' Then call mark_outcome "
+                        "with outcome 'call_later' and callback_time 'thodi der baad', then end_call."}
+            outcome = "call_later"
+            args = {"outcome": outcome, "callback_time": str(args.get("callback_time") or "").strip() or "thodi der baad",
+                    "notes": ((args.get("notes") or "") + f" (the person named was not available: {away[:80]})").strip()}
         if outcome == "cancelled":
             said_no = asked_to_cancel(turns)
         elif outcome == "not_ordered":
@@ -1369,6 +1468,10 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                           and (_NO.search(t["text"]) or _REFUSAL.search(t["text"]) or _DECLINE_REASON.search(t["text"])
                                or _CANCEL.search(t["text"]))   # call 153: "main cancel karna chahti hoon" to a cart
                           for t in turns)
+            # Call 196: the no came through as Thai letters, then "aapki site se" (fake products) answered "koi dikkat
+            # aayi thi?". A problem named in answer to the why-question is their no.
+            reason_given = probe_answer(turns)
+            said_no = said_no or bool(reason_given and (_COMPLAINT.search(reason_given) or _PROBLEM.search(reason_given)))
         else:
             said_no = True
         if not said_no and outcome == "not_ordered" and state.denial_refusals < 2:
@@ -1463,7 +1566,11 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             # Call 182: "nahi, main baad mein kharidungi, abhi nahi" was recorded as call_later, with the agent's own
             # "aap kis samay wapas call karwana chahenge?" as the time. Buying later is a no, not a call back.
             when = str(args.get("callback_time") or "").strip()
-            asked = any(t["role"] == "customer" and _CALL_BACK.search(t["text"]) for t in turns)
+            asked = any(t["role"] == "customer" and (_CALL_BACK.search(t["text"]) or _NOT_AVAILABLE.search(t["text"]))
+                        for t in turns)
+            if away and not when:
+                args = {**args, "callback_time": "thodi der baad"}
+                when = "thodi der baad"
             if ("?" in when or not asked) and not state.later_refused:
                 state.later_refused = True
                 if _GOODBYE.search(clean_agent_text(state._out_buf)) is None:
@@ -1550,16 +1657,30 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                 outcome = "unclear"
                 args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") +
                                                               " (recorded 'already ordered' without a clear yes to it; check)").strip()}
-        complaints =[t["text"][:120] for t in turns if t["role"] == "customer" and _COMPLAINT.search(t["text"])]
+        if outcome == "not_interested":
+            # Call 191: "aapki site fake product bhejti hai" was written down as "aapne kisi aur site se product le liya
+            # hai". The reason is the customer's own words; the agent's reading of them goes to the notes.
+            said = probe_answer(turns)[:200]
+            reason = str(args.get("not_interested_reason") or "").strip()
+            if said and not bare_no(said) and said != reason:
+                reading = f" (agent's reading: {reason})" if reason and not bare_no(reason) else ""
+                log.info("call %s: not_interested_reason set to the customer's words %r (agent wrote %r)", state.call_id, said, reason)
+                args = {**args, "not_interested_reason": said, "notes": ((args.get("notes") or "") + reading).strip()}
+        reason = str(args.get("not_interested_reason") or "")
+        complaints = [t["text"][:120] for t in turns if t["role"] == "customer" and _COMPLAINT.search(t["text"])
+                      and t["text"].strip() not in reason]
         if complaints:
             args = {**args, "notes": ((args.get("notes") or "") + " (customer said: " + " | ".join(complaints[-3:]) + ")").strip()}
         state.outcome = outcome
         state.outcome_details = args
         state.record_pending = False
         await send_event({"type": "outcome", "outcome": state.outcome, "details": args})
-        if not clean_agent_text(state._out_buf).strip() and not said_goodbye(state.transcript):
+        spoken = clean_agent_text(state._out_buf).strip()
+        if not said_goodbye(state.transcript) and _GOODBYE.search(spoken) is None and "?" not in spoken:
             # Call 178: the reason was written down with nothing said, and the reply asked for after it was
             # "theek hai, main aapki baat samajh rahi hoon. dekhti hoon, phir aage badhte hain." Owner: say the goodbye.
+            # Call 191: a line about what it was doing, then the result, and the goodbye never came: same answer.
+            # (A question in this turn is left alone: the customer's answer to it is still to come, call 176.)
             return {"status": "recorded", "next": f"Say only this, nothing before or after it: '{closing_line(state, outcome)}' "
                     "Then end_call."}
         return {"status": "recorded"}

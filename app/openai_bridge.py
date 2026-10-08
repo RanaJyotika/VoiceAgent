@@ -28,6 +28,7 @@ import base64
 import contextlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +57,13 @@ OPENING_EXACT = ("\n\nTHE CALL HAS JUST BEEN ANSWERED. Your first words are exac
 # Whisper writes the customer's words down after the model has already answered. On call 150 the cancel check
 # ran 0.2 s before "कैंसिल कर दो" arrived and refused a real cancellation, so a tool call waits this long at most.
 TRANSCRIPT_WAIT_SECONDS = 2.0
+# The agent narrating what it is about to do: every lead-in dropped so far, and the narration lines owners heard on
+# calls 70-193, match; none of the other 300 agent lines on ChatGPT calls do (checked 8 Oct 2026).
+NARRATION = re.compile(r"(बताऊंगी|बताऊँगी|बताऊंगा|बताऊँगा|पूछूंगी|पूछूँगी|पूछूंगा|पूछूँगा|करूँगी|करूंगी|करूँगा|करूंगा|चेक कर|"
+                       r"समझ रही हूँ|समझ रहा हूँ|समझ रही हूं|समझ रहा हूं|आगे बढ़|देखती हूँ|देखता हूँ|कर लेती हूँ|कर लेता हूँ|"
+                       r"संभाल|सम्भाल|एक पल|एक मिनट|शुरू करती|शुरू करता|recap|bataungi|bataunga|karungi|karunga|"
+                       r"aage badh|dekhti hoon|dekhta hoon|samajh rahi|samajh raha|ek pal)", re.IGNORECASE)
+_SENTENCE_END = re.compile(r"[।.!?](?=\s|$)")
 
 
 def is_openai_model(model: str) -> bool:
@@ -217,6 +225,7 @@ class OpenAISession:
         self._appended_ms = 0.0         # audio in the input buffer since the last commit
         self._responding = False        # the model is producing a reply right now
         self._pending_tools = 0         # tool calls we owe an answer to
+        self.next_hint = ""             # extra instructions for the reply to the next customer turn only (live_bridge)
         self._closed: BaseException | None = None
         self._reader = asyncio.create_task(self._read_loop())
 
@@ -265,8 +274,9 @@ class OpenAISession:
             return
         self._appended_ms = 0.0
         self._retried = False   # a new customer turn: an empty reply to it may be asked for again once
+        hint, self.next_hint = self.next_hint, ""
         await self._send({"type": "input_audio_buffer.commit"})
-        await self._reply()
+        await self._reply(self.prompt + hint if hint and self.prompt else "")
 
     async def _reply(self, instructions: str = "") -> None:
         payload: dict = {"type": "response.create"}
@@ -388,7 +398,11 @@ class OpenAISession:
                     # (call 172: the greeting in English letters, then again in Devanagari): wait for a second part.
                     deva = sum(1 for ch in self._held_text if "ऀ" <= ch <= "ॿ")
                     latin = sum(1 for ch in self._held_text if ch.isascii() and ch.isalpha())
-                    if "?" in self._held_text and deva >= latin:
+                    # Call 195: a reply was held until its "?" at the very end, so a 13 s answer started 1.75 s late.
+                    # A first sentence that is not narration is the reply itself too: play it as soon as it is complete.
+                    done = self._held_text[:max((m.end() for m in _SENTENCE_END.finditer(self._held_text)), default=0)]
+                    if (deva >= latin and not NARRATION.search(self._held_text)
+                            and ("?" in self._held_text or len(done.split()) >= 4)):
                         out.extend(self._held)
                         self._held, self._holding, self._played_item = [], False, self._first_item
 
