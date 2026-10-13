@@ -9,7 +9,7 @@ from .config import DATA_DIR, DB_PATH, RECORDINGS_DIR, UPLOAD_DIR, USD_INR
 
 CONTACT_COLUMNS = [
     "order_id", "customer_name", "phone", "product", "quantity", "amount",
-    "payment_mode", "address", "delivery_date", "language", "notes",
+    "payment_mode", "address", "delivery_date", "language", "notes", "product_ids",
 ]
 
 SCHEMA = """
@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
     last_call_date TEXT,        -- YYYY-MM-DD: no calls are placed after this day (optional)
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,       -- 'autodial', 'shopify'
+    value TEXT                  -- JSON
+);
 """
 
 
@@ -65,6 +69,7 @@ def init_db() -> None:
         _add_columns(conn, "calls", {
             "recording": "TEXT",        # file name under data/recordings
             "hangup_cause": "TEXT",     # Plivo's reason: USER_BUSY, NO_ANSWER, NORMAL_CLEARING...
+            "mongo_synced_at": "TEXT",  # when mongo_sync.py copied this call to MongoDB
         })
         _add_columns(conn, "contacts", {
             "attempts": "INTEGER DEFAULT 0",   # phone calls placed to this contact so far
@@ -73,6 +78,11 @@ def init_db() -> None:
             "last_result": "TEXT",             # one line for the team: "busy", "confirmed", "customer hung up"
             "campaign_id": "INTEGER",          # the campaign this contact belongs to
             "extra": "TEXT",                   # JSON: the sheet's own columns beyond CONTACT_COLUMNS
+            "product_ids": "TEXT",             # Shopify product ids of the order or cart, comma separated (catalog.py)
+        })
+        _add_columns(conn, "campaigns", {
+            "auto": "INTEGER DEFAULT 0",       # 1: automatic calling (autodial.py) rings this list
+            "source": "TEXT DEFAULT ''",       # '' = made by hand (Excel, typed numbers); 'store' = filled from the store
         })
         # A server restart mid-campaign must not leave contacts stuck on "calling".
         conn.execute("UPDATE contacts SET status='pending' WHERE status='calling'")
@@ -142,6 +152,18 @@ def insert_contacts(rows: list[dict], campaign_id: int, call_type: str) -> int:
     return len(rows)
 
 
+def insert_contact(row: dict, campaign_id: int, call_type: str) -> int:
+    """Add one contact and return its id (for the systems that add contacts on their own)."""
+    with connect() as conn:
+        cur = conn.execute(
+            f"INSERT INTO contacts ({', '.join(CONTACT_COLUMNS)}, campaign, campaign_id, extra, created_at) "
+            f"VALUES ({', '.join('?' for _ in CONTACT_COLUMNS)}, ?, ?, ?, ?)",
+            [str(row.get(c, "") or "") for c in CONTACT_COLUMNS]
+            + [call_type, campaign_id, json.dumps(row.get("extra") or {}, ensure_ascii=False), now_iso()],
+        )
+        return cur.lastrowid
+
+
 def _json(value, default):
     try:
         return json.loads(value) if value else default
@@ -176,11 +198,11 @@ def _campaign_row(r) -> dict:
     return d
 
 
-def create_campaign(name: str, call_type: str, facts: dict, last_call_date: str = "") -> int:
+def create_campaign(name: str, call_type: str, facts: dict, last_call_date: str = "", source: str = "") -> int:
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO campaigns (name, call_type, facts, settings, last_call_date, created_at) VALUES (?, ?, ?, '{}', ?, ?)",
-            (name, call_type, json.dumps(facts, ensure_ascii=False), last_call_date or None, now_iso()))
+            "INSERT INTO campaigns (name, call_type, facts, settings, last_call_date, created_at, source) VALUES (?, ?, ?, '{}', ?, ?, ?)",
+            (name, call_type, json.dumps(facts, ensure_ascii=False), last_call_date or None, now_iso(), source))
         return cur.lastrowid
 
 
@@ -201,6 +223,29 @@ def update_campaign(campaign_id: int, **fields) -> None:
     if sets:
         with connect() as conn:
             conn.execute(f"UPDATE campaigns SET {', '.join(sets)} WHERE id=?", (*args, campaign_id))
+
+
+def set_campaign_auto(campaign_id: int, auto: bool) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE campaigns SET auto=? WHERE id=?", (1 if auto else 0, campaign_id))
+
+
+def auto_campaigns() -> list[dict]:
+    """The campaigns automatic calling rings, oldest first."""
+    with connect() as conn:
+        return [_campaign_row(r) for r in conn.execute("SELECT * FROM campaigns WHERE auto=1 ORDER BY id")]
+
+
+def get_setting(key: str, default=None):
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return _json(row["value"], default) if row else default
+
+
+def set_setting(key: str, value) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (key, json.dumps(value, ensure_ascii=False)))
 
 
 def delete_campaign(campaign_id: int) -> None:
@@ -347,12 +392,14 @@ def callbacks() -> list[dict]:
 _NOT_BLOCKED = "phone NOT IN (SELECT phone FROM contacts WHERE status='do_not_call' AND phone != '')"
 
 
-def next_to_call(max_attempts: int, campaign_id: int | None = None) -> dict | None:
-    """The next contact the campaign should dial: never-called contacts first (in sheet order),
-    then no-answer / busy retries whose time has come."""
+def next_to_call(max_attempts: int, campaign_id: int | None = None, newest_first: bool = False) -> dict | None:
+    """The next contact the campaign should dial: never-called contacts first (in sheet order, or the newest
+    first for store orders: a fresh order is the one worth confirming), then no-answer / busy retries whose
+    time has come."""
     scope, sargs = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
+    order = "id DESC" if newest_first else "id"
     with connect() as conn:
-        row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope} ORDER BY id LIMIT 1",
+        row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope} ORDER BY {order} LIMIT 1",
                            sargs).fetchone()
         if row:
             return dict(row)

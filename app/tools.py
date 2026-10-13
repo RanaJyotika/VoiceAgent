@@ -1,6 +1,7 @@
 """Tools the agent can call during a conversation."""
 from google.genai import types
 
+from . import catalog
 from .call_types import DEFAULT, LINE_OUTCOMES, CallType  # noqa: F401  (LINE_OUTCOMES: re-exported)
 
 
@@ -45,11 +46,28 @@ END_CALL = types.FunctionDeclaration(
     parameters=types.Schema(type=types.Type.OBJECT, properties={}),
 )
 
+PRODUCT_INFO = types.FunctionDeclaration(
+    name="product_info",
+    description=("Look up a product in our catalogue when the customer asks about one that is not in PRODUCT INFO. "
+                 "Returns the closest products with price, options and a short description."),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={"query": types.Schema(type=types.Type.STRING, description=(
+            "The product the customer asked about, in English letters, e.g. '5 mukhi rudraksha', 'karungali mala', "
+            "'tiger eye bracelet'."))},
+        required=["query"],
+    ),
+)
+
+
 def tools_for(call_type: CallType) -> list[types.Tool]:
-    """The tools the agent has on a call of this type. record_address only where addresses are taken."""
+    """The tools the agent has on a call of this type. record_address only where addresses are taken;
+    product_info only when the product catalogue is set up (MONGODB_URI)."""
     declarations = [mark_outcome_for(call_type)]
     if call_type.takes_address:
         declarations.append(RECORD_ADDRESS)
+    if catalog.enabled():
+        declarations.append(PRODUCT_INFO)
     declarations.append(END_CALL)
     return [types.Tool(function_declarations=declarations)]
 

@@ -71,6 +71,43 @@ RING_SECONDS = int(os.getenv("RING_SECONDS", "25"))
 MAX_CONCURRENT_CALLS = max(1, int(os.getenv("MAX_CONCURRENT_CALLS", "10")))
 
 
+# --- Shopify (app/shopify.py). Everything stays idle until these are filled in. ---
+# The store's own address, e.g. vedicshop.myshopify.com.
+SHOPIFY_STORE = (os.getenv("SHOPIFY_STORE") or os.getenv("SHOPIFY_STORE_DOMAIN") or "").strip().removeprefix("https://").rstrip("/")
+# A Dev Dashboard app installed on the store: the server trades these for a 24-hour token by itself,
+# and the client secret also signs every webhook. (An older admin-made app gives a fixed token instead.)
+SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID", "").strip()
+SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET", "").strip()
+SHOPIFY_ADMIN_TOKEN = (os.getenv("SHOPIFY_ADMIN_TOKEN") or os.getenv("SHOPIFY_ADMIN_API_TOKEN") or "").strip()
+# Webhooks made by hand in Shopify admin (Settings > Notifications > Webhooks) are signed with the
+# key shown on that page, not the app's secret.
+SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET", "").strip() or SHOPIFY_CLIENT_SECRET
+SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2026-10")
+
+# --- Product catalogue (app/catalog.py): the Vedic Vaibhav MongoDB, read only. Empty URI = no product
+# answers beyond what the call's own row says. Use a read-only database user.
+MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
+MONGODB_DB = os.getenv("MONGODB_DB", "VV-Ecom").strip()
+# Where the products are: a collection of product documents, or "" to find one whose name has
+# "product" in it; failing that, the products listed inside MONGODB_COLLECTIONS documents.
+MONGODB_PRODUCTS = os.getenv("MONGODB_PRODUCTS", "shopifyproducts").strip()
+MONGODB_COLLECTIONS = os.getenv("MONGODB_COLLECTIONS", "shopifycollections").strip()
+# Only this store's products, when the database holds more than one shop ("" = all).
+MONGODB_SHOP = os.getenv("MONGODB_SHOP", "").strip()
+CATALOG_REFRESH_MINUTES = float(os.getenv("CATALOG_REFRESH_MINUTES", "15"))
+# The main site's copies of Shopify orders, looked up by order number when a call starts (live status,
+# and the products of a sheet row that has only an order number). The first one holding the order wins.
+MONGODB_ORDERS = [c.strip() for c in os.getenv("MONGODB_ORDERS", "shopifyOrders,shopifyorders").split(",") if c.strip()]
+# Every finished call is copied here (app/mongo_sync.py). The collection must already exist: that is
+# how a URI for the wrong cluster is caught before anything is written there. "" = no copying.
+MONGODB_CALLS_DB = os.getenv("MONGODB_CALLS_DB", "ai-calling").strip()
+MONGODB_CALLS_COLLECTION = os.getenv("MONGODB_CALLS_COLLECTION", "calling").strip()
+
+# --- Other systems adding contacts (POST /api/intake/{campaign_id}), e.g. the Vedic Vaibhav main
+# database. Sent in the X-Api-Key header; empty = the intake is closed.
+INTAKE_API_KEY = os.getenv("INTAKE_API_KEY", "").strip()
+
+
 def plivo_missing() -> list[str]:
     need = {"PLIVO_AUTH_ID": PLIVO_AUTH_ID, "PLIVO_AUTH_TOKEN": PLIVO_AUTH_TOKEN,
             "PLIVO_FROM_NUMBER": PLIVO_FROM_NUMBER, "PUBLIC_BASE_URL": PUBLIC_BASE_URL}
@@ -250,15 +287,67 @@ OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
 OPENAI_TRANSCRIBE_LANGUAGE = os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "hi").strip()
 OPENAI_FALLBACK = os.getenv("OPENAI_FALLBACK", "true").lower() != "false" and bool(OPENAI_API_KEY)
 
+# --- Sarvam, a third voice agent (app/sarvam_bridge.py) ---
+# Not one voice model but three services in a row: Saaras writes the customer's words down, the
+# Sarvam-105B chat model writes the reply, Bulbul speaks it.
+SARVAM_API_KEY = os.getenv("SARVAM_API") or os.getenv("SARVAM_API_KEY") or ""
+SARVAM_MODEL = os.getenv("SARVAM_MODEL", "sarvam-105b-conversations")
+SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3-realtime")
+# "codemix" writes Hindi words in Devanagari and English words in English letters, as Hinglish is spoken.
+SARVAM_STT_MODE = os.getenv("SARVAM_STT_MODE", "codemix")
+SARVAM_LANGUAGE = os.getenv("SARVAM_LANGUAGE", "hi-IN")
+SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
+# Bulbul v3 speakers for Gauri (female) and Arjun (male). Owner picked Priya and Varun (13 Oct 2026).
+SARVAM_VOICE_FEMALE = os.getenv("SARVAM_VOICE_FEMALE", "priya").strip().lower()
+SARVAM_VOICE_MALE = os.getenv("SARVAM_VOICE_MALE", "varun").strip().lower()
+# Every Bulbul v3 speaker (docs.sarvam.ai, 13 Oct 2026), offered on the dashboard when the agent is Sarvam;
+# the two above first. They join VOICES, so a call, campaign or auto-dialer can carry one; Gemini and ChatGPT
+# then speak in their own voice of the same gender (gemini_voice below). Sarvam's docs call varun deep and
+# dramatic, not a neutral default.
+_BULBUL_FEMALE = ["priya", "ishita", "ritu", "neha", "pooja", "simran", "kavya", "shreya", "roopa", "tanya",
+                  "shruti", "suhani", "kavitha", "rupali"]
+_BULBUL_MALE = ["varun", "shubh", "aditya", "rahul", "rohan", "amit", "dev", "ratan", "manan", "sumit", "kabir",
+                "aayan", "ashutosh", "advait", "anand", "tarun", "sunny", "mani", "gokul", "vijay", "mohit", "rehan", "soham"]
+SARVAM_VOICES = {
+    **{n.capitalize(): "female" for n in dict.fromkeys([SARVAM_VOICE_FEMALE, *_BULBUL_FEMALE])},
+    **{n.capitalize(): "male" for n in dict.fromkeys([SARVAM_VOICE_MALE, *_BULBUL_MALE])},
+}
+VOICES.update(SARVAM_VOICES)
+
+
+def gemini_voice(voice: str) -> str:
+    """The Gemini voice for a dashboard voice: a Sarvam one becomes Gemini's voice of the same gender."""
+    gender = SARVAM_VOICES.get(voice)
+    if gender is None:
+        return voice
+    if VOICES.get(GEMINI_VOICE) == gender:
+        return GEMINI_VOICE
+    return next(n for n, g in VOICES.items() if g == gender and n not in SARVAM_VOICES)
+
+
+# 0.5 to 2.0. At 1.0 Priya and Varun sounded slow, as if reading a script (owner, 13 Oct 2026).
+SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.15"))
+# Rupees, from Sarvam's price page (8 Oct 2026): chat per million tokens, Saaras Rs 30 an hour of
+# audio, Bulbul Rs 30 per 10,000 characters. Held as USD per million units, like the other agents.
+SARVAM_PRICE_PER_M = {k: v / USD_INR for k, v in {
+    "text_in": float(os.getenv("SARVAM_RS_TEXT_IN", "29.28")),
+    "cached_text_in": float(os.getenv("SARVAM_RS_CACHED_TEXT_IN", "10.98")),
+    "text_out": float(os.getenv("SARVAM_RS_TEXT_OUT", "73.20")),
+    "stt_seconds": float(os.getenv("SARVAM_RS_STT_HOUR", "30")) / 3600 * 1_000_000,
+    "tts_chars": float(os.getenv("SARVAM_RS_TTS_10K_CHARS", "30")) * 100,
+}.items()}
+
 # The agents the owner picks between on the dashboard, for a single call or a whole campaign; the
 # server takes no other (a browser tab opened before a restart once sent a model no longer offered).
 # gemini-3.8-live has refused every session on this key so far ("1007 invalid argument" as the
 # greeting is sent: calls 38, 40, 56); the call then carries on with GEMINI_LIVE_MODEL, and the
 # dashboard shows the agent that actually answered.
+# Sarvam first (the default for a single call): the owner found it far better than the others on 9 Oct 2026.
 AGENT_LABELS = {
+    **({SARVAM_MODEL: "Sarvam"} if SARVAM_API_KEY else {}),
+    **({OPENAI_REALTIME_MODEL: "ChatGPT"} if OPENAI_API_KEY else {}),
     GEMINI_LIVE_MODEL: "Gemini 2.5 Flash",
     "gemini-3.8-live": "Gemini 3.8 Live",
-    **({OPENAI_REALTIME_MODEL: "ChatGPT (" + OPENAI_REALTIME_MODEL + ")"} if OPENAI_API_KEY else {}),
 }
 OFFERED_MODELS = list(AGENT_LABELS)
 # Changes on every server start. The page sends it with every call it starts, and a page loaded before

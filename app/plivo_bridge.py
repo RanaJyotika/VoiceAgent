@@ -21,7 +21,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
-from . import db, fillers, line_audio, vad, voiceprint
+from . import catalog, db, fillers, line_audio, vad, voiceprint
 from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, FILLER_DELAY_MS, FILLER_LATE_MS,
                      FILLER_MAX_PER_CALL, FILLER_MIN_VOICE_MS, FILLER_SLOW_MS, NOISE_SUPPRESSION, VOICEPRINT,
                      VOICEPRINT_CALLER, VOICEPRINT_OTHER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
@@ -29,10 +29,11 @@ from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, F
                      PHONE_OUT_CHUNK_MS, PHONE_SEND_LEAD_MS, PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_LONG_TURN_SECONDS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
                      PHONE_SILENT_GOODBYE_SECONDS, PHONE_STUCK_SECONDS, PHONE_REPLY_LATE_SECONDS, PHONE_UNCLEAR_SECONDS, PHONE_NOISE_ASK_SECONDS,
                      PHONE_SHORT_END_MS, PHONE_SHORT_TURN_MS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
-                     PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, plivo_missing)
+                     PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, gemini_voice, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, Nudge, run_call
 from .openai_bridge import is_openai_model, voice_for
+from .sarvam_bridge import is_sarvam_model
 from .call_types import get_prompt
 from .prompts import with_language
 
@@ -605,10 +606,11 @@ class PendingCall:
             self.seg_audio, self.run_audio, self.run_verdict = bytearray(self.run_audio), bytearray(), None
             out = [ACTIVITY_START, *(self.boost(f) for f in self.preroll)]
             self.preroll.clear()
-            if self.seg_over_agent and self.meta.get("provider") == "openai":
+            if self.seg_over_agent and self.meta.get("provider") in ("openai", "sarvam"):
                 # OpenAI finishes writing a reply in about a second, long before the phone has
                 # played it, and only reports a barge-in while it is still writing. So the agent
                 # talked straight over the customer (call 70). Cut the queued audio here instead.
+                # Sarvam's voice is just as far ahead of the phone.
                 log.info("customer talked over the agent; stopping its audio")
                 self.clear_task = asyncio.get_running_loop().create_task(self.send_event({"type": "interrupted"}))
             return out
@@ -699,7 +701,9 @@ class PendingCall:
         self.sender = asyncio.create_task(self._send_loop(ws))
         if FILLERS:
             # Always in the voice the agent speaks in: a ChatGPT call speaks in an OpenAI voice.
-            folder = fillers.openai_key(voice_for(self.voice)) if is_openai_model(self.model) else self.voice
+            # Sarvam has no clips made, so its calls get none rather than another agent's voice.
+            folder = (fillers.openai_key(voice_for(self.voice)) if is_openai_model(self.model)
+                      else f"sarvam-{self.voice}" if is_sarvam_model(self.model) else gemini_voice(self.voice))
             self.filler = fillers.Picker(folder)
             log.info("filler sounds: %s", f"{len(self.filler.clips)} clips in voice {folder}, played when the wait is "
                      "long or longer than usual" if self.filler.clips else
@@ -738,7 +742,8 @@ class PendingCall:
     def usual_wait(self) -> float:
         """This call's usual time from the end of the customer's turn to the agent's first audio."""
         return (sorted(self.reply_delays)[len(self.reply_delays) // 2] if self.reply_delays
-                else 1.6 if is_openai_model(self.model) else 3.5)   # measured on calls 145-160 until this call has its own
+                else 1.6 if is_openai_model(self.model) else 2.0 if is_sarvam_model(self.model)   # Sarvam: a guess, not measured
+                else 3.5)   # measured on calls 145-160 until this call has its own
 
     def filler_wait(self) -> float:
         """How far into the wait a filler goes: early in a gap that is always long (Gemini), and for a quick agent
@@ -929,6 +934,8 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
     if voice not in VOICES:
         voice = GEMINI_VOICE
     contact = with_language(contact, language)
+    # The order and its products, fresh from the main database (at most a few seconds; never stops the call).
+    contact = await catalog.enrich(contact)
     # Number typed on the screen wins; otherwise the number from the Excel row.
     to_number = normalise_phone(to) or normalise_phone(contact.get("phone", ""))
     if DIAL_ONLY_MY_NUMBER:

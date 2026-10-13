@@ -19,13 +19,13 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import db, openai_bridge
+from . import catalog, db, openai_bridge, sarvam_bridge
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
-                     OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS,
-                     TRANSCRIPT_LANGUAGES)
+                     OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
+                     TRANSCRIPT_LANGUAGES, gemini_voice)
 from .call_types import DEFAULT as DEFAULT_CALL_TYPE, CallType, call_type_for
 from .prompts import forms
 from .tools import tools_for
@@ -67,7 +67,7 @@ _ANY_LETTER = re.compile(r"[^\W\d_]")
 _L, _R = r"(?<![\wऀ-෿])", r"(?![\wऀ-෿])"
 _YES = re.compile(_L + r"(haan|han|ha|haa|hanji|ji|jee|sahi|sahee|theek|thik|ok|okay|yes|yeah|confirm|bilkul|kar do|kar dijiye|"
                   r"kardo|karo|done|right|correct|हाँ|हां|हा|जी|हाँजी|हांजी|सही|ठीक|बिल्कुल|कर दो|कर दीजिए|"
-                  r"जीजी|हन्जी|हंजी|हंदी|कंफर्म|कन्फर्म|कनफर्म|"   # "haan ji" as the transcriber wrote it on calls 167-168
+                  r"जीजी|हन्जी|हंजी|हंदी|हनजी|कंफर्म|कन्फर्म|कनफर्म|"   # "haan ji" as the transcriber wrote it on calls 167-168, 218
                   r"ਹਾਂ|ਹਾਂਜੀ|ਜੀ|ਸਹੀ|ਠੀਕ|ਬਿਲਕੁਲ|"   # Punjabi script (call 71)
                   r"ہاں|ہاںجی|جی|صحیح|ٹھیک|بالکل|کر دو)" + _R, re.IGNORECASE)   # Urdu script: Gemini writes Hindi in it (calls 134, 137)
 _NO = re.compile(_L + r"(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|नई|नाई|गलत|मत|कैंसल|कैंसिल|कैन्सल|केंसल|"   # नाई: "nahi" on call 182
@@ -302,6 +302,16 @@ _DECLINE_REASON = re.compile(r"(kisi aur|kahin aur|kahi aur|dusri|doosri|dusre|d
                              r"(zyada|jyada|jada|high|ज्यादा|ज़्यादा|जादा|हाई)", re.IGNORECASE)
 # The abandoned cart's check that the customer already ordered: "kya aapne yahi <items> order kar liya hai?"
 _ALREADY_CHECK = re.compile(r"(order|ऑर्डर)\s*(kar|कर)\s*(liya|li|diya|di|लिया|ली|दिया|दी)", re.IGNORECASE)
+# The customer saying in their own words that they already ordered it (call 217: "मैंने पहले कर लिया", "Vedic shop से
+# मंगवाया था"). Owner, 12 Oct 2026: that is enough; thank them and close, never check again.
+# Past tense only: "haan confirm kar dijiye" or "mangwana hai" is a yes to ordering, never "already ordered".
+_END = r"(?![\wऀ-ॿ])"   # a word's end; Python's \b breaks inside Hindi words at a vowel sign ("दी|जिए")
+_SAID_ORDERED = re.compile(r"pehle|pahle|पहले|already|ऑलरेडी|"
+                           rf"(kar|कर)\s*(liya|li|diya|di|लिया|ली|दिया|दी){_END}|"
+                           rf"mangwa(ya|yi|i|\s*liya|\s*li){_END}|मंगवा(या|ई|\s*लिया|\s*ली){_END}|मँगवा(या|ई|\s*लिया){_END}|"
+                           rf"manga\s*(liya|li){_END}|मंगा\s*(लिया|ली){_END}|(le|ले)\s*(liya|li|लिया|ली){_END}|"
+                           r"(confirm|कन्फर्म|कंफर्म)\s*(ho|हो)\s*(gaya|gayi|chuka|chuki|गया|गई|चुका|चुकी)|"
+                           rf"(order|ऑर्डर)\s*(kiya|ki|किया|की){_END}", re.IGNORECASE)
 # The opening's "kya meri baat <name> ji se ho rahi hai?" (owner, 6 Oct 2026): not a question about the order.
 _IDENTITY = re.compile(r"baat\s+\S+.{0,20}(ho rahi|ho rahi hai)|बात\s+\S+.{0,20}हो रही", re.IGNORECASE)
 _SAY_BACK = re.compile(r"hisaab|हिसाब|mutabik|मुताबिक|anusaar|अनुसार|matlab|मतलब|toh aap|तो आप", re.IGNORECASE)
@@ -497,6 +507,10 @@ def turn_usage(um: Any) -> dict[str, int]:
     # Gemini Live has no such discount, which is why its text input dominates a call's cost).
     out["cached_text_in"] = int(getattr(um, "cached_text_in", 0) or 0)
     out["cached_audio_in"] = int(getattr(um, "cached_audio_in", 0) or 0)
+    # Sarvam bills its speech services by the second of the customer's audio and the character of the agent's.
+    for key in ("stt_seconds", "tts_chars"):
+        if getattr(um, key, 0):
+            out[key] = getattr(um, key)
     return out
 
 
@@ -518,7 +532,7 @@ def can_fall_back(model: str, exc: BaseException, exhausted: bool = False) -> bo
     out of credit, key refused, or (exhausted) it has already failed to reconnect the allowed
     number of times. A single internal error is a blip and reconnecting to Gemini fixes it; on
     call 79 the same "1011 internal error" came back on every reconnect and the call was lost."""
-    if not OPENAI_FALLBACK or openai_bridge.is_openai_model(model):
+    if not OPENAI_FALLBACK or openai_bridge.is_openai_model(model) or sarvam_bridge.is_sarvam_model(model):
         return False
     return exhausted or is_billing_error(exc) or "api key" in str(exc).lower() or "permission" in str(exc).lower()
 
@@ -660,7 +674,7 @@ def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
         system_instruction=types.Content(parts=[types.Part(text=system_prompt)]),
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice(voice))
             )
         ),
         tools=tools_for(call_type),
@@ -694,7 +708,7 @@ async def run_call(
     if model in _refused_models:
         log.warning("%s refused an earlier session on this run; using %s for this call instead", model, GEMINI_LIVE_MODEL)
         model = GEMINI_LIVE_MODEL
-    if gemini_is_down() and not openai_bridge.is_openai_model(model):
+    if gemini_is_down() and not openai_bridge.is_openai_model(model) and not sarvam_bridge.is_sarvam_model(model):
         left = _provider_down["gemini"] - time.monotonic()
         log.warning("Gemini failed recently; this call goes straight to %s (retrying Gemini in %.0f min)",
                     OPENAI_REALTIME_MODEL, left / 60)
@@ -703,8 +717,10 @@ async def run_call(
     state = CallState(call_id=call_id, call_type=call_type_for(contact), model=model)
     if openai_bridge.is_openai_model(model):
         state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
+    elif sarvam_bridge.is_sarvam_model(model):
+        state.provider, state.prices = "sarvam", SARVAM_PRICE_PER_M
     if meta is not None:
-        meta["provider"] = state.provider   # the phone bridge handles barge-in differently for OpenAI
+        meta["provider"] = state.provider   # the phone bridge handles barge-in differently for OpenAI and Sarvam
     ACTIVE[call_id] = {"state": state, "contact": contact or {}, "channel": channel, "gate": start_gate,
                        "meta": meta or {}, "dialed_at": time.monotonic(), "voice": voice}
     client = make_client()
@@ -716,8 +732,9 @@ async def run_call(
     def may_hold_back() -> bool:
         """Can the reply being prepared be held back if the customer's turn carried no words? Only on the
         phone with Gemini: its transcript of the customer always arrived before its reply (111 of 111 turns
-        on calls 35 to 72). OpenAI writes the customer's words after its reply has begun."""
-        return manual_vad and state.provider == "gemini" and state.answering == "speech"
+        on calls 35 to 72). OpenAI writes the customer's words after its reply has begun. Sarvam replies to the
+        transcript, so it always comes first."""
+        return manual_vad and state.provider in ("gemini", "sarvam") and state.answering == "speech"
 
     def reply_begins() -> None:
         """The model's first output of a new turn (audio, text or a tool call): decide, once, whether
@@ -788,6 +805,13 @@ async def run_call(
                     tools=tools_for(state.call_type),
                     greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else ""))
                 attempts = []
+            elif sarvam_bridge.is_sarvam_model(model):
+                # Sarvam's three services wearing the same session interface (app/sarvam_bridge.py).
+                session = await stack.enter_async_context(sarvam_bridge.connect(
+                    prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad,
+                    tools=tools_for(state.call_type),
+                    greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else ""))
+                attempts = []
             for n, (fast, hints) in enumerate(attempts):
                 try:
                     session = await stack.enter_async_context(client.aio.live.connect(
@@ -813,7 +837,7 @@ async def run_call(
             # Ask the agent to open the call. Phone calls start with the agent speaking.
             # A completed turn makes the agent greet at once. (A realtime text message would
             # wait for the microphone to go quiet first, which never happens in a noisy room.)
-            if model.startswith("gemini-2.") or openai_bridge.is_openai_model(model):
+            if model.startswith("gemini-2.") or openai_bridge.is_openai_model(model) or sarvam_bridge.is_sarvam_model(model):
                 await session.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text=opening)]),
                     turn_complete=True,
@@ -1114,7 +1138,8 @@ async def run_call(
                     state.reconnects += 1
                     log.warning("call %s: connection to %s dropped (%s: %s) while the agent was saying %r; reconnecting (%s of %s)",
                                 call_id, state.provider, type(exc).__name__, exc, saying, state.reconnects, MAX_RECONNECTS)
-                    if "1007" in str(exc) and model != GEMINI_LIVE_MODEL and not openai_bridge.is_openai_model(model):
+                    if ("1007" in str(exc) and model != GEMINI_LIVE_MODEL and not openai_bridge.is_openai_model(model)
+                            and not sarvam_bridge.is_sarvam_model(model)):
                         # "Invalid argument" is not a blip: this model refuses how we talk to it, and
                         # would refuse again. Carry the call on the default model instead of dropping it.
                         log.warning("call %s: %s refused the session; switching to %s", call_id, model, GEMINI_LIVE_MODEL)
@@ -1312,6 +1337,13 @@ def classify_unanswered(cause: str) -> tuple[str, str]:
 
 async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_event: SendEvent) -> dict[str, Any]:
     log.info("tool %s %s", name, json.dumps(args, ensure_ascii=False))
+    if name == "product_info":
+        # A lookup records nothing and ends nothing, so it is answered even with a reply to a noise.
+        contact = (ACTIVE.get(state.call_id) or {}).get("contact") or {}
+        answer = catalog.tool_answer(str(args.get("query") or ""), order_amount=str(contact.get("amount") or ""))
+        log.info("call %s: product_info %r -> %s", state.call_id, args.get("query"),
+                 [p.splitlines()[0] for p in answer.get("products", [])] or "nothing found")
+        return answer
     after_goodbye = name in ("mark_outcome", "end_call") and said_goodbye(state.transcript)
     if state.held and after_goodbye:
         # Call 88: the customer confirmed and heard the goodbye; the result came a moment later, with a
@@ -1536,7 +1568,11 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                         "Do not end the call. Ask once, gently: 'koi baat nahi ji. agar bura na maanein toh, koi khaas wajah?' and wait. "
                         "If their reason is a misunderstanding that CAMPAIGN DETAILS answer, clear it up once as NOT INTERESTED says. "
                         "Then call mark_outcome again with their reason in their words, or 'not given' if they would not say."}
-        if outcome in state.call_type.probe_first and not state.probe_refused:
+        # Owner, 12 Oct 2026 (call 217): a customer who says in their own words that they already ordered it is thanked
+        # and the call closed; no probing first.
+        said_ordered = outcome == "already_ordered" and any(
+            _SAID_ORDERED.search(t["text"]) for t in state.transcript[-6:] if t["role"] == "customer")
+        if outcome in state.call_type.probe_first and not state.probe_refused and not said_ordered:
             # Calls 133 and 134 (abandoned cart): "Vedic Vaibhav se order kiya tha" and "kisi aur site se kiya tha"
             # were closed on the spot. Owner: handle the customer until a clear yes or no.
             agent = [t["text"] for t in state.transcript if t["role"] == "agent"] + [clean_agent_text(state._out_buf)]
@@ -1601,9 +1637,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                     "close yet. Say it back in one sentence and check (MISMATCH a: 'achha, toh aapke hisaab se ..., sahi?'), "
                     "wait for their yes, then carry on with step 3 and call mark_outcome again."}
         contact = (ACTIVE.get(state.call_id) or {}).get("contact") or {}
-        # Owner, 7 Oct 2026: a cart paid online is paid on the site, so the address is not asked on the call.
-        paid_online = state.call_type.key == "abandoned_cart" and "online" in str(args.get("payment_preference") or "").lower()
-        if (state.call_type.takes_address and not paid_online and str(contact.get("address") or "").strip() and not state.address
+        # Owner, 12 Oct 2026: the address is confirmed on every order, paid online too (7 Oct had skipped it for online carts).
+        if (state.call_type.takes_address and str(contact.get("address") or "").strip() and not state.address
                 and (outcome in state.call_type.positive or args.get("mismatch"))
                 and not any(_ADDRESS_WORDS.search(q) for q in asked)):
             # Call 122: the address on record was only mentioned in passing (and dropped on a repeat), never asked about.
@@ -1623,7 +1658,9 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                 (t["text"] for t in turns[asked_at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])), "")
             if asked_at is not None and not said_yes(answer):
                 state.address_yes_refusals += 1
-                if state.confirm_refusals + state.address_yes_refusals <= 1:
+                # Owner, 12 Oct 2026 (call 218): the address is always confirmed before the goodbye. It had shared one
+                # re-ask with the clear-yes check (call 168), so a re-ask there left the address unchecked.
+                if state.address_yes_refusals <= 2:
                     state.record_pending = True
                     log.info("call %s: mark_outcome %s refused; no clear yes to the address question (answer: %r)",
                              state.call_id, outcome, answer)
@@ -1643,17 +1680,18 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                                and any(_ALREADY_CHECK.search(q) for q in agent_questions([turns[i]]))), None)
             answer = "" if checked_at is None else next(
                 (t["text"] for t in turns[checked_at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])), "")
-            if took_order or not said_yes(answer):
+            # The customer's own words count as much as a yes to the check (call 217 asked four times).
+            own_words = any(_SAID_ORDERED.search(t["text"]) for t in turns[-6:] if t["role"] == "customer")
+            if took_order or not (said_yes(answer) or own_words):
                 state.order_refusals += 1
                 if state.order_refusals <= 2:
                     state.record_pending = True
                     log.info("call %s: mark_outcome already_ordered refused; took the order: %s, answer to the check: %r",
                              state.call_id, took_order, answer)
-                    return {"status": "not recorded", "reason": "Not recorded: 'already_ordered' needs a clear yes to 'kya aapne "
-                            "yahi <items> order kar liya hai?' and is never right once you have asked about payment or the "
-                            "address. If they agreed to order, the result is 'wants_to_order'. If you are not sure, ask plainly: "
-                            "'ji, kya aapne yeh pehle hi order kar diya hai, ya main aapka order team ko bhej doon?' and go by "
-                            "their answer. Then call mark_outcome again."}
+                    return {"status": "not recorded", "reason": "Not recorded: the customer has not said they already ordered "
+                            "it, and it is never right once you have asked about the address or payment. If they agreed to "
+                            "order, the result is 'wants_to_order'. If you are not sure, ask once: 'kya main yeh order confirm "
+                            "kar doon?' and go by their answer. Then call mark_outcome again."}
                 outcome = "unclear"
                 args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") +
                                                               " (recorded 'already ordered' without a clear yes to it; check)").strip()}
@@ -1706,8 +1744,11 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             # Call 183: mark_outcome and end_call 0.6 s apart with nothing spoken; the line went dead with no goodbye.
             state.goodbye_refusals += 1
             log.info("call %s: end_call refused; the goodbye was never said", state.call_id)
-            return {"status": "refused", "reason": "You have not said goodbye. Do not hang up yet. Say only this, nothing "
-                    f"before or after it: '{closing_line(state, state.outcome)}' Then end_call."}
+            # "say": an agent that can be handed a line speaks it itself (Sarvam: call 217 hung up twice with nothing
+            # said); the others are told to say it.
+            line = closing_line(state, state.outcome)
+            return {"status": "refused", "say": line, "reason": "You have not said goodbye. Do not hang up yet. Say only "
+                    f"this, nothing before or after it: '{line}' Then end_call."}
         # Also a question with the goodbye straight after it in the same turn (call 120: "kya aap cancellation
         # rakhna chahti hain? theek hai ji, maine cancellation request raise kar di hai... dhanyavaad").
         asking = said.endswith("?") or ("?" in said and _GOODBYE.search(said.rsplit("?", 1)[1]) is not None)

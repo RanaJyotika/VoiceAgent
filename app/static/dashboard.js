@@ -59,7 +59,7 @@
 
   // ---------------- sidebar pages, phone drawer, transcript modal ----------------
   // Every page has exactly one button, in the sidebar.
-  const PAGES = ['overview', 'campaigns', 'callback', 'call', 'history', 'spend'];
+  const PAGES = ['overview', 'store', 'campaigns', 'callback', 'call', 'history', 'spend'];
   const navButtons = [...document.querySelectorAll('.nav [data-page]')];
   window.showPage = (name) => {
     if (!PAGES.includes(name)) name = 'overview';
@@ -71,6 +71,7 @@
     window.scrollTo({ top: 0 });
     if (name === 'callback' && window.loadCallbacks) window.loadCallbacks();
     if (name === 'spend' && window.loadSpend) window.loadSpend();
+    if (name === 'store' && window.loadStore) window.loadStore();
     try { localStorage.setItem('page', name); } catch (e) { /* ignore */ }
   };
   for (const b of navButtons) b.addEventListener('click', () => {
@@ -318,6 +319,7 @@
     const b = e.target.closest('[data-call]');
     if (b) showTranscript(b.dataset.call);
   });
+  window.showTranscript = showTranscript;   // the Store page opens calls too
 
   window.renderCalls = (rows) => {
     const tb = el('calls');
@@ -357,6 +359,7 @@
     set('camp-voice', v.voice); set('camp-lang', v.language); set('camp-attempts', v.max_attempts); set('camp-retry', v.retry_minutes);
     set('camp-start', v.start_hour); set('camp-end', v.end_hour); set('camp-concurrent', v.max_concurrent);
     set('camp-limit', v.limit); set('camp-budget', v.budget_rs);
+    if (window.syncVoices) window.syncVoices();
   };
   window.renderCampaign = (s) => {
     camp = s;

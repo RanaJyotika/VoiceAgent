@@ -474,19 +474,22 @@ fetch('/api/config').then(r => r.json()).then(c => {
   window.BUILD = c.build;   // sent with every call this page starts; a restarted server refuses an old page
   let savedVoice = c.voice;
   try { savedVoice = localStorage.getItem('voice') || c.voice; localStorage.removeItem('model'); } catch (e) { /* ignore */ }
+  const sarvamVoices = c.sarvam_voices || {};
   for (const [name, gender] of Object.entries(c.voices)) {
-    for (const id of ['voice', 'camp-voice']) {
+    for (const id of ['voice', 'camp-voice', 'auto-voice']) {
       const o = document.createElement('option');
       o.value = name; o.textContent = `${name} (${gender})`;
+      o.dataset.gender = gender;
+      o.dataset.sarvam = name in sarvamVoices ? '1' : '';
       if (name === savedVoice) o.selected = true;
       $(id).appendChild(o);
     }
   }
-  // The agent: Gemini 2.5, Gemini 3.8 or ChatGPT. A single call always starts on the first (Gemini 2.5):
+  // The agent: Sarvam, ChatGPT or Gemini. A single call always starts on the first (config.AGENT_LABELS):
   // remembering the last choice put calls 103 and 104 on ChatGPT without anyone noticing. A campaign
   // shows the agent it last ran with (dashboard.js puts it in data-want).
   const labels = c.model_labels || {};
-  for (const id of ['modelSel', 'camp-model']) {
+  for (const id of ['modelSel', 'camp-model', 'auto-model']) {
     const want = id === 'modelSel' ? c.model : ($(id).dataset.want || c.model);
     for (const m of c.models) {
       const o = document.createElement('option');
@@ -494,12 +497,34 @@ fetch('/api/config').then(r => r.json()).then(c => {
       if (m === want) o.selected = true;
       $(id).appendChild(o);
     }
-  }  // Language: the sheet has no language column, so the owner picks it here. Remembered, and the
+  }
+  // Each voice list shows the voices its agent speaks in: Sarvam its own (Priya, Varun), Gemini and ChatGPT
+  // Gemini's list. A voice the agent cannot use moves to a shown one of the same gender. campaigns.js and
+  // auto.js set saved settings without a change event, so they call syncVoices after.
+  const VOICE_FOR_AGENT = { voice: 'modelSel', 'camp-voice': 'camp-model', 'auto-voice': 'auto-model' };
+  window.syncVoices = () => {
+    for (const [vid, mid] of Object.entries(VOICE_FOR_AGENT)) {
+      const sel = $(vid), sarvam = ($(mid).value || '').startsWith('sarvam');
+      for (const o of sel.options) o.hidden = (o.dataset.sarvam === '1') !== sarvam;
+      const cur = sel.selectedOptions[0];
+      if (cur && cur.hidden) {
+        const shown = [...sel.options].filter((o) => !o.hidden);
+        const same = shown.find((o) => o.dataset.gender === cur.dataset.gender) || shown[0];
+        if (same) sel.value = same.value;
+      }
+    }
+  };
+  for (const [vid, mid] of Object.entries(VOICE_FOR_AGENT)) {
+    $(mid).addEventListener('change', window.syncVoices);
+    $(vid).addEventListener('focus', window.syncVoices);
+  }
+  window.syncVoices();
+  // Language: the sheet has no language column, so the owner picks it here. Remembered, and the
   // two selects (campaign and single call) stay in step.
   let savedLang = 'hinglish';
   try { savedLang = localStorage.getItem('language') || savedLang; } catch (e) { /* ignore */ }
   const LANG_LABELS = { hinglish: 'Hinglish (Hindi + English)', hindi: 'Hindi', english: 'English' };
-  for (const id of ['lang', 'camp-lang']) {
+  for (const id of ['lang', 'camp-lang', 'auto-lang']) {
     for (const l of c.languages || ['hinglish', 'hindi', 'english']) {
       const o = document.createElement('option');
       o.value = l; o.textContent = LANG_LABELS[l] || l;

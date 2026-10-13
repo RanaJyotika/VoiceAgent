@@ -512,21 +512,21 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         '- Wants it ("haan", "order karna hai", "bhej do"), or asks how to pay: step 3.',
         # Call 140: two "repeat kar dijiye" / "kya order tha?" got the item name and a goodbye.
         '- "Repeat kar dijiye", "kya order tha?", or a sound you could not make out: say the item and price again in one '
-        'short sentence, then "kya yeh order aap rakhna chahte hain?" Never take it as a no.',
+        'short sentence, then "kya main yeh order confirm kar doon?" Never take it as a no.',
         f'- "{BUSINESS_NAME} se order kiya tha" or "{STORE_NAME} kya hai?": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi part hai, '
         'unka online store." Then ALREADY ORDERED.',
         '- Already ordered ("maine order kar diya"): ALREADY ORDERED.',
         # Call 182: "baad mein kharidungi, abhi nahi" was recorded as call_later.
         '- No, not now, "baad mein le lunga", bought it elsewhere, or any excuse: NOT INTERESTED, never call_later.',
         '- Something stopped them (payment failed, website problem, delivery charge, a question): answer from CART DETAILS if you can, '
-        'put the problem in question, then "toh kya yeh order aap rakhna chahte hain?" A yes: step 3. If only the team can solve it: '
+        'put the problem in question, then "toh kya main yeh order confirm kar doon?" A yes: step 3. If only the team can solve it: '
         f'"main team ko bata {deti} hoon, team aapki madad kar degi", goodbye, mark_outcome "needs_help", end_call. '
         # Call 167: a freebie question after a clear yes ended the call as needs_help, with no order taken.
         'After their yes, never needs_help: "yeh team confirm kar degi", put it in question, and carry on with the order.',
         REPLY_WRONG,
     ]
-    replies_last = ['- A bare "nahi" to "kya yeh order aap rakhna chahte hain?": NOT INTERESTED.',
-                    '- Until you have a clear yes or a clear no to "kya yeh order aap rakhna chahte hain?", never say goodbye: answer '
+    replies_last = ['- A bare "nahi" to "kya main yeh order confirm kar doon?": NOT INTERESTED.',
+                    '- Until you have a clear yes or a clear no to "kya main yeh order confirm kar doon?", never say goodbye: answer '
                     'what they said, then ask it again. After a clear yes, never ask it again (call 167 asked it seven times).']
 
     # Owner, 6 Oct 2026: the opening checks it is the right person first. Calls 155-158 gave the whole offer in one
@@ -535,20 +535,19 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # Owner, 7 Oct 2026 (call 167): say where you call from in the greeting, and the name only once, in the question.
     flow = f"""THE USUAL ORDER
 1. Greet, say where you call from and check you have the right person, nothing else, then wait: "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon. kya meri baat <name> ji se ho rahi hai?" The name only there, not after "namaste". (Name MISSING: start at step 2 with "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon.")
-2. After "haan" / "ji boliye" / "bolo": say exactly this, with nothing before it, then wait: "ji, aapne cart mein ek <items> add kiya tha, <quantity> quantity mein, <amount> rupaye mein. kya yeh order aap rakhna chahte hain?" Leave out the amount if it is not on record. If they ask who is calling: "ji, main {agent_name}, {BUSINESS_NAME} se", then this turn.
-3. On a yes: "theek hai ji. payment cash on delivery karenge ya online?" A change they ask for (another item, a different quantity) goes in order_changes; say it back and get a yes.
-   - Online: "theek hai ji, aap site par jaakar hi online pay kar dijiye. dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference "online", then end_call.
-   - Cash on delivery: step 4.
-4. Address. On record: "theek hai ji. delivery <area>, <city> mein hi karni hai na?" and get a yes. MISSING, or they say it changed: "theek hai ji. delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS).
-5. Close in one turn, with exactly these words and nothing added: "dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference "cash on delivery", then end_call.
+2. After "haan" / "ji boliye" / "bolo": say exactly this, with nothing before it, then wait: "ji, aapne cart mein ek <items> add kiya tha, <quantity> quantity mein, <amount> rupaye mein. kya main yeh order confirm kar doon?" Leave out the amount if it is not on record. If they ask who is calling: "ji, main {agent_name}, {BUSINESS_NAME} se", then this turn.
+3. On a yes: "theek hai ji. payment cash on delivery karenge ya online?" Online: "theek hai ji, aap site par jaakar hi online pay kar dijiye."
+4. The address, last and always (owner, 12 Oct 2026). On record: "aur delivery <area>, <city> mein hi karni hai na?" and get a yes. MISSING, or they say it changed: "theek hai ji. delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). If they cut in, ask it again before the close.
+5. Close in one turn, with exactly these words and nothing added: "dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference as they said, then end_call.
+Another item too: ask which one, product_info, say its price. On their yes: "theek hai ji, maine <first item> ke saath <new item> bhi add kar diya hai. ab total <total_if_added> rupaye hai." Put it in order_changes and carry on (payment, then the address). After their first yes, never ask "kya main yeh order confirm kar doon?" again.
 {GOODBYE} Never end_call while a question of yours is unanswered."""
 
     already_ordered = f"""ALREADY ORDERED
-Check it was this cart: "achha ji, kya aapne yahi <items> order kar liya hai?" (never "order confirm kar liya?": it sounds like "shall I confirm it?"). A clear yes: "bahut achha ji. dhanyavaad ji, aapka din shubh ho", mark_outcome "already_ordered", end_call. They ordered something else, or earlier: "ji, toh kya aap <items> bhi order karna chahenge?" and go by their answer. Anything else (a question about price or charges, a "nahi"): answer it, then "toh kya yeh order aap rakhna chahte hain?" Never go to step 3 or 4 before a yes to that."""
+They say they already ordered or confirmed it ("pehle kar liya", "order kar diya", "Vedic Shop se mangwaya"): no more questions. Say "achha ji, bahut badhiya. dhanyavaad ji, aapka din shubh ho", mark_outcome "already_ordered", end_call (owner, 12 Oct 2026). Only if they plainly mean a different item, ask once: "ji, toh kya main <items> ka order bhi confirm kar doon?" Never ask whether they ordered twice, and never offer to send it to the team."""
 
     not_interested = f"""NOT INTERESTED
 Never push and never argue, but always ask once what stopped them, even when they gave a reason. Say exactly this, nothing before or after it: "achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?" ("kisi aur site se le liya": "achha ji, wahan se kyun liya, koi khaas wajah?") Then stop and wait for their answer: no goodbye in the same turn.
-Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya yeh order aap rakhna chahte hain?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
+Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya main yeh order confirm kar doon?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
 - A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then the goodbye. The complaint is their reason.
 - A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "iski jaankari team aapko de degi", then the goodbye.
 - A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): "theek hai ji, dhanyavaad. aapka din shubh ho."
@@ -592,10 +591,11 @@ ABANDONED_CART = CallType(
     build_prompt=_cart_prompt,
     greeting=_cart_greeting,
     takes_address=True,
-    confirm_question="kya yeh order aap rakhna chahte hain?",
+    confirm_question="kya main yeh order confirm kar doon?",
     # Also "chahengi" to a woman (Gemini, call 160) and "karwana / kara chahenge" (ChatGPT, call 159).
     # And "karna chahte hain" (ChatGPT, call 168).
-    main_question=r"(order|ऑर्डर)\s+(\S+\s+){0,3}(chahenge|chahengi|chahte|चाहेंगे|चाहेंगी|चाहते)",
+    main_question=r"(order|ऑर्डर)\s+(\S+\s+){0,3}(chahenge|chahengi|chahte|चाहेंगे|चाहेंगी|चाहते)"
+                  r"|(confirm|कन्फ़र्म|कन्फर्म|कंफर्म)\s+(kar|कर)\s+(doon|du|dun|दूँ|दूं|दू)",
     probe_first=("not_interested", "already_ordered"),
     summary_keys=("not_interested_reason", "question", "order_changes", "callback_time", "notes"),
     description="Call customers who left items in their cart: remind them, help, and take the order and address for the team.",
@@ -628,5 +628,6 @@ def call_type_for(contact: dict | None) -> CallType:
 def get_prompt(contact: dict, voice: str) -> str:
     """The system prompt for one call: the contact's call type, with its campaign's facts."""
     from . import db   # here, not at the top: db is not needed to define the types
+    from .catalog import product_block
     campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
-    return call_type_for(contact).build_prompt(contact, voice, (campaign or {}).get("facts") or {})
+    return call_type_for(contact).build_prompt(contact, voice, (campaign or {}).get("facts") or {}) + product_block(contact, voice)

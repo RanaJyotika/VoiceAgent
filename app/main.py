@@ -9,13 +9,15 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import catalog, db, mongo_sync, orders_view, shopify, store_orders
+from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, router as campaign_router
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
-                     STALE_PAGE, VOICES)
+                     SARVAM_VOICES, STALE_PAGE, VOICES)
 from .contacts import (build_results, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
 from .live_bridge import live_snapshot, run_call
+from .intake import router as intake_router
 from .plivo_bridge import router as plivo_router
 from .call_types import CALL_TYPES, get_prompt
 from .prompts import LANGUAGES, with_language
@@ -45,8 +47,17 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPolling())
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Voice Agent MVP")
 db.init_db()
+shopify.init_tables()
+orders_view.init_tables()
 app.include_router(plivo_router)
 app.include_router(campaign_router)
+app.include_router(autodial_router)
+app.include_router(shopify.router)
+app.include_router(intake_router)
+app.include_router(catalog.router)
+app.include_router(mongo_sync.router)
+app.include_router(store_orders.router)
+app.include_router(orders_view.router)
 
 
 async def stall_monitor() -> None:
@@ -64,6 +75,11 @@ async def stall_monitor() -> None:
 @app.on_event("startup")
 async def _start_monitor() -> None:
     asyncio.create_task(stall_monitor())
+    asyncio.create_task(shopify.worker())
+    asyncio.create_task(catalog.worker())   # the product catalogue, read from MongoDB every few minutes
+    asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
+    asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
+    resume_after_restart()   # automatic calling, if it was on before the restart
 
 
 @app.get("/")
@@ -77,7 +93,8 @@ async def index() -> Response:
 @app.get("/api/config")
 async def get_config() -> dict:
     # Only OFFERED_MODELS (config.py). A browser that remembered another model falls back to the first.
-    return {"model": OFFERED_MODELS[0], "voice": GEMINI_VOICE, "voices": VOICES, "languages": LANGUAGES,
+    return {"model": OFFERED_MODELS[0], "voice": GEMINI_VOICE, "voices": VOICES, "sarvam_voices": SARVAM_VOICES,
+            "languages": LANGUAGES,
             "models": OFFERED_MODELS, "model_labels": AGENT_LABELS, "build": PAGE_BUILD}
 
 
@@ -339,6 +356,7 @@ async def browser_call(ws: WebSocket, contact_id: int) -> None:
         await ws.close()
         return
     contact = with_language(contact, ws.query_params.get("language") or "")
+    contact = await catalog.enrich(contact)   # the order and its products, fresh from the main database
 
     incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
 

@@ -1,0 +1,12 @@
+# What every agent knows about the company. Every call's prompt gets the "- " lines below as ABOUT US.
+# Keep the "- Name: what to say" shape: the Sarvam agent finds the right line by its name when a customer asks.
+# Lines starting with # are left out. A change here applies from the next call; no restart needed.
+# Never put in what must not be said on a call (GST number, full office address, phone numbers).
+- Company: hum VedicVaibhav Dot Com Private Limited hain, Zirakpur, Punjab ki registered company.
+- Vedic Vaibhav: hamari company ka main naam aur app, vedicvaibhav.com, jahan mandiron mein puja, chadhava, seva aur prasad book hota hai.
+- Vedic Shop: Vedic Vaibhav ka hi online store, vedicshop.store: rudraksha, gemstones, bracelets aur spiritual products.
+- Astro Vaibhav: hamari website jahan aap astrologers se jud kar consult kar sakte hain.
+- Pandit Ji at Request: hamari website jahan alag-alag mandiron mein online puja aur chadhava book kar sakte hain.
+- Products: sabhi products 100% original aur lab tested hain.
+- Return: delivery ke 10 din ke andar return ho sakta hai.
+- Number: aapne hamari website par order ya booking karte waqt yahi number diya tha.

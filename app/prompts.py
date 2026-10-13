@@ -4,9 +4,12 @@ Kept short on purpose: every rule is said once, in one place. A longer prompt wi
 three sections confused the agent more than it guided it (owner's feedback, 30 Sep 2026). The hard
 guarantees (address digits, a clear yes, a real no) are checked in code, in live_bridge.handle_tool.
 """
+import re
 from datetime import date, datetime
 
-from .config import AGENT_NAME, AGENT_NAME_MALE, BUSINESS_NAME, PRONUNCIATION, VOICES
+from .config import AGENT_NAME, AGENT_NAME_MALE, BUSINESS_NAME, PRONUNCIATION, ROOT, VOICES
+
+COMPANY_FILE = ROOT / "company.txt"
 
 LANGUAGE_RULES = {
     "hindi": "Speak in natural, polite, everyday Hindi, the way a friendly shop assistant talks. Not formal or Sanskritised Hindi. Common English words like order, delivery, address, confirm are fine.",
@@ -195,6 +198,64 @@ def forms(voice: str) -> dict[str, str]:
                     ("sakti", "deti", "rahi", "gayi") if female else ("sakta", "deta", "raha", "gaya")))
 
 
+# --- what the agent knows about the company ----------------------------------------------------
+# Owner, 8 Oct 2026: the agent could not say what Vedic Vaibhav, Vedic Shop or the other sites are.
+# The facts live in company.txt, read at every call, so the owner can change them without a restart.
+
+def about_lines() -> list[str]:
+    """The "- Name: what to say" lines of company.txt; none if the file is missing."""
+    try:
+        text = COMPANY_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("- ")]
+
+
+# What a customer's words point at, and the company.txt lines (by name) that answer it. Saaras writes
+# in Devanagari and English letters, and mishears the name ("Vedic भाव", "वेदिक वाइबाव"), so both
+# scripts and loose spellings. A wrong match costs little: the hint says to use the lines only if they answer.
+_VEDIC = r"(vedic|वैदिक|वेदिक|vaibhav|वैभव|वाइबाव)"
+_ASKS = r"(kya|क्या|kaun|कौन|kahan|कहाँ|कहां)"
+_NUMBER = r"(number|नंबर|नम्बर)"
+_FROM = r"(kahan|कहाँ|कहां|kaise|कैसे|mila|मिला)"
+# (what the words point at, the company.txt names that answer it, used only when nothing above matched).
+# Call 210 (9 Oct 2026): "वैदिक वैभव क्या है" got the address and the website, not what Vedic Vaibhav does;
+# "fake लगती है" got the worry line with no fact to stand on; Saaras heard "site fake" as "side shake".
+# Call 212: "आपके पास मेरा नंबर कहाँ से आया?" had no answer at all.
+ABOUT_TOPICS = [
+    (re.compile(rf"{_NUMBER}.*{_FROM}|{_FROM}.*{_NUMBER}", re.I), ("Number",), False),
+    (re.compile(r"astro|एस्ट्रो|ज्योतिष|jyotish", re.I), ("Astro Vaibhav",), False),
+    (re.compile(r"pandit|पंडित", re.I), ("Pandit Ji at Request",), False),
+    (re.compile(r"shop|शॉप", re.I), ("Vedic Shop",), False),
+    (re.compile(r"nakli|नकली|fake|फेक|फ़ेक|fraud|फ्रॉड|फ़्रॉड|froud|side\s*shake|साइड\s*शेक|original|ओरिजिनल|ओरिजनल|"
+                r"asli|असली|duplicate|डुप्लीकेट|lab|लैब|certificate|सर्टिफिकेट|bharosa|भरोसा|bharosemand|bharose", re.I),
+     ("Company", "Products"), False),
+    (re.compile(r"return|रिटर्न|refund|रिफंड|wapas|वापस|replace|रिप्लेस", re.I), ("Return",), False),
+    (re.compile(r"company|कंपनी|कम्पनी", re.I), ("Company", "Vedic Vaibhav"), True),
+    (re.compile(rf"{_VEDIC}.*{_ASKS}|{_ASKS}.*{_VEDIC}", re.I), ("Vedic Vaibhav", "Vedic Shop"), True),
+]
+
+
+def about_hint(words: str) -> str:
+    """For one reply: the company.txt lines that answer what the customer just said, or "".
+    Sarvam only, where the words are known before the reply is written."""
+    if not words:
+        return ""
+    lines = about_lines()
+    names: list[str] = []
+    for pattern, ns, only_alone in ABOUT_TOPICS:
+        # A named site or a worry comes first: "Astro Vaibhav kya hai?" wants that one line, not the company's.
+        if pattern.search(words) and not (only_alone and names):
+            names += ns
+    picked = [line for n in dict.fromkeys(names) for line in lines if line[2:].lower().startswith(n.lower() + ":")]
+    if not picked:
+        return ""
+    return ("\n\nFOR THIS REPLY ONLY: the customer may be asking about the company. If so, answer with the first line "
+            "below that fits, in one short sentence of your own, then your question again. A worry (\"fake\", \"fraud\", "
+            "\"nakli\") still gets the worry line, plus one of these facts. If they asked something else, ignore this.\n"
+            + "\n".join(picked))
+
+
 # --- the shared layer: every call type gets these, word for word ------------------------------
 # A call type (app/call_types.py) supplies only what is particular to its purpose; persona,
 # language, style, pronunciation, the facts rule, the common replies, taking an address and the
@@ -273,9 +334,15 @@ def compose(*, contact: dict, voice: str, intro: str, details: str, details_titl
     f = forms(voice)
     lang = (contact.get("language") or "hinglish").strip().lower()
     lang_rule = LANGUAGE_RULES.get(lang, LANGUAGE_RULES["hinglish"])
-    replies = "\n".join(replies_first + _common_replies(f, details_title, topic) + replies_last)
-    all_rules = "\n".join(_rules(not_mine, rules, details_title))
+    about = about_lines()
+    known = f"{details_title} or ABOUT US" if about else details_title
+    company_q = ['- A question about the company or its sites ("Vedic Vaibhav kya hai?", "Astro Vaibhav kya hai?", '
+                 '"kaunsi company hai?"): not off topic. Answer from ABOUT US in one short sentence, then your question again. '
+                 'Name another site only when asked about it.'] if about else []
+    replies = "\n".join(replies_first + company_q + _common_replies(f, known, topic) + replies_last)
+    all_rules = "\n".join(_rules(not_mine, rules, known))
     blocks = "\n\n".join(sections)
+    about_block = ("ABOUT US (the only facts you may give about the company)\n" + "\n".join(about) + "\n\n") if about else ""
     return f"""{intro}
 
 WHO YOU ARE
@@ -291,8 +358,8 @@ Hindi words in the {details_noun} are written in English letters; say them as a 
 {pronunciation_block(contact, agent_name)}
 
 {details}
-FACTS
-Say only what is in {details_title} or what this customer said on this call. Never guess, and never add anything from your own knowledge (a city, a PIN, a policy). Never say your record has something it does not. If you did not catch it, ask.
+{about_block}FACTS
+Say only what is in {known} or what this customer said on this call. Never guess, and never add anything from your own knowledge (a city, a PIN, a policy). Never say your record has something it does not. If you did not catch it, ask.
 
 LISTEN FIRST
 Take in everything they said and answer all of it in one turn: if they say several things at once, handle them together.

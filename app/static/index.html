@@ -41,6 +41,79 @@
   .nav button svg { width:19px; height:19px; flex:0 0 19px; opacity:.85; }
   .nav button:hover { background: rgba(255,255,255,.07); color:#fff; }
   .nav button[aria-current="page"] { background: rgba(255,255,255,.12); color:#fff; box-shadow: inset 0 0 0 1px rgba(201,163,106,.35); }
+  /* ---- Store orders page ---- */
+  .so-head { display:flex; gap:8px; align-items:center; }
+  .so-head select { width:auto; }
+  .so-autobar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding: 10px 14px; border-radius: 12px; margin-bottom: 14px;
+    font-size: 13.5px; border: 1px solid var(--line); background: var(--surface); }
+  .so-autobar.on { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good) 7%, var(--surface)); }
+  .so-autobar.off { border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+  .so-autobar .dot { width:9px; height:9px; border-radius:50%; background: var(--warning); flex: 0 0 9px; }
+  .so-autobar.on .dot { background: var(--good); }
+  .so-autobar button { margin-left:auto; }
+  #so-settings { display:grid; gap: 14px; margin-bottom: 16px; }
+  #so-settings[hidden] { display:none; }
+  .so-views { display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .so-views button { display:flex; flex-direction:column; align-items:flex-start; gap: 3px; padding: 11px 14px; border-radius: 14px;
+    background: var(--surface); border: 1px solid var(--line); text-align:left; --c: var(--neutral); }
+  .so-views button.good { --c: var(--good); } .so-views button.warning { --c: var(--warning); }
+  .so-views button.serious { --c: var(--serious); } .so-views button.accent { --c: var(--accent); }
+  .so-views button .lbl { display:flex; align-items:center; gap: 7px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .so-views button .lbl i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+  .so-views button b { font: 600 24px/1.15 var(--serif); color: var(--plum); font-variant-numeric: tabular-nums; }
+  .so-views button small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .so-views button[aria-selected="true"] { border-color: var(--c); box-shadow: inset 0 0 0 1px var(--c);
+    background: color-mix(in srgb, var(--c) 7%, var(--surface)); }
+  .so-views button[aria-selected="true"] .lbl { color: var(--fg); font-weight: 600; }
+  .so-toolbar { display:flex; gap: 8px; align-items:center; margin-bottom: 10px; }
+  .so-toolbar .search { flex: 1 1 auto; }
+  .so-toolbar select { width:auto; }
+  .so-export { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); color: var(--accent); text-decoration:none; font-size: 13.5px; font-weight: 600; }
+  .so-table td { vertical-align: middle; }
+  .so-table tbody tr { cursor: pointer; }
+  .so-table tbody tr:hover { background: var(--bg); }
+  .so-items { display:flex; flex-direction:column; gap:6px; min-width: 180px; }
+  .so-item { display:flex; align-items:center; gap:8px; }
+  .so-item img, .so-item .noimg { width:36px; height:36px; border-radius:8px; object-fit:cover; flex:0 0 36px; background: var(--bg); border:1px solid var(--line); }
+  .so-item b { font-weight:500; font-size: 13px; display:block; line-height:1.25; }
+  .so-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top: 4px; }
+  .so-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space:nowrap; font-weight: 550;
+    background: color-mix(in srgb, var(--c, var(--neutral)) 13%, var(--surface)); color: color-mix(in srgb, var(--c, var(--neutral)) 80%, var(--fg)); }
+  .so-tag.good { --c: var(--good); } .so-tag.warning { --c: var(--warning); } .so-tag.serious { --c: var(--serious); }
+  .so-tag.critical { --c: var(--critical); } .so-tag.accent { --c: var(--accent); }
+  .so-pager { display:flex; align-items:center; justify-content:space-between; gap: 10px; flex-wrap:wrap; margin-top: 12px; }
+  .so-pages { display:flex; gap:4px; flex-wrap:wrap; }
+  .so-pages button { min-width: 32px; padding: 5px 8px; font-size: 13px; }
+  .so-pages button[aria-current="page"] { background: var(--accent); color:#fff; border-color: var(--accent); }
+  /* Icons inside the page's buttons: without a size an inline svg fills the whole button. */
+  #page-store button { display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+  #page-store .so-views button { display:flex; align-items:flex-start; }
+  #page-store button .ico, .so-drawer button .ico { width:16px; height:16px; flex:0 0 16px; }
+  .so-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); background: var(--surface); z-index: 45;
+    border-left: 1px solid var(--line); box-shadow: -18px 0 40px rgba(61,35,72,.18); display:flex; flex-direction:column; }
+  .so-drawer[hidden] { display:none; }
+  .so-drawer header { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+  .so-drawer header h3 { margin: 0 0 6px; font: 600 20px/1.2 var(--serif); color: var(--plum); display:flex; align-items:center; gap:8px; }
+  .so-drawer header h3 button { margin-left:auto; border:0; background:transparent; font-size: 22px; padding: 0 6px; }
+  .so-drawer .body { padding: 14px 18px; overflow-y:auto; flex:1; }
+  .so-drawer .body h4 { margin: 18px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+  .so-drawer .body h4:first-child { margin-top: 0; }
+  .so-drawer .kv { display:flex; justify-content:space-between; gap: 12px; font-size: 13.5px; padding: 3px 0; }
+  .so-drawer .kv span:first-child { color: var(--muted); }
+  .so-drawer .kv span:last-child { text-align:right; }
+  .so-drawer footer { padding: 12px 18px; border-top: 1px solid var(--line); display:flex; gap: 8px; flex: 0 0 auto; }
+  .so-drawer footer button { padding: 10px 12px; font-size: 14px; }
+  .so-drawer footer .call { flex: 1; }
+  .so-drawer .row2 { display:flex; gap:8px; margin-top: 6px; }
+  .so-drawer .row2 input, .so-drawer .row2 textarea { flex:1; }
+  .so-drawer textarea { min-height: 38px; }
+  .so-note { padding: 8px 10px; border:1px solid var(--line); border-radius: 10px; margin-top: 6px; font-size: 13.5px; }
+  .so-note small { display:block; color: var(--faint); margin-top: 2px; }
+  .so-note button { margin-top: 6px; padding: 4px 10px; font-size: 12.5px; }
+  @media (max-width: 900px) { .so-views { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .so-views { grid-template-columns: repeat(2, minmax(0, 1fr)); } .so-toolbar { flex-wrap: wrap; } }
+  .nav .sec { font-size: 10.5px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: rgba(255,255,255,.45);
+    padding: 14px 12px 4px; }
   .nav button .n:empty { display:none; }
   .nav button .n { margin-left:auto; font-size: 11.5px; font-weight:600; padding: 1px 8px; border-radius: 999px; background: rgba(255,255,255,.12); }
   .side .foot { margin-top:auto; font-size: 12px; color: rgba(214,198,224,.7); padding: 10px 10px 0; line-height:1.45; min-width:0; }
@@ -90,7 +163,7 @@
   @media (prefers-reduced-motion: reduce) { .badge.pulse .dot, .bars i { animation: none !important; } .page.on, .modal, .toast, .side { animation:none !important; transition: none !important; } }
 
   /* ================= stat cards (one row, wraps on small screens) ================= */
-  .tiles { display:grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .tiles { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .tile { position:relative; background: var(--surface); border:1px solid var(--line); border-radius: 16px; padding: 14px 16px; min-width:0;
           box-shadow: var(--shadow); transition: transform .15s ease, border-color .15s ease; }
   .tile:hover { transform: translateY(-2px); border-color: var(--lav-2); }
@@ -98,7 +171,7 @@
   .tile .label .ico { width:26px; height:26px; padding:6px; border-radius:9px; flex:0 0 26px; color: var(--c, var(--accent));
                       background: color-mix(in srgb, var(--c, var(--accent)) 13%, var(--surface)); }
   .tile .value { font: 600 26px/1.2 var(--serif); letter-spacing:-.02em; margin-top: 8px; color: var(--plum); font-variant-numeric: tabular-nums; }
-  .tile .note { color: var(--faint); font-size: 12px; min-height: 18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile .note { color: var(--faint); font-size: 12px; min-height: 18px; line-height: 1.4; }
   .tile:first-child { background: linear-gradient(140deg, var(--plum-2) 0%, var(--plum) 70%); border-color: transparent;
                       box-shadow: inset 0 0 0 1px rgba(201,163,106,.35), 0 16px 32px -16px rgba(61,35,72,.55); }
   .tile:first-child .label { color: var(--plum-ink); }
@@ -151,7 +224,8 @@
   label.f select, label.f .fld { text-transform:none; letter-spacing:0; font-weight:400; font-size:15px; width:100%; flex:none; }
   .fields { display:grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); gap:12px; }
   @media (max-width: 1100px) { .fields { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } }
-  @media (max-width: 640px) { .fields { grid-template-columns: minmax(0,1fr); } }
+  .two .fields { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }   /* half-width card: four across is too tight */
+  @media (max-width: 640px) { .fields, .two .fields { grid-template-columns: minmax(0,1fr); } }
   .or { display:flex; align-items:center; gap:12px; color:var(--faint); font-size:12px; text-transform:uppercase; letter-spacing:.08em; margin:16px 0; }
   .or::before, .or::after { content:""; flex:1; height:1px; background:var(--line); }
 
@@ -212,6 +286,7 @@
   #board-chips2 button { font-weight:500; }
   #board-rows td { padding: 9px 10px; }
   #board-rows .acts { display:flex; gap:6px; flex-wrap:wrap; }
+  #board-rows td:last-child { min-width: 230px; }   /* two buttons a line, not four stacked */
   #board .table-wrap { max-height: 60vh; overflow:auto; }
   #board thead th { position: sticky; top: 0; background: var(--surface); z-index:1; }
   #cb-rows td { padding: 9px 10px; }
@@ -350,6 +425,7 @@
     .tile .value { font-size: 22px; }
     .page-head h2 { font-size: 19px; }
     #board .search { flex: 1 1 100%; }
+    #board table, #cbcard table { min-width: 1100px; }   /* scroll sideways rather than squeeze each row tall */
     .camp-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .live-grid { grid-template-columns: minmax(0, 1fr); }
     .modal { width: calc(100vw - 16px); max-height: calc(100vh - 16px); padding: 14px; border-radius: 18px; }
@@ -369,15 +445,21 @@
       <button data-page="overview" aria-current="page">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         Home</button>
+      <div class="sec">Store · automatic</div>
+      <button data-page="store">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        Store orders <span class="n" id="nav-store"></span></button>
+      <div class="sec">Manual</div>
       <button data-page="campaigns">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-8-8 18-2-8z"/></svg>
         Campaigns <span class="n" id="nav-campaigns"></span></button>
-      <button data-page="callback">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg>
-        Call back <span class="n" id="nav-callback"></span></button>
       <button data-page="call">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>
         Single call</button>
+      <div class="sec">Records</div>
+      <button data-page="callback">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg>
+        Call back <span class="n" id="nav-callback"></span></button>
       <button data-page="history">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
         History</button>
@@ -433,6 +515,90 @@
         </section>
       </section>
 
+      <!-- ===== Store orders: every order from the main database, with where its call stands ===== -->
+      <section class="page" id="page-store">
+        <div class="page-head">
+          <h2>Store orders</h2>
+          <div class="right so-head">
+            <select class="fld" id="so-range" aria-label="Dates">
+              <option value="today">Today</option><option value="yesterday">Yesterday</option>
+              <option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+            </select>
+            <button id="so-settings-btn" aria-expanded="false" aria-controls="so-settings">Settings</button>
+          </div>
+        </div>
+
+        <div class="so-autobar" id="so-autobar"></div>
+
+        <div id="so-settings" hidden>
+          <section class="card" id="store-card">
+          <div class="card-head">
+            <h2>Which orders get a call</h2>
+            <span id="store-badge"></span>
+            <span class="hint" id="store-sub"></span>
+          </div>
+          <div class="camp-settings">
+            <label class="f">Orders<select id="store-orders"><option value="cod">Cash on delivery only</option><option value="all">All orders</option><option value="off">None</option></select></label>
+            <label class="f">Wait after the order (min)<input class="fld" id="store-wait" type="number" min="0" max="1440" value="5" title="Time for the customer to cancel or edit the order first"></label>
+            <label class="f">Stop trying after (hours)<input class="fld" id="store-max" type="number" min="1" max="168" value="24" title="An order not called by then is taken off the list: it has likely shipped"></label>
+          </div>
+          <div class="hint" id="store-counts" style="margin-bottom:10px"></div>
+          <div class="camp-warn" id="store-warn" hidden></div>
+          <div class="row"><button id="store-save" class="primary">Save</button><span class="hint" id="store-hint"></span></div>
+        </section>
+
+          <section class="card" id="auto-card">
+            <div class="card-head">
+              <h2>Automatic calling</h2>
+              <span class="hint">When on, orders under "To call" are rung by themselves, inside the calling hours.</span>
+            </div>
+            <div class="camp-status"><span class="big" id="auto-state">…</span><span class="camp-reason" id="auto-reason"></span></div>
+            <div class="camp-warn" id="auto-warn" hidden></div>
+            <div class="chips" id="auto-camps"></div>
+            <div class="camp-settings">
+              <label class="f">Agent<select id="auto-model"></select></label>
+              <label class="f">Voice<select id="auto-voice"></select></label>
+              <label class="f">Language<select id="auto-lang" title="A row's own language column, if it has one, wins."></select></label>
+              <label class="f">Calling hours (IST)<span class="row" style="gap:4px;flex-wrap:nowrap"><input class="fld" id="auto-start" type="number" min="0" max="23" value="10" style="flex:1"><span class="hint">to</span><input class="fld" id="auto-end" type="number" min="1" max="24" value="19" style="flex:1"></span></label>
+              <label class="f">Budget per day (Rs)<input class="fld" id="auto-budget" type="number" min="0" value="500" title="Waits for the next day once today's estimated cost of all calls reaches this. 0 = no cap."></label>
+            </div>
+            <details class="more">
+              <summary>More settings: retries, calls at once</summary>
+              <div class="camp-settings">
+                <label class="f">Tries per contact<input class="fld" id="auto-attempts" type="number" min="1" max="6" value="3"></label>
+                <label class="f">Retry after (min)<input class="fld" id="auto-retry" type="number" min="1" max="1440" value="30"></label>
+                <label class="f">At once<input class="fld" id="auto-concurrent" type="number" min="1" max="10" value="1"></label>
+              </div>
+            </details>
+            <div class="row">
+              <button id="auto-on" class="call" title="From then on, new contacts are real, paid phone calls without anyone pressing Start">Switch on</button>
+              <button id="auto-off" class="danger" hidden>Switch off</button>
+              <span class="hint" id="auto-hint"></span>
+            </div>
+          </section>
+        </div>
+
+        <div class="so-views" id="so-views" role="tablist" aria-label="Orders"></div>
+
+        <section class="card">
+          <div class="so-toolbar">
+            <input class="fld search" id="so-q" placeholder="Search order no., name, phone or product" aria-label="Search">
+            <select class="fld" id="so-tag" aria-label="Tag"><option value="">All tags</option></select>
+            <a id="so-export" class="so-export" href="#" download>Export</a>
+          </div>
+          <div class="table-wrap">
+            <table class="so-table">
+              <thead><tr><th>Order</th><th>Customer</th><th>Products</th><th>Amount</th><th>Call</th><th></th></tr></thead>
+              <tbody id="so-rows"></tbody>
+            </table>
+          </div>
+          <div id="so-empty" class="empty" hidden></div>
+          <div class="so-pager"><span class="hint" id="so-showing"></span><div class="so-pages" id="so-pages"></div></div>
+        </section>
+
+        <aside class="so-drawer" id="so-drawer" aria-label="Order" hidden></aside>
+      </section>
+
       <!-- ===== Campaigns: list, new, one campaign ===== -->
       <section class="page" id="page-campaigns">
 
@@ -446,6 +612,7 @@
               New campaign</button></div>
           </div>
           <div class="camp-grid" id="camp-list"></div>
+
         </div>
 
         <!-- new campaign / edit campaign -->
@@ -569,6 +736,8 @@
               <button id="camp-requeue" title="Put no-answer and busy contacts back on the list with a fresh count of tries">Re-queue no answer / busy</button>
               <span class="hint" id="camp-hint"></span>
             </div>
+            <label class="hint" style="cursor:pointer; display:block; margin-top:10px"><input type="checkbox" id="camp-auto">
+              <b>Automatic</b>: while Automatic calling is on (Store orders page), ring this list's contacts as they arrive, without pressing Start.</label>
           </section>
 
           <!-- step 3: the list and its results -->
@@ -624,7 +793,7 @@
               <label class="f">Contact<select id="contact"></select></label>
               <label class="f">Voice<select id="voice" title="Agent voice"></select></label>
               <label class="f">Language<select id="lang" title="How the agent speaks on this call"></select></label>
-              <label class="f">Model<select id="modelSel" title="Voice model"></select></label>
+              <label class="f">Agent<select id="modelSel" title="The AI agent that makes this call"></select></label>
             </div>
             <div class="row" style="margin-top:14px;align-items:flex-end">
               <label class="f" style="flex:1 1 200px">Phone call to
@@ -774,5 +943,7 @@
 <script src="/static/dashboard.js"></script>
 <script src="/static/campaigns.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/auto.js"></script>
+<script src="/static/store.js"></script>
 </body>
 </html>

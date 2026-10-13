@@ -35,7 +35,12 @@
       el('camp-list').innerHTML = `<div class="empty camp-empty">No campaigns yet. Press <b>New campaign</b> to make the first one.</div>`;
       return;
     }
-    el('camp-list').innerHTML = campaigns.map((c) => {
+    const manual = campaigns.filter((c) => c.source !== 'store');   // store orders have their own page
+    if (!manual.length) {
+      el('camp-list').innerHTML = `<div class="empty camp-empty">No manual campaigns yet. Press <b>New campaign</b> to call a list from Excel or typed numbers.</div>`;
+      return;
+    }
+    el('camp-list').innerHTML = manual.map((c) => {
       const done = FINAL.reduce((n, k) => n + (c.by_status[k] || 0), 0);
       const pct = c.total ? Math.round((100 * done) / c.total) : 0;
       const state = c.running ? '<span class="badge accent pulse"><span class="dot"></span>Calling</span>'
@@ -43,7 +48,7 @@
         : done >= c.total ? '<span class="badge good">Done</span>' : '<span class="badge">Ready</span>';
       const t = typeOf(c.call_type);
       const facts = c.facts || {};
-      const sub = [t ? t.name : c.call_type, facts.start_date ? `on ${facts.start_date}` : '', `created ${fmtDay(c.created_at)}`].filter(Boolean).join(' · ');
+      const sub = [t ? t.name : c.call_type, c.auto ? 'Automatic' : '', facts.start_date ? `on ${facts.start_date}` : '', `created ${fmtDay(c.created_at)}`].filter(Boolean).join(' · ');
       return `<button class="camp-card" data-open="${c.id}">
         <div class="top"><b>${esc(c.name)}</b>${state}</div>
         <div class="meta">${esc(sub)}</div>

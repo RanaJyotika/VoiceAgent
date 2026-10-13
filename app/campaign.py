@@ -33,6 +33,25 @@ router = APIRouter()
 GAP_SECONDS = 4          # breathing space between one call ending and the next being placed
 STOP_ON_ERRORS = 2       # consecutive system failures that pause the campaign
 
+# Contacts being dialled right now, before Plivo has taken the call (place_call adds a call to
+# PENDING only once Plivo answers). Two dialers run side by side, this one and automatic calling
+# (autodial.py): picking a contact and adding it here happen with no await in between, so the
+# other dialer never rings the same contact, and lines in use counts calls still being placed.
+DIALING: set[int] = set()
+
+
+def lines_in_use() -> int:
+    return len(PENDING) + len(DIALING)
+
+
+async def dial(contact: dict, s: "Settings"):
+    """place_call for either dialer, with the contact held in DIALING while Plivo is asked."""
+    DIALING.add(contact["id"])
+    try:
+        return await place_call(contact, s.voice, s.model, language=s.language)
+    finally:
+        DIALING.discard(contact["id"])
+
 
 @dataclass
 class Settings:
@@ -125,10 +144,13 @@ async def _run() -> None:
                 await asyncio.sleep(30)
                 continue
             waiting_logged = False
-            if len(PENDING) >= s.max_concurrent:
+            if lines_in_use() >= s.max_concurrent:
                 await asyncio.sleep(1)
                 continue
             contact = db.next_to_call(s.max_attempts, s.campaign_id)
+            if contact is not None and contact["id"] in DIALING:
+                await asyncio.sleep(1)     # automatic calling is placing this very call
+                continue
             if contact is None:
                 if PENDING or c.watchers:
                     await asyncio.sleep(2)     # last calls still running; their retries may come
@@ -141,7 +163,7 @@ async def _run() -> None:
                 c.reason = "finished: everyone on the list has been called"
                 break
             try:
-                pc = await place_call(contact, s.voice, s.model, language=s.language)
+                pc = await dial(contact, s)
             except HTTPException as exc:
                 # A bad row (no phone number) is that row's problem; anything else is ours.
                 if exc.status_code == 400:
@@ -166,9 +188,9 @@ async def _run() -> None:
         log.info("campaign ended: %s (%s calls this run)", c.reason, c.calls_made)
 
 
-async def _after_call(pc, contact: dict) -> None:
-    """Once a campaign call is over, decide whether that contact gets another try."""
-    c = CAMPAIGN
+async def _after_call(pc, contact: dict, c: Campaign = CAMPAIGN) -> None:
+    """Once a campaign call is over, decide whether that contact gets another try. c is the
+    dialer that placed it: this campaign, or automatic calling."""
     s = c.settings
     try:
         await pc.task
