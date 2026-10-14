@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from . import db
+from . import db, store_orders
 from .call_types import CALL_TYPES
 from .campaign import (DIALING, GAP_SECONDS, STOP_ON_ERRORS, Campaign, Settings, _after_call, dial, lines_in_use,
                        past_last_date, within_hours)
@@ -53,9 +53,14 @@ def _campaigns() -> list[dict]:
 
 
 def _next_contact(max_attempts: int) -> dict | None:
+    orders_id = store_orders.orders_campaign_id()
     for camp in _campaigns():
-        # Store orders: the newest order first (owner, 12 Oct 2026); a sheet keeps its own order.
-        contact = db.next_to_call(max_attempts, camp["id"], newest_first=camp.get("source") == "store")
+        if camp["id"] == orders_id:
+            # Store orders: as set on the Store orders page (how many a day, which ones; newest first by default).
+            contact = store_orders.next_order(camp["id"], max_attempts)
+        else:
+            # Store carts: the newest first (owner, 12 Oct 2026); a sheet keeps its own order.
+            contact = db.next_to_call(max_attempts, camp["id"], pick="newest" if camp.get("source") == "store" else "oldest")
         if contact and contact["id"] not in DIALING:
             return contact
     return None
@@ -113,6 +118,7 @@ async def _run() -> None:
                 await asyncio.sleep(30)
                 continue
             c.calls_made += 1
+            store_orders.note_dialed(contact)   # a store order's first call counts towards today's limit
             w = asyncio.create_task(_after_call(pc, contact, c))
             c.watchers.add(w)
             w.add_done_callback(c.watchers.discard)
@@ -150,17 +156,22 @@ def snapshot() -> dict:
     c = AUTO
     s = c.settings if c.running else _settings_from(_saved())
     camps = []
+    orders_id, q = store_orders.orders_campaign_id(), store_orders.quota()
     for camp in _campaigns():
         counts = db.contact_counts(s.max_attempts, camp["id"])
+        to_call = counts["to_call"]
+        if camp["id"] == orders_id and q["limit"]:
+            # With a daily limit only the day's room is rung (plus retries), not every order waiting.
+            to_call = min(q["room"], db.count_new(camp["id"], q["day_start"])) + counts["retry_left"]
         ct = CALL_TYPES.get(camp["call_type"])
         camps.append({"id": camp["id"], "name": camp["name"], "call_type": camp["call_type"],
                       "call_type_name": ct.name if ct else camp["call_type"],
-                      "to_call": counts["to_call"], "pending": counts["pending"], "retry_due": counts["retry_due"],
+                      "to_call": to_call, "pending": counts["pending"], "retry_due": counts["retry_due"],
                       "total": counts["total"]})
     return {
         "enabled": bool(_saved().get("enabled")), "running": c.running, "reason": c.reason,
         "started_at": c.started_at, "calls_made": c.calls_made, "in_progress": len(PENDING),
-        "settings": asdict(s), "campaigns": camps,
+        "settings": asdict(s), "campaigns": camps, "order_quota": q,
         "within_hours": within_hours(s), "now_ist": datetime.now(IST).strftime("%H:%M"),
         "dial_only_my_number": DIAL_ONLY_MY_NUMBER, "my_number": PHONE_NUMBER if DIAL_ONLY_MY_NUMBER else "",
         "max_concurrent_allowed": MAX_CONCURRENT_CALLS, "phone_missing": plivo_missing(),

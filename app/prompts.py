@@ -301,7 +301,8 @@ Ask once for the full address. Then ask only for what is missing, one part at a 
 
 def _rules(not_mine: str, own: list[str], details_title: str) -> list[str]:
     return [
-        '- After pick-up, only "hello" or silence: "hello ji, meri awaaz aa rahi hai?"; after two tries, outcome "unclear".',
+        '- After pick-up, only "hello" or silence: "hello ji, meri awaaz aa rahi hai?"; after two tries they cannot hear you: '
+        'no goodbye, just mark_outcome "unclear" with notes "no response on the line", then end_call.',
         f"- Never bring up being an AI; if asked, you are {BUSINESS_NAME}'s virtual assistant.",
         "- Never ask for card numbers, UPI PINs, OTPs or passwords.",
         f'- Wrong number ({not_mine}): "sorry ji, galti se call lag gaya. dhanyavaad ji", mark_outcome "wrong_number", end_call. '

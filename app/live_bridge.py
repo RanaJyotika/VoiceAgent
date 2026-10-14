@@ -382,6 +382,14 @@ def said_goodbye(transcript: list[dict[str, str]]) -> bool:
     return _GOODBYE.search(said) is not None
 
 
+_ONLY_HELLO = re.compile(r"^[\s.,!?।]*((hello|helo|hallo|hailo|हेलो|हैलो|हलो|हल्लो|ji|जी)[\s.,!?।]*)*$", re.IGNORECASE)
+
+
+def never_got_through(transcript: list[dict[str, str]]) -> bool:
+    """The customer said nothing but "hello" all call: they cannot hear us, so a goodbye is pointless (owner, 13 Oct 2026)."""
+    return all(_ONLY_HELLO.match(t["text"]) for t in transcript if t["role"] == "customer")
+
+
 def closing_line(state: "CallState", outcome: str | None) -> str:
     """The goodbye the agent is told to say when it recorded a result without saying one (calls 178, 183)."""
     voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
@@ -471,6 +479,9 @@ ACTIVITY_END = object()
 # Sent just before ACTIVITY_END when the voice fingerprint says the turn was someone else near the phone, not the
 # customer (plivo_bridge, VOICEPRINT=on): the reply to it is held back like the reply to a sound with no words.
 NOT_CALLER = object()
+# From the phone line: "hello ji, meri awaaz aa rahi hai?" asked twice and still silence. Owner, 13 Oct 2026 (call
+# 228): they cannot hear us, so hang up with no goodbye.
+SILENT_HANGUP = object()
 
 
 class Nudge(str):
@@ -858,6 +869,15 @@ async def run_call(
                 while True:
                     chunk = await incoming_audio.get()
                     if chunk is None or state.ended:
+                        return
+                    if chunk is SILENT_HANGUP:
+                        if in_activity:
+                            continue   # they started talking after all
+                        if not state.outcome:
+                            state.outcome = "unclear"
+                            state.outcome_details = {"outcome": "unclear", "notes": "no response on the line"}
+                        log.info("call %s: still silent after asking twice; hanging up with no goodbye", call_id)
+                        state.ended = True
                         return
                     if chunk is ACTIVITY_START:
                         in_activity = True
@@ -1740,6 +1760,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                     "Do what its reply asked, then call mark_outcome again, and only then end_call."}
         said = clean_agent_text(state._out_buf).rstrip()
         if (state.outcome and _GOODBYE.search(said) is None and not said_goodbye(state.transcript)
+                and not (state.outcome == "unclear" and never_got_through(state.transcript))
                 and state.goodbye_refusals < 2):
             # Call 183: mark_outcome and end_call 0.6 s apart with nothing spoken; the line went dead with no goodbye.
             state.goodbye_refusals += 1

@@ -31,7 +31,7 @@ from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, F
                      PHONE_SHORT_END_MS, PHONE_SHORT_TURN_MS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
                      PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, gemini_voice, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
-from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, Nudge, run_call
+from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, SILENT_HANGUP, Nudge, run_call
 from .openai_bridge import is_openai_model, voice_for
 from .sarvam_bridge import is_sarvam_model
 from .call_types import get_prompt
@@ -462,16 +462,21 @@ class PendingCall:
                     "your last question again in fewer words.]")
         elif (self.loud_wait < 10 or (not self.last_loud and now - self.last_loud_at >= PHONE_SILENT_SECONDS)) \
                 and waited >= (PHONE_SILENT_GOODBYE_SECONDS if self.silent_nudges else PHONE_SILENT_SECONDS) \
-                and self.silent_nudges < 2:
+                and self.silent_nudges < 3:
             self.silent_nudges += 1
+            if self.silent_nudges == 3:
+                # Owner, 13 Oct 2026 (call 228): asked twice and still nothing, so they cannot hear us. Hang up with
+                # no goodbye (it used to be told to say one, and call 228's customer said "hello" over it).
+                log.info("line quiet for %.0fs after asking twice; hanging up with no goodbye", waited)
+                self.nudged = True
+                return [SILENT_HANGUP]
             log.info("line quiet for %.0fs; asking the agent to check (silence nudge %s)", waited, self.silent_nudges)
             if self.silent_nudges == 1:
                 note = (f"[Note from the phone line: nothing has been heard from the customer for {waited:.0f} seconds. "
                         "Ask once, briefly: 'hello ji, meri awaaz aa rahi hai?']")
             else:
                 note = (f"[Note from the phone line: still nothing from the customer after another {waited:.0f} seconds. "
-                        "Say a short goodbye, call mark_outcome with outcome 'unclear' and notes 'no response on the "
-                        "line', then end_call.]")
+                        "Ask once more, briefly: 'hello? hello ji, meri awaaz aa rahi hai?' No goodbye.]")
         if not note:
             return []
         self.nudged = True
@@ -604,6 +609,7 @@ class PendingCall:
             self.speech_started = self.last_voiced = now
             self.seg_peak, self.seg_voiced, self.seg_levels = 0, 0, []
             self.seg_audio, self.run_audio, self.run_verdict = bytearray(self.run_audio), bytearray(), None
+            self.silent_nudges = 0   # they spoke: a later silence gets its two "hello?" checks again
             out = [ACTIVITY_START, *(self.boost(f) for f in self.preroll)]
             self.preroll.clear()
             if self.seg_over_agent and self.meta.get("provider") in ("openai", "sarvam"):

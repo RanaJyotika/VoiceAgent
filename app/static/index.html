@@ -541,6 +541,8 @@
             <label class="f">Orders<select id="store-orders"><option value="cod">Cash on delivery only</option><option value="all">All orders</option><option value="off">None</option></select></label>
             <label class="f">Wait after the order (min)<input class="fld" id="store-wait" type="number" min="0" max="1440" value="5" title="Time for the customer to cancel or edit the order first"></label>
             <label class="f">Stop trying after (hours)<input class="fld" id="store-max" type="number" min="1" max="168" value="24" title="An order not called by then is taken off the list: it has likely shipped"></label>
+            <label class="f">Orders a day (0 = all)<input class="fld" id="store-limit" type="number" min="0" max="5000" value="0" title="Automatic calling rings at most this many new orders a day, picked from that day's orders. The rest are not called. Orders you call yourself do not count."></label>
+            <label class="f">Which ones first<select id="store-pick" title="Which waiting orders automatic calling rings first. With a limit: Oldest first = the day's first orders, Random = a random pick of the day's orders."><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="random">Random</option></select></label>
           </div>
           <div class="hint" id="store-counts" style="margin-bottom:10px"></div>
           <div class="camp-warn" id="store-warn" hidden></div>

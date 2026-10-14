@@ -48,6 +48,10 @@ DEFAULTS = {
     "writeback": True,            # tag and note the order in Shopify with the call's result
     "order_wait_minutes": 5,      # an order is called this long after it was placed (time to cancel or edit it)
     "order_max_hours": 24,        # an order not called by then is taken off the list (it has likely shipped)
+    # Owner, 13 Oct 2026: call only some orders. At most this many new orders a day by automatic calling, from that
+    # day's orders (0 = every order), picked "newest" first, "oldest" first or at "random" (store_orders.next_order).
+    "order_daily_limit": 0,
+    "order_pick": "newest",
 }
 SYNC_TRIES = 5                    # write-back attempts for one result before it is left for a person
 TICK_SECONDS = 60
@@ -536,6 +540,10 @@ async def save_settings(body: dict) -> dict:
         clean["order_max_hours"] = max(1, min(7 * 24, int(body["order_max_hours"] or 24)))
     if "order_wait_minutes" in body:
         clean["order_wait_minutes"] = max(0, min(24 * 60, int(body["order_wait_minutes"] or 0)))
+    if "order_daily_limit" in body:
+        clean["order_daily_limit"] = max(0, min(5000, int(body["order_daily_limit"] or 0)))
+    if body.get("order_pick") in ("newest", "oldest", "random"):
+        clean["order_pick"] = body["order_pick"]
     if "cart_max_hours" in body:
         clean["cart_max_hours"] = max(1, min(7 * 24, int(body["cart_max_hours"] or 24)))
     _save(**clean)

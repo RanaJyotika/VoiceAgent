@@ -21,13 +21,15 @@
   // The cards: who is left to call, who was reached, who did not pick up or was busy, who is booked for later.
   const VIEWS = [['left', 'Left to call', 'warning'], ['called', 'Called', 'good'], ['no_pick', "Didn't pick", 'serious'],
     ['busy', 'Busy', 'serious'], ['scheduled', 'Scheduled', 'accent'], ['all', 'All orders', '']];
-  // The small line under a card's number.
+  // The small line under a card's number. q: the day's limit on new orders (store_orders.quota).
   const NOTE = {
-    left: (c) => c.calling ? `${c.calling} on a call now` : 'not called yet',
+    left: (c, q) => c.calling ? `${c.calling} on a call now`
+      : q && q.limit ? (q.room ? `${q.room} more today · limit ${q.limit} a day` : `today's ${q.limit} done`) : 'not called yet',
     called: (c) => [c.confirmed && `${c.confirmed} confirmed`, c.cancelled && `${c.cancelled} cancelled`, c.review && `${c.review} need a look`].filter(Boolean).join(' · ') || 'none yet',
     no_pick: () => 'tried again later', busy: () => 'tried again later', scheduled: () => 'call booked for later',
-    all: (c) => c.not_calling ? `${c.not_calling} not being called` : '',
+    all: (c) => { const n = (c.not_calling || 0) + (c.not_picked || 0) + (c.too_late || 0); return n ? `${n} not being called` : ''; },
   };
+  const PICK_TEXT = { newest: 'newest first', oldest: 'oldest first', random: 'picked at random' };
   // On a row, only the two tags that matter most; the side panel shows them all.
   const TAG_ORDER = ['Return risk', 'High Risk', 'Bad Address', 'COD cancelled (store)', 'Has a question', 'VIP customer',
     'COD confirmed (store)', 'High value', 'Repeat customer', 'New customer'];
@@ -61,7 +63,7 @@
   function render() {
     const c = data.counts;
     el('so-views').innerHTML = VIEWS.map(([k, label, tone]) =>
-      `<button role="tab" data-view="${k}" aria-selected="${view.tab === k}" class="${tone}"><span class="lbl"><i></i>${esc(label)}</span><b>${(c[k] || 0).toLocaleString('en-IN')}</b><small>${esc(NOTE[k](c))}</small></button>`).join('');
+      `<button role="tab" data-view="${k}" aria-selected="${view.tab === k}" class="${tone}"><span class="lbl"><i></i>${esc(label)}</span><b>${(c[k] || 0).toLocaleString('en-IN')}</b><small>${esc(NOTE[k](c, data.quota))}</small></button>`).join('');
     const keep = el('so-tag').value;
     el('so-tag').innerHTML = '<option value="">All tags</option>' + data.tags.map((t) => `<option>${esc(t)}</option>`).join('');
     el('so-tag').value = data.tags.includes(keep) ? keep : '';
@@ -194,9 +196,14 @@
     el('so-settings').hidden = !show;
     el('so-settings-btn').setAttribute('aria-expanded', String(show));
   };
-  let source = null;   // /api/store: since when orders are read, and the give-up hours
-  const rules = () => source && source.since
-    ? ` <span class="hint">Calls only orders placed after ${esc(when(source.since))}, newest first. An order not called within ${source.settings.order_max_hours} h is dropped.</span>` : '';
+  let source = null;   // /api/store: since when orders are read, the give-up hours, the day's limit
+  const limitText = (q) => q && q.limit ? `at most ${q.limit} a day, from that day's orders, ${PICK_TEXT[q.pick] || q.pick} (${q.picked_today} called today)` : '';
+  const rules = () => {
+    if (!source || !source.since) return '';
+    const q = source.quota || {};
+    const which = q.limit ? limitText(q) : (PICK_TEXT[q.pick] || 'newest first');
+    return ` <span class="hint">Calls only orders placed after ${esc(when(source.since))}, ${esc(which)}. An order not called within ${source.settings.order_max_hours} h is dropped.</span>`;
+  };
   async function loadBar() {
     try {
       const a = await fetch('/api/auto').then(json);
@@ -223,20 +230,26 @@
         el('store-orders').value = s.settings.orders;
         el('store-wait').value = s.settings.order_wait_minutes;
         el('store-max').value = s.settings.order_max_hours;
+        el('store-limit').value = s.settings.order_daily_limit ?? 0;
+        el('store-pick').value = s.settings.order_pick || 'newest';
       }
       el('store-badge').innerHTML = !s.enabled ? '<span class="badge warning"><span class="dot"></span>Not connected</span>'
         : s.error ? '<span class="badge critical"><span class="dot"></span>Cannot read</span>' : '<span class="badge good"><span class="dot"></span>Reading</span>';
       el('store-sub').textContent = s.enabled ? `checked ${ago(s.last_check)}` : 'Add MONGODB_URI to .env and restart.';
-      el('store-counts').textContent = s.since ? `New orders are added from ${when(s.since)}.` : '';
+      const q = s.quota || {};
+      el('store-counts').textContent = [s.since ? `New orders are added from ${when(s.since)}.` : '',
+        q.limit ? `Automatic calling rings ${limitText(q)}; the rest are not called.` : ''].filter(Boolean).join(' ');
       el('store-warn').hidden = !s.error;
       el('store-warn').textContent = s.error ? `The database could not be read: ${s.error}` : '';
     } catch (e) { /* server away */ }
   }
   el('store-save').onclick = async () => {
     const r = await fetch('/api/shopify/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orders: el('store-orders').value, order_wait_minutes: el('store-wait').value, order_max_hours: el('store-max').value }) });
+      body: JSON.stringify({ orders: el('store-orders').value, order_wait_minutes: el('store-wait').value, order_max_hours: el('store-max').value,
+        order_daily_limit: el('store-limit').value, order_pick: el('store-pick').value }) });
     window.toast(r.ok ? 'Saved.' : 'Could not save.');
-    loadSource();
+    loadSource().then(loadBar);
+    load();
   };
 
   window.loadStore = () => { load(); loadSource().then(loadBar); };

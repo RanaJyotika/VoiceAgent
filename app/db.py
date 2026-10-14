@@ -392,17 +392,23 @@ def callbacks() -> list[dict]:
 _NOT_BLOCKED = "phone NOT IN (SELECT phone FROM contacts WHERE status='do_not_call' AND phone != '')"
 
 
-def next_to_call(max_attempts: int, campaign_id: int | None = None, newest_first: bool = False) -> dict | None:
-    """The next contact the campaign should dial: never-called contacts first (in sheet order, or the newest
-    first for store orders: a fresh order is the one worth confirming), then no-answer / busy retries whose
-    time has come."""
+_PICK_ORDER = {"oldest": "id", "newest": "id DESC", "random": "RANDOM()"}
+
+
+def next_to_call(max_attempts: int, campaign_id: int | None = None, pick: str = "oldest", new_since: str = "",
+                 new_ok: bool = True) -> dict | None:
+    """The next contact the campaign should dial: never-called contacts first, then no-answer / busy retries whose
+    time has come. pick: which never-called contact goes first, "oldest" (sheet order), "newest" (a fresh store
+    order is the one worth confirming) or "random". new_since: only never-called contacts added from then on
+    (UTC ISO time). new_ok=False: retries only (a store order limit reached for the day)."""
     scope, sargs = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
-    order = "id DESC" if newest_first else "id"
     with connect() as conn:
-        row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope} ORDER BY {order} LIMIT 1",
-                           sargs).fetchone()
-        if row:
-            return dict(row)
+        if new_ok:
+            since, args = (" AND created_at >= ?", (new_since,)) if new_since else ("", ())
+            row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope}{since} "
+                               f"ORDER BY {_PICK_ORDER.get(pick, 'id')} LIMIT 1", (*sargs, *args)).fetchone()
+            if row:
+                return dict(row)
         marks = ",".join("?" for _ in RETRY_STATUSES)
         # A customer who asked to be called later is called later however many tries it took.
         row = conn.execute(
@@ -430,6 +436,13 @@ def contact_counts(max_attempts: int, campaign_id: int | None = None) -> dict:
     return {"by_status": by, "total": sum(by.values()), "pending": by.get("pending", 0),
             "retry_left": retry_left, "retry_due": retry_due,
             "to_call": by.get("pending", 0) + retry_left}
+
+
+def count_new(campaign_id: int, since: str = "") -> int:
+    """Never-called contacts of a campaign, added from `since` (UTC ISO time) on."""
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM contacts WHERE campaign_id=? AND status='pending' AND created_at >= ?",
+                            (campaign_id, since)).fetchone()[0]
 
 
 def latest_call_for_contact(contact_id: int) -> dict | None:

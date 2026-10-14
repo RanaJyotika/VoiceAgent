@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from . import db, shopify
 from .config import MONGODB_DB, MONGODB_URI
 from .contacts import is_valid_phone, normalise_phone
+from .db import IST
 
 log = logging.getLogger("store_orders")
 router = APIRouter()
@@ -91,6 +92,59 @@ def take(o: dict) -> str:
     contact_id = shopify._add_contact("order", row, gid)
     STATE["added"] += 1
     return f"added {row['order_id']} as contact {contact_id}" + ("" if is_valid_phone(row["phone"]) else " (no valid phone)")
+
+
+# --- which orders automatic calling rings (owner, 13 Oct 2026: "call the first 10, or randomly selected ones") ---
+# Settings on the Store orders page: at most order_daily_limit new orders a day (0 = every order), picked by
+# order_pick. With a limit, only that day's orders (Indian date) are picked from; the rest are never called.
+# Retries of an order already called (no answer, busy, call later) still go ahead, and orders called by hand
+# with the Call button do not count.
+PICKS = ("newest", "oldest", "random")
+_PICKED = "order_picks"     # app setting: {"day": "2026-10-13", "ids": [orders automatic calling first rang that day]}
+
+
+def _today() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+def day_start_utc() -> str:
+    """Today's Indian midnight, as the UTC time contacts are stamped with."""
+    return datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()
+
+
+def orders_campaign_id() -> int:
+    return int(shopify.settings().get("orders_campaign_id") or 0)
+
+
+def picked_today() -> list[int]:
+    saved = db.get_setting(_PICKED, {}) or {}
+    return list(saved.get("ids") or []) if saved.get("day") == _today() else []
+
+
+def quota() -> dict:
+    """The day's limit: limit (0 = none), pick, orders picked today, room left (None without a limit)."""
+    s = shopify.settings()
+    limit = max(0, int(s.get("order_daily_limit") or 0))
+    picked = len(picked_today())
+    return {"limit": limit, "pick": s.get("order_pick") if s.get("order_pick") in PICKS else "newest",
+            "picked_today": picked, "room": max(0, limit - picked) if limit else None, "day_start": day_start_utc()}
+
+
+def next_order(campaign_id: int, max_attempts: int) -> dict | None:
+    """The next store order for automatic calling: a new one by the pick while today's limit has room, else a retry."""
+    q = quota()
+    if not q["limit"]:
+        return db.next_to_call(max_attempts, campaign_id, pick=q["pick"])
+    return db.next_to_call(max_attempts, campaign_id, pick=q["pick"], new_since=q["day_start"], new_ok=q["room"] > 0)
+
+
+def note_dialed(contact: dict) -> None:
+    """Automatic calling has just rung this contact: a store order's first call counts towards today's limit."""
+    if contact.get("status") != "pending" or not contact.get("campaign_id") or contact["campaign_id"] != orders_campaign_id():
+        return
+    ids = picked_today()
+    if contact["id"] not in ids:
+        db.set_setting(_PICKED, {"day": _today(), "ids": [*ids, contact["id"]]})
 
 
 def _client():
@@ -195,7 +249,8 @@ async def store_status() -> dict:
         counts = {"total": 0, "to_call": 0, "by_status": {}}
     return {
         "source": f"{MONGODB_DB}.{ORDERS_COLLECTION}" if enabled() else "", "enabled": enabled(),
-        "settings": {k: s[k] for k in ("orders", "order_wait_minutes", "order_max_hours")}, "campaign_id": cid or None,
+        "settings": {k: s[k] for k in ("orders", "order_wait_minutes", "order_max_hours", "order_daily_limit", "order_pick")},
+        "quota": quota(), "campaign_id": cid or None,
         "last_check": STATE["last_check"], "since": STATE["since"], "error": STATE["error"],
         "added_since_start": STATE["added"], "skipped_since_start": STATE["skipped"],
         "counts": counts, "orders": rows,

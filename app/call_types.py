@@ -109,7 +109,7 @@ def _xv(contact: dict, key: str) -> str:
 
 def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
-    deti = forms(voice)["deti"]
+    deti, rahi = forms(voice)["deti"], forms(voice)["rahi"]
     payment = (contact.get("payment_mode") or "").upper()
     payment_line = "cash on delivery" if payment == "COD" else "already paid online" if payment else "unknown"
     answers = str((facts or {}).get("answers") or "").strip()
@@ -149,7 +149,7 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # Every order ends at step 3 then 4, whatever happened on the way (a mismatch included): on call
     # 102 the agent never came back to the missing address after the customer disputed the amount.
     flow = f"""THE USUAL ORDER
-1. Greet, then wait: "namaste <name> ji, main {agent_name}, {BUSINESS_NAME} se. bas aapke order ka ek chhota sa confirmation call hai, ek minute baat ho sakti hai?"
+1. Greet, then wait: "namaste <name> ji, main {agent_name}, {STORE_NAME} se bol {rahi} hoon. bas aapke order ka ek chhota sa confirmation call hai, ek minute baat ho sakti hai?"
 2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?"
 3. Address, every time (call 122 skipped it). On record: ask it as its own question, "aur delivery <area>, <city> mein hi karni hai na?", and get a yes. MISSING, or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
 4. Close in one turn, then mark_outcome, then end_call:
@@ -534,8 +534,8 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # Owner, 7 Oct 2026 (call 173): steps 2-5 in the owner's words; online payment is paid on the site, no address.
     # Owner, 7 Oct 2026 (call 167): say where you call from in the greeting, and the name only once, in the question.
     flow = f"""THE USUAL ORDER
-1. Greet, say where you call from and check you have the right person, nothing else, then wait: "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon. kya meri baat <name> ji se ho rahi hai?" The name only there, not after "namaste". (Name MISSING: start at step 2 with "namaste ji, main {BUSINESS_NAME} se baat kar {f["rahi"]} hoon.")
-2. After "haan" / "ji boliye" / "bolo": say exactly this, with nothing before it, then wait: "ji, aapne cart mein ek <items> add kiya tha, <quantity> quantity mein, <amount> rupaye mein. kya main yeh order confirm kar doon?" Leave out the amount if it is not on record. If they ask who is calling: "ji, main {agent_name}, {BUSINESS_NAME} se", then this turn.
+1. Greet, say where you call from and check you have the right person, nothing else, then wait: "namaste ji, main {STORE_NAME} se bol {f["rahi"]} hoon. kya meri baat <name> ji se ho rahi hai?" The name only there, not after "namaste". (Name MISSING: start at step 2 with "namaste ji, main {STORE_NAME} se bol {f["rahi"]} hoon.")
+2. After "haan" / "ji boliye" / "bolo": say exactly this, with nothing before it, then wait: "ji, aapne cart mein ek <items> add kiya tha, <quantity> quantity mein, <amount> rupaye mein. kya main yeh order confirm kar doon?" Leave out the amount if it is not on record. If they ask who is calling: "ji, main {agent_name}, {STORE_NAME} se", then this turn.
 3. On a yes: "theek hai ji. payment cash on delivery karenge ya online?" Online: "theek hai ji, aap site par jaakar hi online pay kar dijiye."
 4. The address, last and always (owner, 12 Oct 2026). On record: "aur delivery <area>, <city> mein hi karni hai na?" and get a yes. MISSING, or they say it changed: "theek hai ji. delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). If they cut in, ask it again before the close.
 5. Close in one turn, with exactly these words and nothing added: "dhanyavaad ji, aapka din shubh ho." Then mark_outcome "wants_to_order" with payment_preference as they said, then end_call.
@@ -569,7 +569,7 @@ def _cart_greeting(contact: dict, voice: str) -> str:
     if not name:
         return ""   # step 1 then runs straight into step 2: left to the agent
     rahi = "रही" if forms(voice)["rahi"] == "rahi" else "रहा"
-    return (f"नमस्ते जी, मैं {PRONUNCIATION.get(BUSINESS_NAME, BUSINESS_NAME)} से बात कर {rahi} हूँ। "
+    return (f"नमस्ते जी, मैं {PRONUNCIATION.get(STORE_NAME, STORE_NAME)} से बोल {rahi} हूँ। "
             f"क्या मेरी बात {name} जी से हो रही है?")
 
 

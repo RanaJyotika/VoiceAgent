@@ -48,8 +48,13 @@ STATES = {
     "yet_to_call": ("Yet to call", "warning"), "calling": ("Calling now", "accent"), "confirmed": ("Confirmed", "good"),
     "cancelled": ("Cancelled", "critical"), "no_pick": ("Didn't pick", "serious"), "busy": ("Busy", "serious"),
     "scheduled": ("Scheduled", "accent"), "review": ("Needs a look", "serious"), "not_calling": ("Not calling", ""),
+    # Waiting, but outside the day's limit (store_orders.quota): from an earlier day, or today's limit is used up.
+    "not_picked": ("Not picked", ""),
+    # Never rung within the set hours and taken off the list (store_orders._expire_old): nothing to look at.
+    "too_late": ("Not called · too late", ""),
 }
-TABS = ["all", "yet_to_call", "calling", "confirmed", "cancelled", "no_pick", "busy", "scheduled", "review", "not_calling"]
+TABS = ["all", "yet_to_call", "calling", "confirmed", "cancelled", "no_pick", "busy", "scheduled", "review", "not_calling",
+        "not_picked", "too_late"]
 # The page's cards; each is one or more of the states above. "Called" = someone answered and the call has a result.
 VIEWS = {"left": ("yet_to_call", "calling"), "called": ("confirmed", "cancelled", "review"), "no_pick": ("no_pick",),
          "busy": ("busy",), "scheduled": ("scheduled",),
@@ -158,12 +163,16 @@ def _our_side(names: list[str]) -> tuple[dict[str, dict], dict[int, dict]]:
     return contacts, calls
 
 
-def _state(contact: dict | None, cod: bool) -> str:
+def _state(contact: dict | None, cod: bool, quota: dict | None = None) -> str:
     if not contact:
         return "not_calling"
     status, tries = contact.get("status") or "pending", contact.get("attempts") or 0
     if status == "pending":
+        if quota and quota["limit"] and (not quota["room"] or str(contact.get("created_at") or "") < quota["day_start"]):
+            return "not_picked"
         return "yet_to_call"
+    if status == "unclear" and not tries:
+        return "too_late"
     if status == "calling":
         return "calling"
     if status in ("confirmed", "changed"):
@@ -184,7 +193,7 @@ def _payment(o: dict) -> str:
     return "Part-paid COD" if fin == "partially_paid" else "COD" if store_orders._is_cod(o) else "Prepaid"
 
 
-def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict) -> dict:
+def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict, quota: dict | None = None) -> dict:
     name = str(o.get("name") or "")
     contact = contacts.get(name)
     call = calls.get(contact["id"]) if contact else None
@@ -218,10 +227,12 @@ def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict) -> di
         variant = str(li.get("variant_title") or "").strip()
         items.append({"title": li["title"], "variant": "" if variant.lower() == "default title" else variant,
                       "qty": int(li.get("quantity") or 1), "image": (p or {}).get("image", "")})
-    state = _state(contact, payment != "Prepaid")
+    state = _state(contact, payment != "Prepaid", quota)
     label, tone = STATES[state]
     if state == "not_calling":
         label = "No call · prepaid" if payment == "Prepaid" and shopify.settings()["orders"] == "cod" else "Not on call list"
+    elif state == "not_picked":
+        label = f"Not picked · {quota['limit']} a day"
     cust = o.get("customer") or {}
     return {
         "name": name, "created_at": o["createdAt"].replace(tzinfo=timezone.utc).isoformat() if o.get("createdAt") else "",
@@ -264,7 +275,8 @@ async def _rows(day_from: str, day_to: str) -> list[dict]:
     phones = sorted({_last10(o.get("phone")) for o in orders if _last10(o.get("phone"))})
     store, history = await asyncio.gather(_store_side(names), _history(phones))
     contacts, calls = _our_side(names)
-    return [_row(o, store, history, contacts, calls) for o in orders]
+    quota = store_orders.quota()
+    return [_row(o, store, history, contacts, calls, quota) for o in orders]
 
 
 @router.get("/api/orders")
@@ -285,7 +297,7 @@ async def orders(day_from: str, day_to: str, tab: str = "all", q: str = "", tag:
     page = max(1, min(pages, page))
     return {"counts": counts, "tags": tags, "total": len(shown), "page": page, "pages": pages,
             "rows": shown[(page - 1) * per_page: page * per_page],
-            "settings": {"orders": shopify.settings()["orders"]}}
+            "settings": {"orders": shopify.settings()["orders"]}, "quota": store_orders.quota()}
 
 
 @router.get("/api/orders/export")
@@ -323,7 +335,7 @@ async def order(name: str) -> dict:
         store[o["name"]] = full
     history = await _history([_last10(o.get("phone"))]) if _last10(o.get("phone")) else {}
     contacts, calls = _our_side([o["name"]])
-    row = _row(o, store, history, contacts, calls)
+    row = _row(o, store, history, contacts, calls, store_orders.quota())
     ship = o.get("shippingAddress") or {}
     with db.connect() as conn:
         call_rows = [dict(r) for r in conn.execute(
