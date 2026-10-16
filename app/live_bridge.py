@@ -188,7 +188,7 @@ INAUDIBLE_NOTES = {
        "to hold the phone a little closer and speak slowly ('ji, phone thoda paas rakh ke dheere se boliye'), then ask the "
        "same question again. Do not move on.]",
     4: "[Note from the phone line: four replies in a row could not be heard. Do not ask this question again. If it was "
-       "about the address or another detail: say 'koi baat nahi, team aapse le legi', put that in mark_outcome notes, and "
+       "about the address or another detail: say 'koi baat nahi ji, maine note kar liya hai', put that in mark_outcome notes, and "
        "carry on with the next step. If it was the final confirmation or the opening: say the line is bad and you will "
        "call back a little later ('awaaz nahi aa rahi, hum thodi der mein dobara call karte hain'), then call end_call "
        "without mark_outcome.]",
@@ -398,7 +398,7 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
         # Call 191: "aapki site fake product bhejti hai" to "koi dikkat aayi thi?" got only "theek hai ji, dhanyavaad".
         # The complaint reply (owner's words, 1 Oct 2026), then the goodbye.
         return (f"ji, aapki chinta samajh {f['sakti']} hoon. hamari poori koshish rehti hai ki original quality ka product hi "
-                f"pahunche. aapki yeh baat main team tak pahuncha {f['deti']} hoon. dhanyavaad ji, aapka din shubh ho.")
+                f"pahunche. aapki yeh baat maine note kar li hai. dhanyavaad ji, aapka din shubh ho.")
     if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
         return "theek hai ji, dhanyavaad. aapka din shubh ho."   # owner, 7 Oct 2026 (call 182)
     return (f"achha ji, samajh {f['gayi']}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
@@ -567,7 +567,6 @@ class CallState:
     idle_since: float | None = None     # when the agent last finished a turn
     loud_since: float | None = None     # first clear customer sound after that
     nudges: int = 0
-    address_checked: bool = False       # mark_outcome was already sent back once for a missing PIN code
     address_refusals: int = 0           # record_address sent back because the digits did not match
     address: dict[str, str] | None = None   # what record_address accepted
     inaudible_streak: int = 0           # customer replies in a row that carried no words
@@ -649,7 +648,20 @@ class CallState:
 
 def address_text(a: dict[str, str]) -> str:
     """An address record_address accepted, as one line for the team."""
-    return ", ".join(x for x in (f"house number {a['house']}", a["area"], a.get("landmark", ""), a["city"], f"PIN {a['pin']}") if x)
+    return ", ".join(x for x in (a["house"] and f"house number {a['house']}", a["area"], a.get("landmark", ""),
+                                 a["city"] if a["city"] != a["area"] else "",
+                                 f"PIN {a['pin']}" if a["pin"] else "PIN not given") if x)
+
+
+def read_back_confirmed(state: "CallState", parts: dict[str, str]) -> bool:
+    """The agent's last turn read this address back as a question and the customer's latest words are a yes."""
+    last_agent = next((t["text"] for t in reversed(state.transcript) if t["role"] == "agent"), "")
+    said = state.recent_customer_turns(1)
+    if not last_agent.rstrip().endswith("?") or not said or not said_yes(said[-1]):
+        return False
+    house = spoken_digits(parts["house"])
+    return bool((house and house in spoken_digits(last_agent))
+                or any(p and p.lower() in last_agent.lower() for p in (parts["area"], parts["city"])))
 
 
 def build_config(system_prompt: str, voice: str = GEMINI_VOICE,
@@ -1385,8 +1397,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             log.info("call %s: record_address refused; nothing intelligible from the customer in the last turns", state.call_id)
             return {"status": "not recorded", "reason": "You have not heard an address from the customer: their last replies were "
                     "inaudible. Do not read any address back. Ask them to hold the phone closer and say the address again, "
-                    "slowly, starting with the house number. If it still cannot be heard, say 'koi baat nahi, team aapse "
-                    "address le legi' and carry on."}
+                    "slowly, starting with the house number. If it still cannot be heard, say 'koi baat nahi ji, maine "
+                    "note kar liya hai' and carry on."}
         asked = asks_for_address_part(state._out_buf)
         if asked:
             # The model asked for a part and, in the same breath, filled it in itself (call 54).
@@ -1394,16 +1406,16 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": "You just asked the customer a question in this same turn and have not heard "
                     "their answer. Do not read any address back and do not fill in the answer yourself. Stop talking and wait "
                     "for their reply; call record_address only after they have said every part."}
-        pin = spoken_digits(str(args.get("pin") or ""))
-        if len(pin) != 6:
-            return {"status": "not recorded", "reason": f"The PIN code must be exactly six digits; you gave '{args.get('pin')}'. "
-                    "Ask for the PIN code again, digit by digit, then call record_address again with all four parts."}
+        # Owner, 16 Oct 2026 (call 253): what the customer gave is enough. A PIN they do not remember, or a missing
+        # area, is asked once in the prompt and never forced here; "PIN code to batana padega" after their yes was wrong.
+        # "Unknown" as the city (call 58) is a gap the model papered over, not something the customer said: left blank.
         parts = {k: str(args.get(k) or "").strip() for k in ("house", "area", "city", "pin", "landmark")}
-        parts["pin"] = pin
-        if not all(parts[k] and not _PLACEHOLDER.match(parts[k]) for k in ("house", "area", "city")):
-            # "Unknown" as the city (call 58) is a gap the model papered over, not something the customer said.
-            return {"status": "not recorded", "reason": "House number, area and city are all needed, as the customer said them; never write "
-                    "'unknown' or 'not given'. Ask for the missing part, then call record_address again."}
+        parts = {k: "" if _PLACEHOLDER.match(v) else v for k, v in parts.items()}
+        pin = spoken_digits(parts["pin"])
+        parts["pin"] = pin if len(pin) == 6 else ""
+        if not any(parts[k] for k in ("house", "area", "city")):
+            return {"status": "not recorded", "reason": "No part of an address was given. Ask once for the address; if they "
+                    "cannot give it, say 'koi baat nahi ji, maine note kar liya hai' and close."}
         # The numbers must have come out of the customer's mouth on this call, not out of the model.
         # Only a transcript we actually have can say that. OpenAI writes the customer's words down
         # in a separate pass that often lands after the reply, so an empty result here means "not
@@ -1411,8 +1423,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
         said = spoken_digits(" ".join(state.recent_customer_turns(10)))
         wrong = []
         if said:
-            if pin not in said:
-                wrong.append(f"PIN code {pin}")
+            if parts["pin"] and parts["pin"] not in said:
+                wrong.append(f"PIN code {parts['pin']}")
             # House numbers of two digits or more; a lone digit is a floor or a wing, not a number
             # the customer had to say ("Tower No 10, 502, 5th Floor" on call 58).
             wrong += [f"house number {n}" for n in
@@ -1425,18 +1437,27 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             if state.address_refusals >= 3:
                 # Three refusals in a row is a loop the customer is sitting through. Stop asking.
                 return {"status": "not recorded", "reason": "The address still does not match what the customer said, and they have "
-                        "been asked enough times. Do not ask again and do not read any address back. Say 'koi baat nahi ji, team "
-                        "aapse address le legi', put that in mark_outcome notes, and carry on to the close."}
+                        "been asked enough times. Do not ask again and do not read any address back. Say 'koi baat nahi ji, maine "
+                        "note kar liya hai', put that in mark_outcome notes, and carry on to the close."}
             return {"status": "not recorded", "reason": f"The customer has NOT said {' and '.join(wrong)} on this call. The digits they "
-                    f"were actually heard to say, in order, are '{said}'. Never fill a number in yourself. Ask for the part you are "
-                    "missing, wait for their answer, then call record_address again."}
+                    f"were actually heard to say, in order, are '{said}'. Never fill a number in yourself. Call record_address again "
+                    "with only what they said, leaving that number out."}
         if not said:
             log.info("call %s: record_address taken unchecked; nothing of the customer's has been transcribed yet", state.call_id)
         state.address = parts
         state.address_refusals = 0   # a good one clears the slate; a later correction gets its own tries
         log.info("call %s: address recorded %s", state.call_id, json.dumps(parts, ensure_ascii=False))
-        return {"status": "recorded", "next": f"Now read it back ONCE and get a yes: 'toh address hai: house number {parts['house']}, "
-                f"{parts['area']}, {parts['city']}, PIN {' '.join(pin)}. Sahi hai?' If they correct a part, call record_address again with the corrected part."}
+        if read_back_confirmed(state, parts):
+            # Call 253: the agent read it back, got "ji haan ji", and only then wrote it down. A second read-back is a
+            # second confirmation the customer has to sit through.
+            log.info("call %s: the customer already said yes to this address read back", state.call_id)
+            return {"status": "recorded", "next": "The customer already said yes to this address. Do not read it back or ask "
+                    "anything more about it. Close now, in one turn."}
+        spoken = ", ".join(x for x in (parts["house"] and f"house number {parts['house']}", parts["area"],
+                                       parts["city"] if parts["city"] != parts["area"] else "",
+                                       parts["pin"] and f"PIN {' '.join(parts['pin'])}") if x)
+        return {"status": "recorded", "next": f"Read it back ONCE: 'toh address hai {spoken}, sahi hai na?' Nothing about a "
+                "missing part. On their yes, close at once. If they correct a part, call record_address again with it."}
     if name == "mark_outcome":
         outcome = args.get("outcome", "unclear")
         if state.address:
@@ -1453,19 +1474,12 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                          state.call_id, args.get("new_address"))
                 return {"status": "not recorded", "reason": "An address can only be written down through record_address, "
                         "which checks it against what the customer actually said. Do not end the call. Call record_address "
-                        "with only the parts the customer said; if a part is missing (house number, area, city or PIN), ask "
-                        "for it first. Never add a sector, city or PIN yourself. Then read it back, get a yes, and call "
+                        "with only the parts the customer said; never ask for a missing part, and never add a sector, city "
+                        "or PIN yourself. Then read it back, get a yes, and call "
                         "mark_outcome again without new_address."}
             loose = str(args.pop("new_address"))
             args["notes"] = f"{args.get('notes') or ''} (address heard on the call but not checked, team to verify: {loose})".strip()
-        address = str(args.get("new_address") or "")
-        if address and not re.search(r"(?<!\d)\d{3}\s?\d{3}(?!\d)", address) and not state.address_checked:
-            # Refused once only, so a customer who truly cannot give a PIN code does not trap the call.
-            state.address_checked = True
-            log.info("call %s: new address has no 6-digit PIN code; asking the agent to complete it", state.call_id)
-            return {"status": "not recorded", "reason": "new_address has no valid 6-digit PIN code. Do not end the call yet. "
-                    "Ask the customer for the PIN code digit by digit, read the full address back, then call mark_outcome again. "
-                    "If they cannot give it, call mark_outcome again and say in notes that the team must take the address."}
+        # Owner, 16 Oct 2026: no second round for a missing PIN code; the address is taken as the customer gave it.
         # Call 160: "haan ji, kar do confirm" three replies back, then a garbled answer to the address question; only
         # the last two replies were looked at, the order was refused after the goodbye and the agent asked again.
         if (outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2))
@@ -1484,7 +1498,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                          state.call_id, outcome, state.recent_customer_turns(1))
                 return {"status": "not recorded", "reason": "The customer has NOT clearly said yes: their last replies were inaudible "
                         f"or not an agreement. Do not confirm. Ask it simply, in a few words, '{state.call_type.confirm_question}', with no lead-in such as 'let me ask clearly', and "
-                        "wait for a clear haan. If you still cannot hear them, say 'awaaz nahi aa rahi, team aapse baat kar legi', call "
+                        "wait for a clear haan. If you still cannot hear them, say 'ji, awaaz saaf nahi aa rahi. dhanyavaad ji, aapka din shubh ho', call "
                         "mark_outcome with outcome 'unclear' and notes 'could not hear the customer's confirmation', and end_call."}
             if ever_yes_to_main_question(state.transcript, state.call_type.main_question):
                 # They said yes to the main question earlier; only the last replies were unclear. Keep it, for the team to check.
@@ -1535,8 +1549,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                     "('maine order nahi kiya'), or you have not asked 'kya yeh <name> ji ka number hai?' yet. A 'nahi' to "
                     "something else is not that: they may have ordered on the website under another name. Do not record "
                     "'not_ordered'. Ask once, plainly: 'kya aapne <product> order kiya tha?' If they did not, ask "
-                    "'kya yeh <name> ji ka number hai?' and go by their answer. If you still cannot tell, say 'team aapse "
-                    "baat kar legi', call mark_outcome with outcome 'unclear', and end_call."}
+                    "'kya yeh <name> ji ka number hai?' and go by their answer. If you still cannot tell, say 'theek hai ji, "
+                    "maine note kar liya hai. dhanyavaad ji, aapka din shubh ho', call mark_outcome with outcome 'unclear', and end_call."}
         if not said_no:
             # Throwing an order away needs the customer's own "nahi" or "cancel" somewhere in the call. On
             # call 100 the transcript was gibberish and the agent recorded "not ordered" all the same.
@@ -1560,7 +1574,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                        else "'ji, aap order rakhna chahte hain ya cancel karna chahte hain?'")
                 return {"status": "not recorded", "reason": f"{heard} Do not record '{outcome}'. You may have misheard them. "
                         f"Ask them plainly, in a few words, what they want ({ask}) and go by their answer. If you still "
-                        "cannot make it out, say 'awaaz saaf nahi aa rahi, team aapse baat kar legi', call mark_outcome with "
+                        "cannot make it out, say 'ji, awaaz saaf nahi aa rahi. dhanyavaad ji, aapka din shubh ho', call mark_outcome with "
                         "outcome 'unclear', and end_call."}
             outcome = "unclear"
             args = {**args, "outcome": outcome,
@@ -1615,7 +1629,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                 state.help_refused = state.record_pending = True
                 log.info("call %s: mark_outcome needs_help refused; the customer already said yes (%r)", state.call_id, yes)
                 return {"status": "not recorded", "reason": f"The customer already said yes to the order ('{yes}'). Do not end "
-                        "the call and do not ask whether they want it again. Say 'yeh team confirm kar degi' about their "
+                        "the call and do not ask whether they want it again. Say 'ji, maine yeh note kar liya hai' about their "
                         "question and carry on with the order: payment (step 3), address (step 4), then the close (step 5) "
                         "with mark_outcome 'wants_to_order' and their question in question."}
         if outcome == "call_later":

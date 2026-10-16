@@ -25,15 +25,16 @@ def mark_outcome_for(call_type: CallType) -> types.FunctionDeclaration:
 RECORD_ADDRESS = types.FunctionDeclaration(
     name="record_address",
     description=("Write down a delivery address the customer gave on this call, one part per field, exactly as they said it. "
-                 "Call it as soon as you have all four parts, BEFORE reading the address back. The reply tells you whether it "
-                 "was accepted and what to say next. Never fill a part the customer did not say."),
+                 "Call it once they have said the address, BEFORE reading it back, with only the parts they gave (a "
+                 "missing PIN or area is fine; never ask for it). The reply tells you whether it was accepted and what to "
+                 "say next. Never fill a part the customer did not say."),
     parameters=types.Schema(
         type=types.Type.OBJECT,
         properties={
             "house": types.Schema(type=types.Type.STRING, description="House, flat or plot number, as said."),
             "area": types.Schema(type=types.Type.STRING, description="Street, society, sector, colony or area."),
             "city": types.Schema(type=types.Type.STRING, description="City or town."),
-            "pin": types.Schema(type=types.Type.STRING, description="PIN code, six digits."),
+            "pin": types.Schema(type=types.Type.STRING, description="PIN code, six digits; empty if they did not give it."),
             "landmark": types.Schema(type=types.Type.STRING, description="Landmark, if they gave one."),
         },
         required=["house", "area", "city", "pin"],

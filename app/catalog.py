@@ -506,21 +506,21 @@ def product_block(contact: dict, voice: str) -> str:
     return "\n\n" + "\n\n".join(parts)
 
 
-TEAM_LINE = '"iski jaankari team aapko de degi"'
+NOTED_LINE = '"ji, aapka yeh sawaal maine note kar liya hai"'
 
 
 def tool_answer(query: str, order_amount: str = "") -> dict:
     """product_info's reply to the agent. order_amount: the call's own order or cart, so the new total is worked out
     here and never by the model (owner, 12 Oct 2026: "Kirtimukh ke saath yeh bhi add kar diya, ab total itna hai")."""
     if not STATE["products"]:
-        return {"found": False, "say": f"The catalogue is not available right now. Say {TEAM_LINE} and put the question in question."}
+        return {"found": False, "say": f"The catalogue is not available right now. Say {NOTED_LINE} and put the question in question."}
     hits = search(query, 3)
     if not hits:
         return {"found": False, "say": f"No product by that name in our catalogue. Ask once which product they mean; if it is "
-                f"still not found, say {TEAM_LINE} and put it in question. Never say we do not sell it."}
+                f"still not found, say {NOTED_LINE} and put it in question. Never say we do not sell it."}
     answer = {"found": True, "products": [facts(p) for p in hits],
               "say": "Answer only from these, in one short sentence: what they asked (price, size, what it is). If none of these "
-                     "is what they asked for, say you will check with the team. Never name a price or product that is not here."}
+                     f"is what they asked for, say {NOTED_LINE}. Never name a price or product that is not here."}
     try:
         base, price = float(re.sub(r"[^\d.]", "", order_amount) or 0), float(_price(hits[0]).split()[0] or 0)
     except ValueError:

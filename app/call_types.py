@@ -109,7 +109,7 @@ def _xv(contact: dict, key: str) -> str:
 
 def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
-    deti, rahi = forms(voice)["deti"], forms(voice)["rahi"]
+    rahi = forms(voice)["rahi"]
     payment = (contact.get("payment_mode") or "").upper()
     payment_line = "cash on delivery" if payment == "COD" else "already paid online" if payment else "unknown"
     answers = str((facts or {}).get("answers") or "").strip()
@@ -136,7 +136,7 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         '- They want to cancel: CANCELLATION.',
         # Calls 93, 96 and 98 handled "I did not order" three different ways.
         f'- They did not place this order: never offer to cancel. Ask once "kya yeh <name> ji ka number hai?" Not theirs: wrong number. '
-        f'Theirs: "koi baat nahi ji, main team ko bata {deti} hoon, team check kar legi. dhanyavaad ji, aapka din shubh ho", '
+        'Theirs: "theek hai ji, maine yeh note kar liya hai. dhanyavaad ji, aapka din shubh ho", '
         'mark_outcome "not_ordered", end_call.',
         f'- "{BUSINESS_NAME} kaun? Maine to {STORE_NAME} se order kiya": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store hai." Then your question again. '
         # Call 119: "kisi aur site se kiya tha" was closed as not ordered at once.
@@ -152,27 +152,28 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 1. Greet, then wait: "namaste <name> ji, main {agent_name}, {STORE_NAME} se bol {rahi} hoon. bas aapke order ka ek chhota sa confirmation call hai, ek minute baat ho sakti hai?"
 2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?"
 3. Address, every time (call 122 skipped it). On record: ask it as its own question, "aur delivery <area>, <city> mein hi karni hai na?", and get a yes. MISSING, or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
-4. Close in one turn, then mark_outcome, then end_call:
-   - all correct: "ji, order confirm ho gaya" (+ "delivery <date> tak aa jayegi" if Expected delivery gives a date) + "dhanyavaad ji, aapka din shubh ho."
-   - after a mismatch: "ji, team verify karke order aage badhayegi. dhanyavaad ji, aapka din shubh ho."
+4. Close in one turn, straight after their yes to the address (nothing more to ask), then mark_outcome, then end_call:
+   - all correct: "theek hai ji, order confirm ho gaya hai" (+ "delivery <date> tak aa jayegi" if Expected delivery gives a date) + "dhanyavaad ji, aapka din shubh ho."
+   - after a mismatch: "theek hai ji, maine yeh badlaav note kar liya hai. dhanyavaad ji, aapka din shubh ho."
+Ask for a yes at most twice in the call: once to the order (step 2), once to the address (step 3, or the read-back). Never again (owner, call 253).
 {GOODBYE} Never end_call while a question of yours is unanswered."""
 
     # Call 102: "cancel kyun karna hai?" twice, by rote. Owner: handle it intelligently.
     cancellation = f"""CANCELLATION (they clearly want to cancel)
 Be a helpful person, not a form: never push, never argue, never ask the same thing twice.
 a. If they have not said why, ask once, naturally: "koi baat nahi ji. koi dikkat hai kya?" If they already said why, skip this.
-b. If it is something the team can look into (price, payment, delivery time, wrong item or quantity): "achha, main yeh team ko bata {deti} hoon, woh check kar lenge. toh kya aap order rakhna chahenge?" A yes: put their issue in mismatch or notes and carry on with step 3, then the mismatch close.
-c. Otherwise, or if they still want to cancel: "theek hai ji, maine cancellation request raise kar di hai, team process kar degi. dhanyavaad ji, aapka din shubh ho." mark_outcome "cancelled" with cancel_reason in their words ("not given" if they would not say), then end_call.
-A "nahi" to cancelling, a worry, or a request (COD, a discount) is not a cancellation: deal with it and carry on. After a cancellation, never read the order again or ask for the address. Paid online and asking about the money: "refund team process kar degi", no dates."""
+b. If it is something that can be looked into (price, payment, delivery time, wrong item or quantity): "achha ji, maine yeh note kar liya hai. toh kya aap order rakhna chahenge?" A yes: put their issue in mismatch or notes and carry on with step 3, then the mismatch close.
+c. Otherwise, or if they still want to cancel: "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho." mark_outcome "cancelled" with cancel_reason in their words ("not given" if they would not say), then end_call.
+A "nahi" to cancelling, a worry, or a request (COD, a discount) is not a cancellation: deal with it and carry on. After a cancellation, never read the order again or ask for the address. Paid online and asking about the money: "ji, maine yeh note kar liya hai", no dates."""
 
     # Call 102: "quantity sahi hai, bas price 900 hai aur prepaid" needed one reply, not one turn per difference.
     mismatch = f"""MISMATCH (they say the product, quantity, amount or payment is different)
-You cannot change the order on the call; you raise it so the team checks it before dispatch.
+You cannot change the order on the call; you only note it, so it is checked before dispatch.
 a. Say back, in one sentence, only what they said is different, and check: "achha, toh aapke hisaab se amount nau sau rupaye hai aur payment ho chuki hai, sahi?" Leave out what they said is correct. If you did not catch their version, ask for it; never suggest a number or a product yourself.
-b. On their yes: "theek hai ji, main yeh team ko verify ke liye bhej {deti} hoon." Then step 3 if the address is MISSING, then the mismatch close.
+b. On their yes: "theek hai ji, maine yeh note kar liya hai." Then step 3 if the address is MISSING, then the mismatch close.
 Never argue about who is right, never agree to change anything, never quote a new price or a refund. In mark_outcome: outcome "unclear", mismatch = each difference as "customer says ...; record says ...", new_product if they named another product."""
 
-    rules = ['- You cannot cancel, refund or change anything yourself: you raise it, "team process kar degi".']
+    rules = ['- You cannot cancel, refund or change anything yourself: you note it, "maine note kar liya hai", never "kar diya".']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="ORDER DETAILS",
                    details_noun="order details", replies_first=replies_first, replies_last=replies_last, flow=flow,
@@ -190,7 +191,7 @@ ORDER_CONFIRMATION = CallType(
     details={
         "mismatch": "What the customer claims versus what our record shows, raised for the team to verify. Example: 'customer says already paid online by UPI; record shows COD'.",
         "new_product": "Product and quantity the customer says they ordered, if different from our record. A claim to verify, not a change.",
-        "new_address": "New delivery address the customer confirmed after you read it back, with house number and 6-digit PIN code.",
+        "new_address": "New delivery address the customer confirmed after you read it back, as they gave it (a missing PIN is fine).",
         "new_delivery_date": "New delivery date if the customer changed it.",
         "cancel_reason": "Reason given if cancelled.",
         **COMMON_DETAILS,
@@ -236,10 +237,10 @@ def _date_line(raw: str) -> str:
     """A puja, seva or campaign date as the agent should treat it; a date that has passed is flagged."""
     raw = (raw or "").strip()
     if not raw:
-        return "not on record (do not name a date; if asked: 'team confirm kar degi')"
+        return "not on record (do not name a date; if asked: 'ji, maine aapka sawaal note kar liya hai')"
     day = _parse_date(raw)
     if day and day < date.today():
-        return f"{raw} (THIS DATE HAS ALREADY PASSED; do not say it, and note it for the team)"
+        return f"{raw} (THIS DATE HAS ALREADY PASSED; do not say it, and put it in notes)"
     return raw
 
 
@@ -260,7 +261,7 @@ def _block(title: str, body: str) -> str:
 def _booking_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
     f = forms(voice)
-    sakti, deti = f["sakti"], f["deti"]
+    sakti = f["sakti"]
     payment = (contact.get("payment_mode") or "").upper()
     payment_line = "not paid yet (pay later)" if payment == "COD" else "already paid online" if payment else "unknown"
     other = _block("Other details from the sheet:", _other_details(contact, {"temple", "puja_date", "devotee_names"}))
@@ -303,22 +304,22 @@ Never end_call with a question unanswered."""
 Stop confirming the moment they say it. Warm, never pushy, never arguing. At most four short turns:
   a. Only if it was unclear, check once: "achha ji, aap booking cancel karna chahte hain?" If it was clear, skip this.
   b. Ask the reason once, gently: "koi baat nahi ji, bas bata dijiye, cancel kyun karna hai?"
-  c. Only if the reason is the date, the price or a mistake in the booking, offer ONE time: "ji samajh {sakti} hoon. main yeh baat team tak pahuncha {deti} hoon; kya aap booking rakhna chahenge?" For any other reason skip this and accept.
-  d. Accept: "ji, maine aapki cancellation request raise kar di hai, team process kar degi. dhanyavaad ji, aapka din shubh ho." Then mark_outcome "cancelled" with cancel_reason in their words, then end_call.
+  c. Only if the reason is the date, the price or a mistake in the booking, offer ONE time: "ji samajh {sakti} hoon. maine yeh baat note kar li hai; kya aap booking rakhna chahenge?" For any other reason skip this and accept.
+  d. Accept: "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho." Then mark_outcome "cancelled" with cancel_reason in their words, then end_call.
 If at c they decide to keep the booking, go back to confirming it.
-Once they want to cancel: never ask "confirm kar doon?" and never read the booking back again. If it was paid and they ask about the money: "refund team process kar degi"; never a date, a method or a number of days."""
+Once they want to cancel: never ask "confirm kar doon?" and never read the booking back again. If it was paid and they ask about the money: "ji, maine yeh note kar liya hai"; never a date, a method or a number of days."""
 
     mismatch = """MISMATCH (they say what was booked, the temple, the date, the names, the amount or the payment is different)
-BOOKING DETAILS are the only truth; you cannot change them on the call, only raise the issue so the team verifies it. Warm, on their side, never arguing. One short turn each:
+BOOKING DETAILS are the only truth; you cannot change them on the call, only note the issue so it is checked. Warm, on their side, never arguing. One short turn each:
   a. Say what the record shows, once, only the part they dispute: "ji, mere record mein <that part> hai."
   b. Get their version in their words and say it back: "achha, aapne <their words> book kiya tha, sahi?" Never offer a name, a date or a number yourself.
-  c. On their yes: "ji, maine yeh issue raise kar diya hai, team verify kar legi. baaki sab sahi hai?" Ask "baaki sab sahi hai?" at most twice in a call.
-  d. Close: "ji, team verify karke booking aage badhayegi. dhanyavaad ji, aapka din shubh ho." Do not say "booking confirm ho gayi" after a mismatch.
+  c. On their yes: "theek hai ji, maine yeh note kar liya hai. baaki sab sahi hai?" Ask "baaki sab sahi hai?" at most twice in a call.
+  d. Close: "theek hai ji, maine sab note kar liya hai. dhanyavaad ji, aapka din shubh ho." Do not say "booking confirm ho gayi" after a mismatch.
 Never agree to change anything; never invent an offer, discount, date or policy.
-In mark_outcome: mismatch = their claim vs the record, one line per difference, outcome "unclear" so the team reviews (or "cancelled" if they cancelled)."""
+In mark_outcome: mismatch = their claim vs the record, one line per difference, outcome "unclear" (or "cancelled" if they cancelled)."""
 
-    rules = ['- You cannot cancel, refund, reschedule or edit anything yourself: "note kar liya, team process kar degi", never "kar diya". '
-             'Unknowns: "team check kar legi"; put it in notes.',
+    rules = ['- You cannot cancel, refund, reschedule or edit anything yourself: "maine note kar liya hai", never "kar diya". '
+             'Unknowns: "maine aapka sawaal note kar liya hai"; put it in notes.',
              '- Never promise what a puja will bring: no "manokamna poori hogi", no "guaranteed", no health or money claims.']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="BOOKING DETAILS",
@@ -362,7 +363,6 @@ BOOKING_CONFIRMATION = CallType(
 
 def _invite_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
-    deti = forms(voice)["deti"]
     facts = facts or {}
 
     def fx(key: str) -> str:
@@ -397,7 +397,7 @@ CUSTOMER DETAILS
         '- Interested ("haan", "achha hai", "batao", "book karna hai"): see INTERESTED.',
         '- Not interested ("nahi chahiye", "interest nahi hai", "abhi nahi"): see NOT INTERESTED.',
         '- Already booked ("maine book kar liya hai"): "bahut achha ji, dhanyavaad", goodbye, mark_outcome "already_booked", end_call.',
-        f'- They want help to book, or a payment link: "ji, main team ko bata {deti} hoon, team aapki madad kar degi." Goodbye, '
+        '- They want help to book, or a payment link: "theek hai ji, maine yeh note kar liya hai." Goodbye, '
         'mark_outcome "needs_help" with their request in notes, end_call. Never promise a link, a WhatsApp or a time.',
         REPLY_WRONG,
     ]
@@ -431,7 +431,7 @@ Answer only from CAMPAIGN DETAILS, in one short sentence, then ask again "kya aa
     if fx("never_say"):
         sections.append("NEVER SAY (set by the person who created this campaign)\n" + fx("never_say"))
 
-    rules = [f'- You cannot book, take payment, send links or change anything yourself: "main team ko bata {deti} hoon, team madad kar degi". '
+    rules = ['- You cannot book, take payment, send links or change anything yourself: "maine note kar liya hai" is the most you say. '
              'Unknowns go in the question field.']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details,
@@ -486,7 +486,6 @@ CAMPAIGN_INVITE = CallType(
 def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
     f = forms(voice)
-    deti = f["deti"]
     answers = str((facts or {}).get("answers") or "").strip()
     other = _block("Other details from the sheet:", _other_details(contact, set()))
     missing = "" if (contact.get("address") or "").strip() else \
@@ -494,7 +493,7 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 
     intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products. The customer "
              f"put items in their cart on {STORE_NAME} but did not finish the order. You remind them, help if something stopped "
-             "them, and if they want it, take the order for the team to place. Friendly and short, never a sales push.")
+             "them, and if they want it, take the order. Friendly and short, never a sales push.")
 
     details = f"""CART DETAILS
 - Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
@@ -519,10 +518,10 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         # Call 182: "baad mein kharidungi, abhi nahi" was recorded as call_later.
         '- No, not now, "baad mein le lunga", bought it elsewhere, or any excuse: NOT INTERESTED, never call_later.',
         '- Something stopped them (payment failed, website problem, delivery charge, a question): answer from CART DETAILS if you can, '
-        'put the problem in question, then "toh kya main yeh order confirm kar doon?" A yes: step 3. If only the team can solve it: '
-        f'"main team ko bata {deti} hoon, team aapki madad kar degi", goodbye, mark_outcome "needs_help", end_call. '
+        'put the problem in question, then "toh kya main yeh order confirm kar doon?" A yes: step 3. If you cannot solve it on the call: '
+        '"theek hai ji, maine yeh note kar liya hai", goodbye, mark_outcome "needs_help", end_call. '
         # Call 167: a freebie question after a clear yes ended the call as needs_help, with no order taken.
-        'After their yes, never needs_help: "yeh team confirm kar degi", put it in question, and carry on with the order.',
+        'After their yes, never needs_help: "ji, maine yeh note kar liya hai", put it in question, and carry on with the order.',
         REPLY_WRONG,
     ]
     replies_last = ['- A bare "nahi" to "kya main yeh order confirm kar doon?": NOT INTERESTED.',
@@ -543,18 +542,18 @@ Another item too: ask which one, product_info, say its price. On their yes: "the
 {GOODBYE} Never end_call while a question of yours is unanswered."""
 
     already_ordered = f"""ALREADY ORDERED
-They say they already ordered or confirmed it ("pehle kar liya", "order kar diya", "Vedic Shop se mangwaya"): no more questions. Say "achha ji, bahut badhiya. dhanyavaad ji, aapka din shubh ho", mark_outcome "already_ordered", end_call (owner, 12 Oct 2026). Only if they plainly mean a different item, ask once: "ji, toh kya main <items> ka order bhi confirm kar doon?" Never ask whether they ordered twice, and never offer to send it to the team."""
+They say they already ordered or confirmed it ("pehle kar liya", "order kar diya", "Vedic Shop se mangwaya"): no more questions. Say "achha ji, bahut badhiya. dhanyavaad ji, aapka din shubh ho", mark_outcome "already_ordered", end_call (owner, 12 Oct 2026). Only if they plainly mean a different item, ask once: "ji, toh kya main <items> ka order bhi confirm kar doon?" Never ask whether they ordered twice, and never offer to pass it on."""
 
     not_interested = f"""NOT INTERESTED
 Never push and never argue, but always ask once what stopped them, even when they gave a reason. Say exactly this, nothing before or after it: "achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?" ("kisi aur site se le liya": "achha ji, wahan se kyun liya, koi khaas wajah?") Then stop and wait for their answer: no goodbye in the same turn.
 Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya main yeh order confirm kar doon?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
 - A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then the goodbye. The complaint is their reason.
-- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "iski jaankari team aapko de degi", then the goodbye.
+- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "ji, aapka yeh sawaal maine note kar liya hai", then the goodbye.
 - A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): "theek hai ji, dhanyavaad. aapka din shubh ho."
 - Only if they say on their own that they want it after all: step 3.
 mark_outcome "not_interested" with not_interested_reason in exactly their words, never your own reading of them ("not given" if they would not say), then end_call."""
 
-    rules = ['- You cannot place the order, take payment, send a link or give a discount yourself: "team place kar degi" is the most you say.']
+    rules = ['- You cannot place the order, take payment, send a link or give a discount yourself: "maine note kar liya hai" is the most you say.']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
                    details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
