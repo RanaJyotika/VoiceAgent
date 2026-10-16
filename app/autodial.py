@@ -140,16 +140,15 @@ def _start(s: Settings) -> None:
 
 
 def resume_after_restart() -> None:
-    """Called at server start: switched on before the restart means switched on now."""
+    """Called at server start. Automatic calling always starts off, whatever it was before the restart: owner,
+    15 Oct 2026, after it switched itself back on at a restart and rang 10 real customers on 14 Oct unnoticed.
+    Only the Switch on button starts it. Its settings are kept."""
     saved = _saved()
     if not saved.get("enabled"):
         return
-    missing = plivo_missing()
-    if missing:
-        AUTO.reason = f"switched on, but the phone line is not ready (missing {', '.join(missing)})"
-        log.warning("automatic calling not resumed: %s", AUTO.reason)
-        return
-    _start(_settings_from(saved))
+    db.set_setting("autodial", {**saved, "enabled": False})
+    AUTO.reason = "off after the server restarted; switch it on again to call"
+    log.info("automatic calling was on before the restart; left off until switched on from the dashboard")
 
 
 def snapshot() -> dict:

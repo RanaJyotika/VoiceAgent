@@ -79,7 +79,7 @@ async def _start_monitor() -> None:
     asyncio.create_task(catalog.worker())   # the product catalogue, read from MongoDB every few minutes
     asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
     asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
-    resume_after_restart()   # automatic calling, if it was on before the restart
+    resume_after_restart()   # automatic calling always starts off; only the Switch on button starts it
 
 
 @app.get("/")
