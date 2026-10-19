@@ -109,7 +109,8 @@ def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
 # group is the call-back queue (rung again when next_try_at comes, up to the campaign's tries);
 # "calling" is set while a call is ringing or in progress.
 FINAL_STATUSES = ("confirmed", "changed", "cancelled", "not_ordered", "wrong_number", "do_not_call", "unclear",
-                  "interested", "not_interested", "already_booked", "needs_help", "wants_to_order", "already_ordered")
+                  "interested", "not_interested", "already_booked", "needs_help", "wants_to_order", "already_ordered",
+                  "wants_coupon")
 RETRY_STATUSES = ("no_answer", "busy", "dropped", "call_later")
 
 
@@ -396,15 +397,17 @@ _PICK_ORDER = {"oldest": "id", "newest": "id DESC", "random": "RANDOM()"}
 
 
 def next_to_call(max_attempts: int, campaign_id: int | None = None, pick: str = "oldest", new_since: str = "",
-                 new_ok: bool = True) -> dict | None:
+                 new_ok: bool = True, new_before: str = "") -> dict | None:
     """The next contact the campaign should dial: never-called contacts first, then no-answer / busy retries whose
     time has come. pick: which never-called contact goes first, "oldest" (sheet order), "newest" (a fresh store
-    order is the one worth confirming) or "random". new_since: only never-called contacts added from then on
-    (UTC ISO time). new_ok=False: retries only (a store order limit reached for the day)."""
+    order is the one worth confirming) or "random". new_since / new_before: only never-called contacts added in that
+    span (UTC ISO times). new_ok=False: retries only (a store order limit reached for the day)."""
     scope, sargs = (" AND campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
         if new_ok:
             since, args = (" AND created_at >= ?", (new_since,)) if new_since else ("", ())
+            if new_before:
+                since, args = since + " AND created_at < ?", (*args, new_before)
             row = conn.execute(f"SELECT * FROM contacts WHERE status='pending' AND {_NOT_BLOCKED}{scope}{since} "
                                f"ORDER BY {_PICK_ORDER.get(pick, 'id')} LIMIT 1", (*sargs, *args)).fetchone()
             if row:
@@ -666,6 +669,7 @@ def stats(period: str = "today") -> dict:
         "confirmed": by.get("confirmed", 0), "changed": by.get("changed", 0),
         "interested": by.get("interested", 0) + by.get("already_booked", 0) + by.get("wants_to_order", 0) + by.get("already_ordered", 0),
         "not_interested": by.get("not_interested", 0),
+        "coupons": by.get("wants_coupon", 0),   # cart customers who said yes to the coupon offer
         "cancelled": by.get("cancelled", 0), "no_answer": by.get("no_answer", 0) + by.get("busy", 0),
         "busy": by.get("busy", 0), "dropped": by.get("dropped", 0), "call_later": by.get("call_later", 0),
         "call_back": call_back,

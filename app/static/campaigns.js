@@ -21,7 +21,7 @@
 
   // ---------------- the list ----------------
   const fmtDay = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
-  const FINAL = ['confirmed', 'changed', 'cancelled', 'not_ordered', 'wrong_number', 'do_not_call', 'unclear', 'interested', 'not_interested', 'already_booked', 'needs_help', 'wants_to_order', 'already_ordered'];
+  const FINAL = ['confirmed', 'changed', 'cancelled', 'not_ordered', 'wrong_number', 'do_not_call', 'unclear', 'interested', 'not_interested', 'already_booked', 'needs_help', 'wants_to_order', 'already_ordered', 'wants_coupon'];
 
   function renderList() {
     const running = campaigns.find((c) => c.running);

@@ -168,8 +168,8 @@ def _state(contact: dict | None, cod: bool, quota: dict | None = None) -> str:
         return "not_calling"
     status, tries = contact.get("status") or "pending", contact.get("attempts") or 0
     if status == "pending":
-        if quota and quota["limit"] and (not quota["room"] or str(contact.get("created_at") or "") < quota["day_start"]):
-            return "not_picked"
+        if quota and ((quota["limit"] and not quota["room"]) or not store_orders.in_window(contact.get("created_at"), quota)):
+            return "not_picked"   # outside the day's number of calls, or the days chosen for calling
         return "yet_to_call"
     if status == "unclear" and not tries:
         return "too_late"
@@ -185,6 +185,8 @@ def _state(contact: dict | None, cod: bool, quota: dict | None = None) -> str:
         return "no_pick"
     if status == "call_later":
         return "scheduled"
+    if status == store_orders.SKIPPED:
+        return "not_calling"   # a "don't call orders that are..." switch matches it (store_orders.SKIP_RULES)
     return "review"
 
 
@@ -229,10 +231,13 @@ def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict, quota
                       "qty": int(li.get("quantity") or 1), "image": (p or {}).get("image", "")})
     state = _state(contact, payment != "Prepaid", quota)
     label, tone = STATES[state]
-    if state == "not_calling":
+    if state == "not_calling" and contact and contact.get("status") == store_orders.SKIPPED:
+        label = "No call · " + str(contact.get("last_result") or "").removeprefix("not calling: ")
+    elif state == "not_calling":
         label = "No call · prepaid" if payment == "Prepaid" and shopify.settings()["orders"] == "cod" else "Not on call list"
     elif state == "not_picked":
-        label = f"Not picked · {quota['limit']} a day"
+        label = (f"Not picked · {quota['limit']} a day" if store_orders.in_window(contact.get("created_at"), quota)
+                 else f"Not picked · calling {quota['days_label'].lower()}")
     cust = o.get("customer") or {}
     return {
         "name": name, "created_at": o["createdAt"].replace(tzinfo=timezone.utc).isoformat() if o.get("createdAt") else "",

@@ -17,6 +17,7 @@
     --good:#2f8f5b; --warning:#c98a1b; --serious:#c9683f; --critical:#b8394a; --neutral:#9a8ca3;
     --shadow: 0 1px 2px rgba(61,35,72,.04), 0 10px 28px -14px rgba(61,35,72,.16);
     --serif: "Fraunces", "Iowan Old Style", Georgia, serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
     --side-w: 236px; --top-h: 64px; --bar-h: 0px;
   }
   * { box-sizing: border-box; }
@@ -28,7 +29,7 @@
   /* ================= frame: sidebar | header + pages + bottom bar ================= */
   .frame { display:grid; grid-template-columns: var(--side-w) minmax(0, 1fr); min-height: 100vh; }
 
-  .side { position: sticky; top:0; height:100vh; display:flex; flex-direction:column; gap:6px; padding: 18px 14px calc(18px + env(safe-area-inset-bottom));
+  .side { position: sticky; top:0; height:100vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding: 18px 14px calc(18px + env(safe-area-inset-bottom));
           background: linear-gradient(180deg, #4a2b58, #331c3e); color: var(--plum-ink); box-shadow: inset -1px 0 0 rgba(201,163,106,.25); z-index: 30; }
   .side .brand { display:flex; align-items:center; gap:10px; padding: 6px 8px 18px; color:#fff; }
   .side .brand i { width:38px; height:38px; border-radius:50%; flex:0 0 38px; display:grid; place-items:center; color:#f4e9d6;
@@ -411,6 +412,76 @@
            box-shadow: 0 12px 28px -10px rgba(42,20,52,.7); transition: opacity .2s, transform .2s; }
   .toast.on { opacity:1; transform: translate(-50%, 0); }
 
+  /* ================= coupons: the codes, the form, the messages ================= */
+  .cp-code { font-family: var(--mono); font-weight: 600; letter-spacing: .02em; overflow-wrap: anywhere; }
+  input.cp-code { font-weight: 500; }
+  .cp-table .cp-code, .cm-table .cp-code { white-space: nowrap; overflow-wrap: normal; }   /* a code is read as one word */
+  .cp-table td, .cm-table td { vertical-align: middle; }
+  .cp-status, .cp-acts { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .cp-seg { padding: 2px; }
+  .cp-seg button { padding: 2px 11px; font-size: 12px; }
+  #cp-form { scroll-margin-top: calc(var(--top-h) + 12px); }
+  #cp-form > .two { margin-bottom: 14px; }
+  .cp-checks { display:flex; flex-direction:column; gap:8px; margin: 0 0 14px; }
+  .cp-check { display:flex; align-items:flex-start; gap:8px; font-size: 14px; cursor:pointer; }
+  .cp-check input { width:16px; height:16px; flex: 0 0 16px; margin: 3px 0 0; accent-color: var(--accent); }
+  .cp-note { font-size: 12.5px; color: var(--muted); padding-left: 24px; margin-top: -4px; }
+  .cp-note:empty { display:none; }
+  #cp-message { min-height: 300px; font-size: 14px; line-height: 1.5; }
+  .cp-msg-acts { margin: -2px 0 10px; }
+  .cp-msg-acts button { padding: 6px 12px; font-size: 13px; }
+  .cp-places { display:flex; flex-wrap:wrap; gap: 4px 14px; margin-top: 6px; }
+  .cp-places code { font: 600 12px/1.5 var(--mono); color: var(--accent); background: var(--lav); border: 1px solid var(--lav-2); border-radius: 6px; padding: 0 5px; }
+  .cp-preview h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .cp-preview h3 .hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .cp-preview .chat-body { min-height: 260px; max-height: 70vh; }
+  .cp-preview details { margin: 10px 0 0; }
+  .cp-preview details p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cp-bubble { max-width: min(100%, 520px); font-size: 14px; }
+  .cp-bubble b { font-weight: 650; }
+  @media (min-width: 901px) { .cp-preview { position: sticky; top: calc(var(--top-h) + 14px); } }
+  .cm-line { display:block; max-width: 260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--muted); }
+  .cm-table tr.cm-row { cursor: pointer; }
+  .cm-table tr.cm-row.open td { border-bottom-color: transparent; }
+  .cm-table tr.cm-more > td { padding: 2px 10px 16px; }
+  .cm-table tbody tr.cm-more:hover td { background: transparent; }
+  .cm-detail { display:grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items:start; }
+  .cm-thread { min-height: 0; max-height: 440px; }
+  .cm-side { display:flex; flex-direction:column; gap: 10px; min-width: 0; }
+  .cm-side .camp-warn { margin: 0; overflow-wrap: anywhere; }
+  .cm-acts { display:flex; gap:8px; flex-wrap:wrap; }
+  .cm-acts button, .cm-acts a { display:inline-flex; align-items:center; gap:6px; padding: 7px 12px; font-size: 13.5px; border-radius: 10px; }
+  .cm-acts a { border: 1px solid var(--line); background: var(--surface); color: var(--fg); text-decoration: none; transition: border-color .15s; }
+  .cm-acts a:hover { border-color: var(--accent-2); }
+  .cm-acts a.primary { background: var(--lav); color: var(--accent); border-color: var(--lav-2); font-weight: 600; }
+  .cm-acts a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+  .cm-acts .ico { width:16px; height:16px; flex: 0 0 16px; }
+  @media (max-width: 760px) { .cm-detail { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 640px) {
+    /* phones: each row becomes a small block of its own, so nothing has to scroll sideways */
+    .cp-table, .cp-table tbody, .cm-table, .cm-table tbody { display:block; }
+    .cp-table thead, .cm-table thead { display:none; }
+    .cp-table tr, .cm-table tr.cm-row { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .cp-table tr:last-child { border-bottom: 0; }
+    .cp-table td, .cm-table td { display:block; padding: 0; border: 0; min-width: 0; }
+    .cp-table tbody tr:hover td, .cm-table tbody tr:hover td { background: transparent; }
+    .cp-table tr { grid-template-areas: "code acts" "offer offer" "valid valid" "status status" "calls calls" "msgs msgs"; }
+    .cp-table td:nth-child(1) { grid-area: code; } .cp-table td:nth-child(2) { grid-area: offer; } .cp-table td:nth-child(3) { grid-area: valid; }
+    .cp-table td:nth-child(4) { grid-area: calls; } .cp-table td:nth-child(5) { grid-area: status; } .cp-table td:nth-child(6) { grid-area: msgs; }
+    .cp-table td:nth-child(7) { grid-area: acts; }
+    .cp-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); }
+    .cm-table tr.cm-row { grid-template-areas: "who status" "num coupon" "when more"; align-items: center; }
+    .cm-table tr.cm-row td:nth-child(1) { grid-area: when; } .cm-table tr.cm-row td:nth-child(2) { grid-area: who; }
+    .cm-table tr.cm-row td:nth-child(3) { grid-area: num; } .cm-table tr.cm-row td:nth-child(4) { grid-area: coupon; }
+    .cm-table tr.cm-row td:nth-child(5) { grid-area: status; } .cm-table tr.cm-row td:nth-child(6) { grid-area: more; }
+    .cm-table tr.cm-row td:nth-child(n+4) { justify-self: end; text-align: right; }
+    .cm-table tr.cm-row.open { border-bottom: 0; padding-bottom: 8px; }
+    .cm-table tr.cm-more { display:block; border-bottom: 1px solid var(--line); }
+    .cm-table tr.cm-more > td { display:block; padding: 0 0 14px; }
+    .cm-line { max-width: 170px; margin-left: auto; }
+    .cm-acts button, .cm-acts a { flex: 1 1 auto; justify-content: center; }
+  }
+
   /* ================= phones and small tablets ================= */
   @media (max-width: 860px) {
     .frame { grid-template-columns: minmax(0, 1fr); }
@@ -456,6 +527,10 @@
       <button data-page="call">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>
         Single call</button>
+      <div class="sec">Offers</div>
+      <button data-page="coupons">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><path d="M7.5 7.5h.01"/></svg>
+        Coupons <span class="n" id="nav-coupons"></span></button>
       <div class="sec">Records</div>
       <button data-page="callback">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg>
@@ -541,8 +616,9 @@
             <label class="f">Orders<select id="store-orders"><option value="cod">Cash on delivery only</option><option value="all">All orders</option><option value="off">None</option></select></label>
             <label class="f">Wait after the order (min)<input class="fld" id="store-wait" type="number" min="0" max="1440" value="5" title="Time for the customer to cancel or edit the order first"></label>
             <label class="f">Stop trying after (hours)<input class="fld" id="store-max" type="number" min="1" max="168" value="24" title="An order not called by then is taken off the list: it has likely shipped"></label>
-            <label class="f">Orders a day (0 = all)<input class="fld" id="store-limit" type="number" min="0" max="5000" value="0" title="Automatic calling rings at most this many new orders a day, picked from that day's orders. The rest are not called. Orders you call yourself do not count."></label>
-            <label class="f">Which ones first<select id="store-pick" title="Which waiting orders automatic calling rings first. With a limit: Oldest first = the day's first orders, Random = a random pick of the day's orders."><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="random">Random</option></select></label>
+            <label class="f">Which orders<select id="store-days" title="Whose orders automatic calling rings: the days the orders were placed on (Indian dates). Orders inside these days are called however old they are; outside them, Stop trying after still drops them."><option value="today">Today's orders</option><option value="yesterday">Yesterday's orders</option><option value="last_3">Last 3 days</option><option value="last_7">Last 7 days</option><option value="earlier">Earlier days (not today, up to 7 days)</option><option value="all">Any waiting order</option></select></label>
+            <label class="f">Calls a day (0 = no limit)<input class="fld" id="store-limit" type="number" min="0" max="5000" value="0" title="Automatic calling rings at most this many new orders a day (10, 100...), from the orders chosen under Which orders. The rest are not called. Orders you call yourself, and retries, do not count."></label>
+            <label class="f">Which ones first<select id="store-pick" title="Which of the chosen orders automatic calling rings first: the newest, the oldest, or a random pick."><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="random">Random</option></select></label>
           </div>
           <div class="hint" id="store-counts" style="margin-bottom:10px"></div>
           <div class="camp-warn" id="store-warn" hidden></div>
@@ -596,6 +672,23 @@
           </div>
           <div id="so-empty" class="empty" hidden></div>
           <div class="so-pager"><span class="hint" id="so-showing"></span><div class="so-pages" id="so-pages"></div></div>
+        </section>
+
+        <!-- batches of automatic calling: what each batch of orders reached and what it cost -->
+        <section class="card" id="so-batches">
+          <div class="card-head">
+            <h2>Batches</h2>
+            <span class="hint" id="so-batch-now"></span>
+            <div class="right"><button id="so-batch-new" title="The next orders automatic calling rings form a new batch, and the Calls a day number counts afresh from now (for example, the next 100 today)">Start a new batch</button></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Batch</th><th>Called</th><th>Answered</th><th>Confirmed</th><th>Cancelled</th><th>Didn't pick</th><th>Hung up</th><th>Other</th><th>Talk time</th><th>Cost</th><th>Per order</th><th>Per confirmed</th></tr></thead>
+              <tbody id="so-batch-rows"></tbody>
+            </table>
+          </div>
+          <div id="so-batch-empty" class="empty" hidden>No batches yet. Each day's automatic calling of store orders makes one.</div>
+          <div class="hint" style="margin-top:8px">Cost is every call to that batch's customers since it began, retries included (agent + phone line, as on the Spending page).</div>
         </section>
 
         <aside class="so-drawer" id="so-drawer" aria-label="Order" hidden></aside>
@@ -763,6 +856,94 @@
             <div id="board-empty" class="empty" hidden></div>
           </section>
         </div>
+      </section>
+
+      <!-- ===== Coupons: the codes the cart agent offers, and the messages that carry them ===== -->
+      <section class="page" id="page-coupons">
+        <div class="page-head">
+          <h2>Coupons</h2>
+          <span class="hint">Codes the agent offers on abandoned-cart calls, and the messages that carry them.</span>
+        </div>
+        <div class="camp-warn" id="cp-stale" hidden>This page is newer than the running server. Close the run_phone.bat / run.bat window, start it again, then reload.</div>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Coupon codes</h2>
+            <span class="hint" id="cp-sub"></span>
+            <div class="right"><button class="call" id="cp-add" aria-controls="cp-form">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              Add coupon</button></div>
+          </div>
+          <div class="table-wrap">
+            <table class="cp-table">
+              <thead><tr><th>Code</th><th>Offer</th><th>Valid</th><th>On cart calls</th><th>Status</th><th>Messages</th><th></th></tr></thead>
+              <tbody id="cp-rows"></tbody>
+            </table>
+          </div>
+          <div id="cp-empty" class="empty" hidden></div>
+        </section>
+
+        <!-- add or change one coupon, with its message as the customer gets it -->
+        <section class="card" id="cp-form" aria-labelledby="cp-form-title" hidden>
+          <div class="card-head"><h2 id="cp-form-title">New coupon</h2></div>
+          <div class="two">
+            <div>
+              <div class="camp-settings">
+                <label class="f">Code<input class="fld cp-code" id="cp-code" maxlength="40" placeholder="DIWALIDILSE10" autocomplete="off" spellcheck="false" autocapitalize="characters"></label>
+                <label class="f">Discount type<select id="cp-type"><option value="percent">% off</option><option value="amount">₹ off</option></select></label>
+                <label class="f"><span>Value (<span id="cp-unit">%</span>)</span><input class="fld" id="cp-value" type="number" min="0" max="100" step="any" placeholder="10"></label>
+                <label class="f">Minimum order (₹, 0 = any)<input class="fld" id="cp-min" type="number" min="0" step="1" value="0"></label>
+                <label class="f">Valid from<input class="fld" id="cp-from" type="date"></label>
+                <label class="f">Valid until<input class="fld" id="cp-until" type="date" title="The last day the code works"></label>
+              </div>
+              <div class="cp-checks">
+                <label class="cp-check"><input type="checkbox" id="cp-prepaid" checked> Only with online (prepaid) payment</label>
+                <label class="cp-check"><input type="checkbox" id="cp-calls"> Offer this on abandoned-cart calls</label>
+                <span class="cp-note" id="cp-calls-note"></span>
+              </div>
+              <div class="form-grid">
+                <label class="f wide"><span>Description<span class="opt"> · optional, for the team</span></span><input class="fld" id="cp-desc" maxlength="200" placeholder="e.g. Diwali offer: 10% off on prepaid orders"></label>
+                <label class="f wide"><span>Message<span class="opt"> · empty = the default message</span></span><textarea id="cp-message" maxlength="2000" rows="14"></textarea></label>
+              </div>
+              <div class="row cp-msg-acts">
+                <button id="cp-default" type="button">Use the default message</button>
+                <button id="cp-copy-default" type="button">Edit a copy of the default</button>
+              </div>
+              <div class="hint">Words in braces are filled in for each customer. A line whose word has nothing to fill it (no cart value, no minimum order) is left out.
+                <div class="cp-places" id="cp-places"></div></div>
+            </div>
+            <div class="cp-preview">
+              <h3>Preview <span class="hint">· with a sample customer</span></h3>
+              <div class="chat-body"><div class="msg customer cp-bubble" id="cp-preview"></div></div>
+              <div class="camp-warn" id="cp-unknown" style="margin-top:10px" hidden></div>
+              <details class="more"><summary>As an SMS</summary><p class="hint" id="cp-sms"></p></details>
+            </div>
+          </div>
+          <p class="hint" style="margin:0 0 12px">Make the same code on the website too (Shopify, Discounts), with the same rules: this page tells the agent and the messages about it, it does not create it on the store.</p>
+          <div class="camp-warn" id="cp-error" role="alert" hidden></div>
+          <div class="row">
+            <button class="call" id="cp-save">Add coupon</button>
+            <button id="cp-cancel">Cancel</button>
+          </div>
+        </section>
+
+        <!-- the outbox: one message per customer who said yes to the coupon on a call -->
+        <section class="card">
+          <div class="card-head">
+            <h2>Messages</h2>
+            <span class="hint">One for each customer who said yes to the coupon on a call.</span>
+          </div>
+          <div class="so-autobar" id="cm-service" hidden></div>
+          <div class="chips" id="cm-chips" role="group" aria-label="Show messages"></div>
+          <div class="table-wrap">
+            <table class="cm-table">
+              <thead><tr><th>When (IST)</th><th>Customer</th><th>Number</th><th>Coupon</th><th>Status</th><th></th></tr></thead>
+              <tbody id="cm-rows"></tbody>
+            </table>
+          </div>
+          <div id="cm-empty" class="empty" hidden></div>
+          <div class="hint" id="cm-showing" style="margin-top:8px"></div>
+        </section>
       </section>
 
       <!-- ===== Call back: no answer, busy, dropped, asked for later ===== -->
@@ -947,5 +1128,6 @@
 <script src="/static/app.js"></script>
 <script src="/static/auto.js"></script>
 <script src="/static/store.js"></script>
+<script src="/static/coupons.js"></script>
 </body>
 </html>

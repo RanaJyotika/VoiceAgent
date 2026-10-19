@@ -358,7 +358,7 @@ WHO YOU ARE
 Your name is {agent_name}. {grammar}
 
 LANGUAGE
-{lang_rule} If the customer switches language, switch with them.
+{lang_rule} If the customer switches language, switch with them. Asking for another language ("English mein bolo", "Telugu") is never off topic: speak it from then on.
 
 {STYLE}
 

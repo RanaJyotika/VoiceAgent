@@ -52,6 +52,9 @@ DEFAULTS = {
     # day's orders (0 = every order), picked "newest" first, "oldest" first or at "random" (store_orders.next_order).
     "order_daily_limit": 0,
     "order_pick": "newest",
+    # Owner, 19 Oct 2026: which orders' days automatic calling picks new orders from (store_orders.ORDER_DAYS):
+    # "today", "yesterday", "last_3", "last_7", "earlier" or "all". "" = as before: today's with a limit, else all.
+    "order_days": "",
 }
 SYNC_TRIES = 5                    # write-back attempts for one result before it is left for a person
 TICK_SECONDS = 60
@@ -185,13 +188,18 @@ def order_row(order: dict) -> dict:
 def cart_row(checkout: dict) -> dict:
     ship, bill, cust = checkout.get("shipping_address") or {}, checkout.get("billing_address") or {}, checkout.get("customer") or {}
     product, quantity = _items(checkout.get("line_items"))
-    return {
+    row = {
         "customer_name": _name(ship, cust, bill),
         "phone": _first_phone(checkout.get("phone"), ship.get("phone"), bill.get("phone"), cust.get("phone"),
                               (cust.get("default_address") or {}).get("phone")),
         "product": product, "quantity": quantity, "amount": _money(checkout.get("total_price")),
         "address": _address(ship) or _address(bill), "product_ids": _product_ids(checkout.get("line_items")),
     }
+    # Owner, 19 Oct 2026: the coupon message links the customer's own cart (messaging.link_for); never read out on the call.
+    url = str(checkout.get("abandoned_checkout_url") or "").strip()
+    if url.lower().startswith(("http://", "https://")):
+        row["extra"] = {"cart_url": {"label": "Cart link", "value": url}}
+    return row
 
 
 # --- campaigns and links ----------------------------------------------------------------------------
@@ -544,6 +552,8 @@ async def save_settings(body: dict) -> dict:
         clean["order_daily_limit"] = max(0, min(5000, int(body["order_daily_limit"] or 0)))
     if body.get("order_pick") in ("newest", "oldest", "random"):
         clean["order_pick"] = body["order_pick"]
+    if body.get("order_days") in ("today", "yesterday", "last_3", "last_7", "earlier", "all"):
+        clean["order_days"] = body["order_days"]
     if "cart_max_hours" in body:
         clean["cart_max_hours"] = max(1, min(7 * 24, int(body["cart_max_hours"] or 24)))
     _save(**clean)

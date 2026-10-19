@@ -99,6 +99,8 @@ class SarvamSession:
         self.tools = tools
         self.greeting = greeting
         self.next_hint = ""             # extra instructions for the reply to the next customer turn only (live_bridge)
+        self.language = SARVAM_LANGUAGE   # what Saaras listens for and Bulbul speaks; the customer may ask for another
+        self._stt_switch: asyncio.Task | None = None
         self.history: list[dict] = []   # the conversation, without the system prompt
         self._q: asyncio.Queue = asyncio.Queue()
         self._closed: BaseException | None = None
@@ -150,28 +152,63 @@ class SarvamSession:
         await self._open_tts()
 
     async def _open_stt(self) -> None:
-        params = {"language_code": SARVAM_LANGUAGE, "model": SARVAM_STT_MODEL, "mode": SARVAM_STT_MODE,
+        params = {"language_code": self.language, "model": SARVAM_STT_MODEL, "mode": SARVAM_STT_MODE,
                   "encoding": "linear16", "sample_rate": "16000",
                   "endpointing": "manual" if self.manual_vad else "vad"}
-        self._stt = await ws_connect(STT_URL + "?" + urllib.parse.urlencode(params), additional_headers=self._headers,
-                                     max_size=None, open_timeout=15, ping_interval=20)
+        ws = await ws_connect(STT_URL + "?" + urllib.parse.urlencode(params), additional_headers=self._headers,
+                              max_size=None, open_timeout=15, ping_interval=20)
         while True:   # session.begin, or an error saying why not
-            evt = json.loads(await asyncio.wait_for(self._stt.recv(), timeout=15))
+            evt = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             if evt.get("event") == "session.begin":
                 break
             if evt.get("event") == "error":
                 raise RuntimeError(f"Sarvam speech-to-text: {evt.get('code')}: {evt.get('message')}")
-        self._stt_reader = asyncio.create_task(self._read_stt(self._stt))
+        self._stt = ws
+        self._stt_reader = asyncio.create_task(self._read_stt(ws))
+
+    def _tts_config(self) -> str:
+        return json.dumps({"type": "config", "data": {
+            "speaker": self.speaker, "language_code": self.language, "pace": SARVAM_PACE,
+            "speech_sample_rate": OUTPUT_SAMPLE_RATE, "output_audio_codec": "linear16"}})
 
     async def _open_tts(self) -> None:
         params = {"model": SARVAM_TTS_MODEL, "send_completion_event": "true"}
         ws = await ws_connect(TTS_URL + "?" + urllib.parse.urlencode(params), additional_headers=self._headers,
                               max_size=None, open_timeout=15, ping_interval=20)
-        await ws.send(json.dumps({"type": "config", "data": {
-            "speaker": self.speaker, "language_code": SARVAM_LANGUAGE, "pace": SARVAM_PACE,
-            "speech_sample_rate": OUTPUT_SAMPLE_RATE, "output_audio_codec": "linear16"}}))
+        await ws.send(self._tts_config())
         self._tts, self._flushes, self._odd = ws, 0, b""
         self._tts_reader = asyncio.create_task(self._read_tts(ws))
+
+    def _language_note(self) -> str:
+        from .live_bridge import language_note   # here: live_bridge imports this module
+        return language_note(self.language)
+
+    async def _switch_language(self, code: str) -> None:
+        """The customer asked for another language (owner, 19 Oct 2026): Bulbul speaks it from the next reply on (a new
+        config is taken at any point), and Saaras listens for it on a fresh socket, opened while the reply is made."""
+        log.info("%s: the customer asked for %s; voice and speech-to-text switch to it", self.label, code)
+        self.language = code
+        ws = await self._ready_tts()
+        async with self._tts_lock:
+            await ws.send(self._tts_config())
+        self._stt_switch = asyncio.create_task(self._reopen_stt())
+
+    async def _reopen_stt(self) -> None:
+        async with self._stt_lock:   # no audio goes out while the sockets change over
+            old, reader = self._stt, self._stt_reader
+            try:
+                await self._open_stt()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s: speech-to-text could not switch language (%s); still listening as before", self.label, exc)
+                self._stt, self._stt_reader = old, reader
+                return
+            self._utterances = self._skip_below = 0   # the new socket counts its utterances from 0
+            self._stt_started = False
+        if reader is not None:
+            reader.cancel()   # first, or its socket closing would end the session
+        if old is not None:
+            with contextlib.suppress(Exception):
+                await old.close()
 
     async def _fresh_tts(self) -> None:
         """Drop Bulbul's socket, with whatever it was still saying, and open a new one in the background."""
@@ -274,11 +311,13 @@ class SarvamSession:
         self._after_lookup = any(getattr(fr, "name", "") in LOOKUP_TOOLS for fr in function_responses or [])
         # A hang-up sent back for want of a goodbye comes with the goodbye to say (live_bridge.closing_line). Owner, 12 Oct
         # 2026 (call 217: the model asked to hang up twice with nothing said): it is spoken as given, with no chat call,
-        # and live_bridge hangs up once it has played.
+        # and live_bridge hangs up once it has played. So is the coupon offer, when a "not interested" came back because
+        # it was never made (owner, 19 Oct 2026). Only these two tools: product_info's "say" is an instruction.
         say = next((str((getattr(fr, "response", {}) or {}).get("say") or "") for fr in function_responses or []
-                    if getattr(fr, "name", "") == "end_call" and (getattr(fr, "response", {}) or {}).get("say")), "")
+                    if getattr(fr, "name", "") in ("end_call", "mark_outcome")
+                    and (getattr(fr, "response", {}) or {}).get("say")), "")
         if say:
-            log.info("%s: hang-up without a goodbye; saying the closing line: %s", self.label, say)
+            log.info("%s: a tool came back with the line to say; saying it as given: %s", self.label, say)
             self._start_reply(fixed=say)
             return
         plain = all(set(getattr(fr, "response", {}) or {}) <= {"status"}
@@ -310,6 +349,17 @@ class SarvamSession:
         words, self._heard = " ".join(self._heard).strip(), []
         notes, self._notes = self._notes, []
         heard_ms = (time.monotonic() - self._ended_at) * 1000
+        from .live_bridge import asked_language, machine_message   # here: live_bridge imports this module
+        if words and self.manual_vad and machine_message(words):
+            # The network's recorded voice (owner, 19 Oct 2026, call 294: "...has put your call on hold" for minutes, each
+            # one answered). live_bridge sees the words and waits or hangs up; no reply is written, nothing joins history.
+            log.info("%s: a recorded message on the line, not the customer; no reply to it", self.label)
+            await self._q.put(_Message(server_content=_ServerContent(input_transcription=_Text(" " + words))))
+            await self._q.put(_Message(server_content=_ServerContent(output_transcription=_Text("…"))))
+            await self._turn_done()
+            return
+        if words and (code := asked_language(words)) and code != self.language:
+            await self._switch_language(code)   # before the reply, so it is already in the new language
         if words:
             await self._q.put(_Message(server_content=_ServerContent(input_transcription=_Text(" " + words))))
         elif had_audio and self.manual_vad:
@@ -393,7 +443,7 @@ class SarvamSession:
         """One streamed chat call. Each sentence goes to Bulbul the moment it is complete."""
         payload = {"model": SARVAM_MODEL, "stream": True, "max_tokens": MAX_TOKENS,
                    "reasoning_effort": None,   # thinking is on by default and costs seconds on every reply
-                   "messages": [{"role": "system", "content": self.prompt + extra}] + self.history}
+                   "messages": [{"role": "system", "content": self.prompt + self._language_note() + extra}] + self.history}
         if self.tools:
             payload["tools"], payload["tool_choice"] = self.tools, "auto"
         buf, parts, usage, first = "", {}, None, 0.0
@@ -623,7 +673,7 @@ class SarvamSession:
                 return
 
     async def aclose(self) -> None:
-        tasks = [t for t in (self._reply, self._ending, self._keepalive, self._stt_reader, self._tts_reader,
+        tasks = [t for t in (self._reply, self._ending, self._keepalive, self._stt_reader, self._tts_reader, self._stt_switch,
                              self._tts_opening) if t is not None]
         for t in tasks:
             t.cancel()

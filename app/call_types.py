@@ -9,13 +9,17 @@ Only order confirmation exists so far. Booking confirmation and campaign invites
 then types written from a brief on the dashboard; they all fill the same fields.
 """
 import json
+import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable
 
 from .config import BUSINESS_NAME, PRONUNCIATION, STORE_NAME
-from .prompts import (GOODBYE, REPLY_WRONG, TAKING_AN_ADDRESS, amount_line, compose, delivery_line, forms, missing_block,
-                      persona)
+from .prompts import (GOODBYE, REPLY_WRONG, TAKING_AN_ADDRESS, amount_line, compose, delivery_line, forms, hindi_number,
+                      missing_block, persona)
+
+log = logging.getLogger("call_types")
 
 # Set by us from the phone line, never by the agent: nobody answered, or the call ended before
 # the agent recorded anything (customer hung up, line dropped).
@@ -59,6 +63,8 @@ class CallType:
     details: dict[str, str]               # extra mark_outcome fields -> what goes in them
     build_prompt: Callable[[dict, str, dict], str]   # (contact, voice, campaign facts) -> system prompt
     takes_address: bool = False           # offers record_address and its checks
+    # Offers the dashboard's call coupon once to a customer who says no (coupons.py; owner, 19 Oct 2026).
+    offers_coupon: bool = False
     confirm_question: str = "sab sahi hai? confirm kar doon?"   # asked again when a yes was not heard
     # The call's main question, as a pattern over the agent's words ("kya aapka order confirm hai?"). A clear
     # yes to it is kept when the call ends before mark_outcome (calls 88 and 92 confirmed, then were lost).
@@ -105,7 +111,56 @@ def _xv(contact: dict, key: str) -> str:
     return str(v.get("value") if isinstance(v, dict) else v or "").strip()
 
 
+_STATES = {"andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh", "goa", "gujarat", "haryana",
+           "himachal pradesh", "jharkhand", "karnataka", "kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya",
+           "mizoram", "nagaland", "odisha", "orissa", "punjab", "rajasthan", "sikkim", "tamil nadu", "telangana", "tripura",
+           "uttar pradesh", "uttarakhand", "west bengal", "delhi", "jammu and kashmir", "jammu & kashmir", "ladakh",
+           "chandigarh", "puducherry", "andaman and nicobar islands", "dadra and nagar haveli and daman and diu", "lakshadweep"}
+
+
+def address_to_say(address: str) -> str:
+    """The part of an address on record to check it by: the city, with the area before it when that is a short name
+    ("Nayapalli, Khorda"). Call 282 read out "Plot - fg/131 I.D.market.nayapalli .bbsr" three times. Store addresses
+    are "line 1, line 2, CITY, State, PIN"."""
+    parts = [p.strip(" .") for p in str(address or "").split(",") if p.strip(" .")]
+    while parts and (re.fullmatch(r"[\d\s-]+", parts[-1]) or parts[-1].lower() in _STATES):
+        parts.pop()   # the PIN and the state
+    if not parts:
+        return ""
+    tidy = lambda p: p.title() if p.isupper() else p   # noqa: E731  ("KHORDA" -> "Khorda")
+    city = tidy(parts[-1])
+    area = parts[-2] if len(parts) >= 2 else ""
+    if area and (len(area.split()) > 3 or re.search(r"\d", area) or area.lower() == parts[-1].lower()):
+        area = ""
+    return ", ".join(x for x in (tidy(area), city) if x)
+
+
+_COMBO = re.compile(r"combo|\bset\b|\bpack\b|\bkit\b|bundle|\bduo\b|\btrio\b", re.IGNORECASE)
+
+
+def _quantity_line(contact: dict) -> str:
+    """The quantity, and for a combo or set how to say it. Call 282: "Aries Power Combo, 1 piece, 1319 rupaye" was heard
+    as one bracelet for 1319, and the customer asked whether all three came for that (owner, 19 Oct 2026)."""
+    qty = str(contact.get("quantity") or "1").strip() or "1"
+    if not _COMBO.search(str(contact.get("product") or "")):
+        return qty
+    return (f'{qty} (a combo, one set of several items: say "{"ek" if qty == "1" else qty} combo", never "piece", and in a few '
+            'words what it holds from PRODUCT INFO, e.g. "ek combo, jismein teen bracelet hain")')
+
+
+def _address_line(contact: dict) -> str:
+    address = str(contact.get("address") or "").strip()
+    if not address:
+        return "MISSING"
+    short = address_to_say(address)
+    return f'{address} (to check it, say only "{short}")' if short and short != address else address
+
+
 # --- order confirmation ------------------------------------------------------------------------
+
+# Owner, 19 Oct 2026: once the order and the address are both confirmed, this and nothing more, then the call is cut.
+ORDER_CONFIRMED_CLOSE = "ji, aapka order confirm ho gaya hai. dhanyavaad ji."
+
 
 def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
@@ -121,10 +176,10 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 - Order ID: {contact.get('order_id') or 'not available'}
 - Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
 - Product: {contact.get('product') or 'MISSING'}
-- Quantity: {contact.get('quantity') or '1'}
+- Quantity: {_quantity_line(contact)}
 - Amount: {amount_line(contact, 'MISSING')}
 - Payment: {payment_line}
-- Delivery address: {contact.get('address') or 'MISSING'}
+- Delivery address: {_address_line(contact)}
 - Expected delivery: {delivery_line(contact.get('delivery_date'))}
 - Notes: {contact.get('notes') or 'none'}
 - Answers to common questions: {answers or 'none'}
@@ -133,6 +188,9 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     replies_first = [
         '- Yes ("haan", "ji", "sahi hai"): next step.',
         '- Something in the order is different (product, quantity, amount, payment): MISMATCH. A wrong address is not a mismatch: take it again at step 3.',
+        # Call 282: "teeno mila ke 1300, ek ko nahi?" about a combo of three bracelets was taken as a dispute of the amount.
+        '- A question about what the order holds or what the amount covers ("teeno milenge?", "combo mein kya hai?", "ek ka hai ya sab ka?"): '
+        'not a mismatch. Answer from PRODUCT INFO in one sentence (a combo or set is one order, all of it for the amount above), then your question again.',
         '- They want to cancel: CANCELLATION.',
         # Calls 93, 96 and 98 handled "I did not order" three different ways.
         f'- They did not place this order: never offer to cancel. Ask once "kya yeh <name> ji ka number hai?" Not theirs: wrong number. '
@@ -153,23 +211,23 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?"
 3. Address, every time (call 122 skipped it). On record: ask it as its own question, "aur delivery <area>, <city> mein hi karni hai na?", and get a yes. MISSING, or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
 4. Close in one turn, straight after their yes to the address (nothing more to ask), then mark_outcome, then end_call:
-   - all correct: "theek hai ji, order confirm ho gaya hai" (+ "delivery <date> tak aa jayegi" if Expected delivery gives a date) + "dhanyavaad ji, aapka din shubh ho."
+   - all correct (owner, 19 Oct 2026), exactly this and nothing after it: "{ORDER_CONFIRMED_CLOSE}" (with "delivery <date> tak aa jayegi." before "dhanyavaad ji" only if Expected delivery gives a date)
    - after a mismatch: "theek hai ji, maine yeh badlaav note kar liya hai. dhanyavaad ji, aapka din shubh ho."
 Ask for a yes at most twice in the call: once to the order (step 2), once to the address (step 3, or the read-back). Never again (owner, call 253).
-{GOODBYE} Never end_call while a question of yours is unanswered."""
+Every other call ends with "dhanyavaad ji, aapka din shubh ho"; never with "namaste". Never end_call while a question of yours is unanswered."""
 
     # Call 102: "cancel kyun karna hai?" twice, by rote. Owner: handle it intelligently.
     cancellation = f"""CANCELLATION (they clearly want to cancel)
 Be a helpful person, not a form: never push, never argue, never ask the same thing twice.
 a. If they have not said why, ask once, naturally: "koi baat nahi ji. koi dikkat hai kya?" If they already said why, skip this.
-b. If it is something that can be looked into (price, payment, delivery time, wrong item or quantity): "achha ji, maine yeh note kar liya hai. toh kya aap order rakhna chahenge?" A yes: put their issue in mismatch or notes and carry on with step 3, then the mismatch close.
+b. If it is something that can be looked into (price, payment, delivery time, wrong item or quantity): "achha ji, maine yeh note kar liya hai. toh kya aap order rakhna chahenge?" A yes to keeping it now: put their issue in mismatch or notes and carry on with step 3, then the mismatch close. "Baad mein", "phir kar denge" is not a yes: c.
 c. Otherwise, or if they still want to cancel: "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho." mark_outcome "cancelled" with cancel_reason in their words ("not given" if they would not say), then end_call.
 A "nahi" to cancelling, a worry, or a request (COD, a discount) is not a cancellation: deal with it and carry on. After a cancellation, never read the order again or ask for the address. Paid online and asking about the money: "ji, maine yeh note kar liya hai", no dates."""
 
     # Call 102: "quantity sahi hai, bas price 900 hai aur prepaid" needed one reply, not one turn per difference.
     mismatch = f"""MISMATCH (they say the product, quantity, amount or payment is different)
 You cannot change the order on the call; you only note it, so it is checked before dispatch.
-a. Say back, in one sentence, only what they said is different, and check: "achha, toh aapke hisaab se amount nau sau rupaye hai aur payment ho chuki hai, sahi?" Leave out what they said is correct. If you did not catch their version, ask for it; never suggest a number or a product yourself.
+a. Say back, in one sentence, only what they said is different, in their words, and check: "achha, toh aapke hisaab se <what they said>, sahi?" Never add anything they did not say (call 282: "payment ho chuki hai", which nobody said). If you did not catch their version, ask for it; never suggest a number or a product yourself.
 b. On their yes: "theek hai ji, maine yeh note kar liya hai." Then step 3 if the address is MISSING, then the mismatch close.
 Never argue about who is right, never agree to change anything, never quote a new price or a refund. In mark_outcome: outcome "unclear", mismatch = each difference as "customer says ...; record says ...", new_product if they named another product."""
 
@@ -483,13 +541,77 @@ CAMPAIGN_INVITE = CallType(
 
 # --- abandoned cart -------------------------------------------------------------------------------
 
+# Owner, 19 Oct 2026: a customer who says no is told once about the dashboard's call coupon (DIWALIDILSE10: 10% off on
+# prepaid orders), and on their yes the coupon and the product go to them by message (messaging.py).
+CART_NO_CLOSE = "theek hai ji, dhanyavaad. aapka din shubh ho."   # owner, 7 Oct 2026 (call 182)
+
+
+def call_coupon(contact: dict) -> dict | None:
+    """The coupon this contact's call may offer: the one attached when the call was placed (coupons.attach), else
+    looked up now. None on any trouble: a call never waits on, or fails for, a coupon."""
+    if "_coupon" in contact:
+        return contact["_coupon"]
+    try:
+        from .coupons import offer_for   # here, not at the top: coupons reads the call types
+        return offer_for(contact)
+    except Exception:  # noqa: BLE001
+        log.exception("coupon lookup failed for contact %s; no offer on this call", contact.get("id"))
+        return None
+
+
+def spoken_discount(coupon: dict) -> str:
+    """The discount as the agent says it: "दस परसेंट", "एक सौ रुपये"."""
+    value = float(coupon.get("discount_value") or 0)
+    words = hindi_number(int(value)) if value.is_integer() and 0 < value < 10_000_000 else f"{value:g}"
+    return f"{words} रुपये" if coupon.get("discount_type") == "amount" else f"{words} परसेंट"
+
+
+def coupon_offer_line(coupon: dict) -> str:
+    """The offer in the owner's words: X off with a coupon on prepaid (online) payment; shall I send it to you?"""
+    on = "online payment par " if coupon.get("prepaid_only", True) else ""
+    return (f"ji, abhi hum {on}coupon lagane se {spoken_discount(coupon)} ki chhoot de rahe hain. "
+            "agar aap lena chahein, toh kya main woh coupon aapko bhej doon?")
+
+
+def coupon_yes_line(voice: str) -> str:
+    return (f"theek hai ji, main aapko coupon code aur product ki details message mein bhej {forms(voice)['deti']} hoon. "
+            "dhanyavaad ji, aapka din shubh ho.")
+
+
+def _cart_after_reason(coupon: dict | None, voice: str) -> str:
+    """NOT INTERESTED after their answer to "koi dikkat aayi thi kya?": the close, or the coupon offer first."""
+    if not coupon:
+        return f"""Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya main yeh order confirm kar doon?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
+- A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then the goodbye. The complaint is their reason.
+- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "ji, aapka yeh sawaal maine note kar liya hai", then the goodbye.
+- A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): "{CART_NO_CLOSE}"
+- Only if they say on their own that they want it after all: step 3."""
+    return f"""Whatever they answer is their reason. Reply in ONE turn: never "kya main yeh order confirm kar doon?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"):
+- A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then "dhanyavaad ji, aapka din shubh ho". No offer. The complaint is their reason.
+- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "ji, aapka yeh sawaal maine note kar liya hai", then THE OFFER.
+- A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): THE OFFER.
+- Only if they say on their own that they want it after all: step 3.
+THE OFFER (owner, 19 Oct 2026), once in the call and never again, exactly: "{coupon_offer_line(coupon)}" Then wait for their answer. A yes: "{coupon_yes_line(voice)}", mark_outcome "wants_coupon", end_call. A question about it: its answer in one short sentence from CART DETAILS, then "toh kya main woh coupon aapko bhej doon?" Anything else: "{CART_NO_CLOSE}", mark_outcome "not_interested", end_call."""
+
+
+def _offer_detail(coupon: dict) -> str:
+    """The Offer line of CART DETAILS: what the coupon gives, and its last day if it has one."""
+    until = _parse_date(str(coupon.get("valid_until") or ""))
+    valid = f", till {until.day} {until:%B}" if until else ""
+    return (f"- Offer (only as NOT INTERESTED says, once in the call): {coupon.get('offer_text') or coupon.get('code')}{valid}; "
+            "the coupon code and the product details go to them by message.\n")
+
+
 def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
     f = forms(voice)
     answers = str((facts or {}).get("answers") or "").strip()
-    other = _block("Other details from the sheet:", _other_details(contact, set()))
+    # The cart's own link goes into the coupon message only; never read out.
+    other = _block("Other details from the sheet:", _other_details(contact, {"cart_url"}))
     missing = "" if (contact.get("address") or "").strip() else \
         "\nMISSING (ask; never guess)\n- Address: none on record, so never say one; take it at step 4.\n"
+    coupon = call_coupon(contact)
+    offer = _offer_detail(coupon) if coupon else ""
 
     intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products. The customer "
              f"put items in their cart on {STORE_NAME} but did not finish the order. You remind them, help if something stopped "
@@ -498,12 +620,12 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     details = f"""CART DETAILS
 - Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
 - In the cart: {contact.get('product') or 'MISSING (ask "aap kya order karna chahte the ji?")'}
-- Quantity: {contact.get('quantity') or '1'}
+- Quantity: {_quantity_line(contact)}
 - Cart value: {amount_line(contact, 'not on record (never name a price)')}
-- Address on record: {contact.get('address') or 'MISSING'}
+- Address on record: {_address_line(contact)}
 - Notes: {contact.get('notes') or 'none'}
 - Answers to common questions: {answers or 'none'}
-{other}{missing}"""
+{offer}{other}{missing}"""
 
     # Calls 133 and 134 closed on the customer's first sentence ("Vedic Vaibhav se order kiya tha", "kisi aur site se
     # kiya tha"). Owner, 5 Oct 2026: stay with the customer and their questions until there is a clear yes or no.
@@ -546,14 +668,12 @@ They say they already ordered or confirmed it ("pehle kar liya", "order kar diya
 
     not_interested = f"""NOT INTERESTED
 Never push and never argue, but always ask once what stopped them, even when they gave a reason. Say exactly this, nothing before or after it: "achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?" ("kisi aur site se le liya": "achha ji, wahan se kyun liya, koi khaas wajah?") Then stop and wait for their answer: no goodbye in the same turn.
-Whatever they answer is their second no (owner, call 183): handle it in ONE turn that ends with the goodbye. No new question of any kind, never "kya main yeh order confirm kar doon?" again, no lower price or change, and no line about what you are doing ("main aapke jawab ko samajh rahi hoon"). First the one sentence their answer calls for, then "dhanyavaad ji, aapka din shubh ho":
-- A doubt or complaint ("fake product bhejte ho", "nakli hai", "site fraud hai", a bad earlier order): the complaint reply from LISTEN FIRST, in those words, then the goodbye. The complaint is their reason.
-- A question (price, delivery, charges, quality): the answer in one sentence from CART DETAILS, or "ji, aapka yeh sawaal maine note kar liya hai", then the goodbye.
-- A reason or an excuse (price, bought elsewhere, no need, later, nothing to add): "theek hai ji, dhanyavaad. aapka din shubh ho."
-- Only if they say on their own that they want it after all: step 3.
+{_cart_after_reason(coupon, voice)}
 mark_outcome "not_interested" with not_interested_reason in exactly their words, never your own reading of them ("not given" if they would not say), then end_call."""
 
-    rules = ['- You cannot place the order, take payment, send a link or give a discount yourself: "maine note kar liya hai" is the most you say.']
+    rules = ['- You cannot place the order, take payment or send a link yourself, and the only discount is THE OFFER: '
+             '"maine note kar liya hai" is the most you say.' if coupon else
+             '- You cannot place the order, take payment, send a link or give a discount yourself: "maine note kar liya hai" is the most you say.']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
                    details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
@@ -576,9 +696,9 @@ ABANDONED_CART = CallType(
     key="abandoned_cart",
     name="Abandoned cart",
     kind="promotional",
-    outcomes=("wants_to_order", "not_interested", "already_ordered", "needs_help", "call_later", "wrong_number",
-              "do_not_call", "unclear"),
-    positive=("wants_to_order",),
+    outcomes=("wants_to_order", "wants_coupon", "not_interested", "already_ordered", "needs_help", "call_later",
+              "wrong_number", "do_not_call", "unclear"),
+    positive=("wants_to_order",),   # wants_coupon has its own check: a clear yes to the offer (live_bridge)
     details={
         "payment_preference": "Cash on delivery or online, as the customer said, when they want to order.",
         "order_changes": "Changes to the cart the customer asked for (an item added or removed, another quantity), for the team.",
@@ -590,6 +710,7 @@ ABANDONED_CART = CallType(
     build_prompt=_cart_prompt,
     greeting=_cart_greeting,
     takes_address=True,
+    offers_coupon=True,
     confirm_question="kya main yeh order confirm kar doon?",
     # Also "chahengi" to a woman (Gemini, call 160) and "karwana / kara chahenge" (ChatGPT, call 159).
     # And "karna chahte hain" (ChatGPT, call 168).
@@ -597,7 +718,8 @@ ABANDONED_CART = CallType(
                   r"|(confirm|कन्फ़र्म|कन्फर्म|कंफर्म)\s+(kar|कर)\s+(doon|du|dun|दूँ|दूं|दू)",
     probe_first=("not_interested", "already_ordered"),
     summary_keys=("not_interested_reason", "question", "order_changes", "callback_time", "notes"),
-    description="Call customers who left items in their cart: remind them, help, and take the order and address for the team.",
+    description="Call customers who left items in their cart: remind them, help, take the order and address for the team, "
+                "and offer the coupon once to those who say no.",
     columns=(
         Column("customer_name", "Customer name", True, "Ramesh Kumar"),
         Column("phone", "Phone", True, "PUT 10 DIGIT NUMBER"),

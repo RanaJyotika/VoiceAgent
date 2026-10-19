@@ -22,6 +22,7 @@
     timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
     rupee: '<path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3a5 5 0 0 0 0-10"/>',
     ear: '<path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6 6-6 10a3.5 3.5 0 0 1-7 0"/><path d="M15 8.5a2.5 2.5 0 0 0-5 0v1a2 2 0 0 0 2 2"/>',
+    tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><path d="M7.5 7.5h.01"/>',
   };
   const icon = (name) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || P.minus}</svg>`;
   const badge = (tone, ico, label, extra = '') => `<span class="badge ${tone}">${icon(ico)}${esc(label)}${extra}</span>`;
@@ -44,6 +45,7 @@
     needs_help: ['warning', 'help', 'Wants help'],
     wants_to_order: ['good', 'check', 'Wants to order'],
     already_ordered: ['good', 'check', 'Already ordered'],
+    wants_coupon: ['good', 'tag', 'Wants coupon'],
     error: ['critical', 'alert', 'Error'],
     none: ['', 'minus', 'No outcome'],
     // contact statuses that are not call outcomes
@@ -59,7 +61,7 @@
 
   // ---------------- sidebar pages, phone drawer, transcript modal ----------------
   // Every page has exactly one button, in the sidebar.
-  const PAGES = ['overview', 'store', 'campaigns', 'callback', 'call', 'history', 'spend'];
+  const PAGES = ['overview', 'store', 'campaigns', 'coupons', 'callback', 'call', 'history', 'spend'];
   const navButtons = [...document.querySelectorAll('.nav [data-page]')];
   window.showPage = (name) => {
     if (!PAGES.includes(name)) name = 'overview';
@@ -72,6 +74,7 @@
     if (name === 'callback' && window.loadCallbacks) window.loadCallbacks();
     if (name === 'spend' && window.loadSpend) window.loadSpend();
     if (name === 'store' && window.loadStore) window.loadStore();
+    if (name === 'coupons' && window.loadCoupons) window.loadCoupons();
     try { localStorage.setItem('page', name); } catch (e) { /* ignore */ }
   };
   for (const b of navButtons) b.addEventListener('click', () => {
@@ -131,6 +134,7 @@
       tile('good', 'check', 'Confirmed', s.confirmed, s.answered ? `${Math.round(100 * s.confirmed / s.answered)}% of answered` : ''),
       s.interested ? tile('good', 'check', 'Interested', s.interested, 'from campaign invites') : '',
       s.not_interested ? tile('', 'x', 'Not interested', s.not_interested) : '',
+      s.coupons ? tile('good', 'tag', 'Took the coupon', s.coupons, 'abandoned carts') : '',
       s.changed ? tile('warning', 'edit', 'Change requested', s.changed) : '',
       tile('critical', 'x', 'Cancelled', s.cancelled),
       tile('', 'missed', 'Call back', s.call_back, [s.no_answer ? `${s.no_answer} no answer` : '', s.dropped ? `${s.dropped} dropped` : '', s.call_later ? `${s.call_later} asked later` : ''].filter(Boolean).join(', ')),
@@ -454,7 +458,7 @@
   window.resetCampaignForm = () => { formFor = null; };
   const CALLBACK_STATUSES = ['no_answer', 'busy', 'dropped', 'call_later'];
   const PICKED_UP = ['confirmed', 'changed', 'cancelled', 'not_ordered', 'call_later', 'dropped', 'unclear', 'do_not_call',
-    'interested', 'not_interested', 'already_booked', 'needs_help', 'wants_to_order', 'already_ordered'];
+    'interested', 'not_interested', 'already_booked', 'needs_help', 'wants_to_order', 'already_ordered', 'wants_coupon'];
   // Row 1: where each contact is in the run. Row 2: the exact result. One filter active at a time.
   const STAGE_FILTERS = {
     all: ['All', '', 'minus', () => true],

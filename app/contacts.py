@@ -175,7 +175,7 @@ RESPONSES = {
     "cancelled": "Cancelled", "not_ordered": "Says they did not order", "not_interested": "Not interested",
     "already_booked": "Already booked", "needs_help": "Wants help", "call_later": "Call back later",
     "wrong_number": "Wrong number", "do_not_call": "Do not call again", "unclear": "Unclear",
-    "wants_to_order": "Wants to order", "already_ordered": "Already ordered",
+    "wants_to_order": "Wants to order", "already_ordered": "Already ordered", "wants_coupon": "Wants the coupon",
 }
 # How a call nobody picked up ended, by live_bridge.classify_unanswered's note (shown as the reason).
 NOT_PICKED_UP = {
@@ -186,7 +186,10 @@ DETAIL_LABELS = {
     "not_interested_reason": "Reason", "cancel_reason": "Reason", "callback_time": "Call back",
     "new_delivery_date": "New delivery date", "new_product": "Product they named", "mismatch": "Mismatch",
     "question": "Question", "notes": "Note", "payment_preference": "Payment", "order_changes": "Changes asked for",
+    "coupon_code": "Coupon",
 }
+# Details our own code writes into a result (not the agent), shown on the results sheet after the call type's own.
+SYSTEM_DETAILS = ("coupon_code",)   # the coupon a cart customer said yes to (owner, 19 Oct 2026)
 # A person must check these before acting: the customer changed something, disputed the record, or the
 # result is unclear. Owner, 5 Oct 2026: an address the customer dictated always needs a human to verify it.
 VERIFY_OUTCOMES = ("unclear", "changed", "not_ordered", "needs_help")
@@ -246,7 +249,8 @@ def build_results(contacts: list[dict], latest_call, call_type: CallType = DEFAU
         if not isinstance(details, dict):
             details = {}
         said = "; ".join(f"{DETAIL_LABELS.get(k, k.replace('_', ' ').capitalize())}: {details[k]}"
-                         for k in call_type.details if k != "new_address" and str(details.get(k) or "").strip())
+                         for k in dict.fromkeys((*call_type.details, *SYSTEM_DETAILS))
+                         if k != "new_address" and str(details.get(k) or "").strip())
         when = c.get("last_call_at") or ""
         if when:
             try:

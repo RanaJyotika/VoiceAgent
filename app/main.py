@@ -9,7 +9,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import catalog, db, mongo_sync, orders_view, shopify, store_orders
+from . import catalog, coupons, db, messaging, mongo_sync, orders_view, shopify, store_orders
 from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, router as campaign_router
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
@@ -31,8 +31,9 @@ log = logging.getLogger("app")
 
 
 class _QuietPolling(logging.Filter):
-    """The dashboard polls these every 1 to 5 seconds; logging each hit buries the call events."""
-    NOISY = ("/api/live", "/api/calls", "/api/stats")
+    """The dashboard polls these every 1 to 5 seconds; logging each hit buries the call events. The Coupons page
+    polls its lists every 10 s while open, and every page asks for the waiting messages every 30 s."""
+    NOISY = ("/api/live", "/api/calls", "/api/stats", "/api/coupons", "/api/messages", "/api/messages/status")
 
     def filter(self, record: logging.LogRecord) -> bool:
         # uvicorn access records carry (client, method, path, http_version, status). Failures still log.
@@ -49,11 +50,17 @@ app = FastAPI(title="Voice Agent MVP")
 db.init_db()
 shopify.init_tables()
 orders_view.init_tables()
+store_orders.init_tables()  # batches of automatic calling: what each one reached and cost
+coupons.init_tables()       # coupon codes; DIWALIDILSE10 is added the first time
+messaging.init_tables()     # the outbox for coupon messages
 app.include_router(plivo_router)
 app.include_router(campaign_router)
 app.include_router(autodial_router)
 app.include_router(shopify.router)
+# Before the contacts intake: its /api/intake/{campaign_id} would otherwise take /api/intake/coupons.
+app.include_router(coupons.router)
 app.include_router(intake_router)
+app.include_router(messaging.router)
 app.include_router(catalog.router)
 app.include_router(mongo_sync.router)
 app.include_router(store_orders.router)
@@ -79,6 +86,7 @@ async def _start_monitor() -> None:
     asyncio.create_task(catalog.worker())   # the product catalogue, read from MongoDB every few minutes
     asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
     asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
+    asyncio.create_task(messaging.worker())   # coupon messages, once a message service is set up
     resume_after_restart()   # automatic calling always starts off; only the Switch on button starts it
 
 
@@ -357,6 +365,7 @@ async def browser_call(ws: WebSocket, contact_id: int) -> None:
         return
     contact = with_language(contact, ws.query_params.get("language") or "")
     contact = await catalog.enrich(contact)   # the order and its products, fresh from the main database
+    contact = coupons.attach(contact)   # the coupon an abandoned-cart call may offer, fixed for the whole call
 
     incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
 

@@ -19,14 +19,15 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import catalog, db, openai_bridge, sarvam_bridge
+from . import catalog, coupons, db, messaging, openai_bridge, sarvam_bridge
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
                      TRANSCRIPT_LANGUAGES, gemini_voice)
-from .call_types import DEFAULT as DEFAULT_CALL_TYPE, CallType, call_type_for
+from .call_types import (CART_NO_CLOSE, DEFAULT as DEFAULT_CALL_TYPE, ORDER_CONFIRMED_CLOSE, CallType, call_coupon,
+                         call_type_for, coupon_offer_line, coupon_yes_line)
 from .prompts import forms
 from .tools import tools_for
 
@@ -69,17 +70,97 @@ _YES = re.compile(_L + r"(haan|han|ha|haa|hanji|ji|jee|sahi|sahee|theek|thik|ok|
                   r"kardo|karo|done|right|correct|हाँ|हां|हा|जी|हाँजी|हांजी|सही|ठीक|बिल्कुल|कर दो|कर दीजिए|"
                   r"जीजी|हन्जी|हंजी|हंदी|हनजी|कंफर्म|कन्फर्म|कनफर्म|"   # "haan ji" as the transcriber wrote it on calls 167-168, 218
                   r"ਹਾਂ|ਹਾਂਜੀ|ਜੀ|ਸਹੀ|ਠੀਕ|ਬਿਲਕੁਲ|"   # Punjabi script (call 71)
-                  r"ہاں|ہاںجی|جی|صحیح|ٹھیک|بالکل|کر دو)" + _R, re.IGNORECASE)   # Urdu script: Gemini writes Hindi in it (calls 134, 137)
+                  r"ہاں|ہاںجی|جی|صحیح|ٹھیک|بالکل|کر دو|"   # Urdu script: Gemini writes Hindi in it (calls 134, 137)
+                  # The other languages a customer may ask for (owner, 19 Oct 2026): yes, okay, correct.
+                  r"sure|avunu|అవును|సరే|సరి|ఓకే|aamaa|aama|ஆமா|ஆமாம்|சரி|haudu|ಹೌದು|ಸರಿ|ಓಕೆ|athe|അതെ|ശരി|"
+                  r"হ্যাঁ|হাঁ|ঠিক আছে|হ্যা|હા|બરાબર|ହଁ|ଠିକ)" + _R, re.IGNORECASE)
 _NO = re.compile(_L + r"(nahi|nahin|nai|nhi|no|not|galat|wrong|cancel|mat|नहीं|नही|नई|नाई|गलत|मत|कैंसल|कैंसिल|कैन्सल|केंसल|"   # नाई: "nahi" on call 182
-                 r"ਨਹੀਂ|ਨਹੀ|ਗਲਤ|ਕੈਂਸਲ|نہیں|نہی|غلط|کینسل|مت)" + _R, re.IGNORECASE)
+                 r"ਨਹੀਂ|ਨਹੀ|ਗਲਤ|ਕੈਂਸਲ|نہیں|نہی|غلط|کینسل|مت|"
+                 r"ledu|vaddu|లేదు|వద్దు|కాదు|illai|vendaam|இல்லை|இல்ல|வேண்டாம்|ಇಲ್ಲ|ಬೇಡ|ഇല്ല|വേണ്ട|না|নাই|"
+                 r"नाही|नको|ના|નથી|ନା|ନାହିଁ)" + _R, re.IGNORECASE)
+
+
+# Recorded messages of the phone network or the customer's phone, never the customer (owner, 19 Oct 2026). Call 294:
+# "The person you are speaking with has put your call on hold... Yes, put your call on hold" played for minutes, the
+# agent answered each one ("ji, main line par hi hoon") and the call was saved as confirmed on that "Yes". Call 302:
+# "Please stay on the line" then "If you would like to leave an additional message, please reply after the tone".
+_ON_HOLD = re.compile(r"(put|placed|kept)\s+(your|the)\s+call\s+on\s+hold|stay\s+on\s+the\s+line|"
+                      r"(call|कॉल|कौल|काल)\s*(को)?\s*(hold|होल्ड)\s*(पर|par)\s*(रखा|rakha)|"
+                      r"(लाइन|line)\s*(पर|par)\s*(बने|bane)\s*(रहें|rahen|rahein)|ਹੋਲਡ|"
+                      r"आप\s+जिस\s+व्यक्ति\s+से\s+बात", re.IGNORECASE)
+_RECORDED = re.compile(r"leave\s+(a|an|your)?\s*(additional\s+)?message|after\s+the\s+(tone|beep)|record\s+your\s+message|"
+                       r"voice\s*mail|mailbox|not\s+available\s+to\s+take|is\s+not\s+reachable|switched\s+off|"
+                       r"number\s+you\s+have\s+(dialled|dialed|called)|subscriber\s+you\s+have|"
+                       r"please\s+try\s+(again\s+)?later|busy\s+on\s+another\s+call|using\s+a\s+(call\s+)?screening|"
+                       r"संदेश\s+(छोड़|रिकॉर्ड)|बीप\s+(के|की)|(स्विच|switch)\s*(ऑफ|off)|पहुंच\s+से\s+बाहर|पहुँच\s+से\s+बाहर|"
+                       r"(डायल|dial)\s+किया\s+(गया|है)|नंबर\s+(अभी\s+)?(उपलब्ध|व्यस्त)\s+(नहीं|है)|"
+                       r"थोड़ी\s+देर\s+(बाद|में)\s+(प्रयास|कोशिश)|दूसरी\s+(कॉल|call)\s+पर\s+व्यस्त", re.IGNORECASE)
+
+
+# A customer asking for another language (owner, 19 Oct 2026). Call 306: "speak in English", and the agent said it
+# would, then went on in Hindi. Call 268: "Telugu bhasha mein bataiye" five times, answered as off topic. Sarvam's
+# codes; the agent's goodbye in each (said by our code when it hangs up), and the words a turn ends its call on.
+LANGUAGES = {
+    "en-IN": ("English", r"english|इंग्लिश|अंग्रेज़ी|अंग्रेजी|angrezi|angreji", "Thank you, have a nice day.", r"nice day|good day"),
+    "hi-IN": ("Hindi", r"hindi|हिंदी|हिन्दी", "dhanyavaad ji, aapka din shubh ho.", r"shubh ho|शुभ हो"),
+    "te-IN": ("Telugu", r"telugu|telgu|तेलुगु|तेलुगू|तेलगू|తెలుగు", "ధన్యవాదాలు అండి, మీ రోజు శుభంగా ఉండాలి.", r"శుభంగా ఉండాలి"),
+    "ta-IN": ("Tamil", r"tamil(?!\s*nadu)|तमिल(?!\s*नाडु)|தமிழ்", "நன்றி, உங்கள் நாள் இனிய நாளாக அமையட்டும்.", r"அமையட்டும்"),
+    "kn-IN": ("Kannada", r"kannada|कन्नड़|कन्नड|ಕನ್ನಡ", "ಧನ್ಯವಾದಗಳು, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಿರಲಿ.", r"ಶುಭವಾಗಿರಲಿ"),
+    "ml-IN": ("Malayalam", r"malayalam|मलयालम|മലയാളം", "നന്ദി, നിങ്ങളുടെ ദിവസം ശുഭമായിരിക്കട്ടെ.", r"ശുഭമായിരിക്കട്ടെ"),
+    "bn-IN": ("Bengali", r"bengali|bangla|बंगाली|बांग्ला|বাংলা", "ধন্যবাদ, আপনার দিনটি শুভ হোক।", r"শুভ হোক"),
+    "mr-IN": ("Marathi", r"marathi|मराठी", "धन्यवाद, तुमचा दिवस शुभ जावो.", r"शुभ जावो"),
+    "gu-IN": ("Gujarati", r"gujarati|गुजराती|ગુજરાતી", "આભાર, તમારો દિવસ શુભ રહે.", r"શુભ રહે"),
+    "pa-IN": ("Punjabi", r"punjabi|पंजाबी|ਪੰਜਾਬੀ", "ਧੰਨਵਾਦ ਜੀ, ਤੁਹਾਡਾ ਦਿਨ ਸ਼ੁਭ ਹੋਵੇ।", r"ਸ਼ੁਭ ਹੋਵੇ"),
+    "od-IN": ("Odia", r"odia|oriya|उड़िया|ओड़िया|ଓଡ଼ିଆ", "ଧନ୍ୟବାଦ, ଆପଣଙ୍କ ଦିନ ଶୁଭ ହେଉ।", r"ଶୁଭ ହେଉ"),
+}
+_LANG_NAME = {code: re.compile(pat, re.IGNORECASE) for code, (_, pat, _, _) in LANGUAGES.items()}
+# Words of asking for it: "<language> mein baat karo", "speak in <language>", "<language> bhasha".
+_LANG_ASK = re.compile(r"mein|में|me\b|\bin\b|bolo|boliye|bol\b|baat|बोल|बात|talk|speak|language|bhasha|भाषा|samajh|समझ|"
+                       r"aata|आता|aati|आती|please|plz|करो|kijiye|कीजिए|chahiye|चाहिए", re.IGNORECASE)
+
+
+def asked_language(text: str) -> str:
+    """The Sarvam code of a language the customer asks for ("speak in English", "Telugu bhasha mein", or the name
+    alone, "तेलुगु तेलुगु"), else ""."""
+    text = (text or "").strip()
+    for code, name in _LANG_NAME.items():
+        m = name.search(text)
+        # "English nahi aati" / "Telugu not" says the opposite: that language is not wanted.
+        if not m or re.match(r"[\s,]*(\S+\s+)?(nahi|nahin|nhi|नहीं|नही|not|no)(?![\wऀ-෿])", text[m.end():], re.IGNORECASE):
+            continue
+        if _LANG_ASK.search(text) or len(text.split()) <= 3:
+            return code
+    return ""
+
+
+def language_note(code: str) -> str:
+    """Instructions that come with every reply once the customer asked for a language other than Hindi."""
+    if not code or code == "hi-IN":
+        return ""
+    lang = LANGUAGES[code][0]
+    script = "English letters" if code == "en-IN" else f"{lang} script"
+    return (f"\n\nLANGUAGE NOW (the customer asked for it; this overrides LANGUAGE and VOICE AND ACCENT above): speak only "
+            f"{lang}, natural and polite, every reply written in {script}. The fixed lines of this prompt are in Hindi: say "
+            f"the same in {lang}, just as short. Prices and numbers in {lang} words; product names, order, payment, COD and "
+            f"delivery may stay in English. Your first reply in {lang} says once that you will speak {lang} now, then "
+            f"carries on with the call. Close with \"{LANGUAGES[code][2]}\". If they ask for Hindi again, speak Hindi.")
+
+
+def machine_message(text: str) -> str:
+    """ "hold" or "recorded" when this customer turn is the network's or phone's recorded voice, else ""."""
+    if _ON_HOLD.search(text or ""):
+        return "hold"
+    return "recorded" if _RECORDED.search(text or "") else ""
 
 
 def heard_nothing(customer_text: str) -> bool:
     """A customer turn happened but its transcript carries no words: '.', '<noise>', a dash, or
-    a script that cannot be this customer's language."""
+    a script that cannot be this customer's language. A recorded network message counts as no words too."""
     t = customer_text.strip()
     if not t:
         return False
+    if machine_message(t):
+        return True
     bare = t.replace("<noise>", "").replace("[noise]", "")
     if _NOTHING.match(bare):
         return True
@@ -224,13 +305,18 @@ def bare_no(reason: str) -> bool:
 
 def probe_answer(turns: list[dict[str, str]]) -> str:
     """What the customer said after the agent last asked why ("koi dikkat aayi thi kya?"), as one line.
-    "" when it was never asked or not answered yet."""
+    "" when it was never asked or not answered yet. Their answer to a coupon offer after it is not part of it."""
     asked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
                      and _ASKED_WHY.search(turns[i]["text"])), None)
     if asked_at is None:
         return ""
-    return " ".join(t["text"].strip() for t in turns[asked_at + 1:]
-                    if t["role"] == "customer" and not heard_nothing(t["text"])).strip()
+    said = []
+    for t in turns[asked_at + 1:]:
+        if t["role"] == "agent" and offers_coupon(t["text"]):
+            break
+        if t["role"] == "customer" and not heard_nothing(t["text"]):
+            said.append(t["text"].strip())
+    return " ".join(said).strip()
 
 
 def last_question(transcript: list[dict[str, str]]) -> str:
@@ -249,6 +335,12 @@ _CANCEL = re.compile(_L + r"(cancel\w*|कैंसल|कैंसिल|कै
                      r"नही चाहिए|ਨਹੀਂ ਚਾਹੀਦਾ|نہیں چاہیے|mat bhejo|mat bhejna|मत भेजो|मत भेजना|nahi rakhna|नहीं रखना|"
                      r"wapas le lo|वापस ले लो)" + _R, re.IGNORECASE)
 _KEEP_QUESTION = re.compile(r"rakhna|रखना|cancel|कैंसल|कैंसिल", re.IGNORECASE)
+# "Order rakhna chahenge?" after a cancel request, and answers that put it off ("baad mein kar denge") or keep it now.
+_KEEP_IT = re.compile(r"rakhna|रखना", re.IGNORECASE)
+_LATER = re.compile(r"baad\s*(mein|me|men)|बाद\s*(में|मे)|later|phir\s*kabhi|फिर\s*कभी|abhi\s*nahi|अभी\s*नहीं|agli\s*baar|"
+                    r"अगली\s*बार|next\s*time|soch\s*ke|सोच\s*(के|कर)", re.IGNORECASE)
+_KEEPS = re.compile(r"bhej\s*do|भेज\s*दो|भेज\s*दीजिए|rakh\s*lo|रख\s*लो|rakhna\s*hai|रखना\s*है|confirm\s*kar|कन्फर्म\s*कर|"
+                    r"कंफर्म\s*कर|अभी\s*भेज", re.IGNORECASE)
 
 
 def asked_to_cancel(turns: list[dict[str, str]]) -> bool:
@@ -286,8 +378,8 @@ _CALL_BACK = re.compile(r"call|phone|फोन|फ़ोन|कॉल|busy|ब�
 # forms only, so a customer's own "main busy hoon" is not taken as this.
 _NOT_AVAILABLE = re.compile(r"bahar\s+(gayi|gaye|gaya|gai|hai|hain)|बाहर\s+(गई|गयी|गए|गया|है|हैं)|"
                             r"ghar\s+(par|pe|mein)\s+nahi|घर\s+(पर|पे|में)\s+नहीं|"
-                            r"(woh|wo|vo|unka|unki|unse|unko)\s+(\S+\s+){0,3}(nahi hai|nahi hain|nahi ho|busy|vyast)|"
-                            r"(वो|वह|उनसे|उनका|उनकी|उनको)\s+(\S+\s+){0,3}(नहीं है|नहीं हैं|नहीं हो|बिज़ी|बिजी|व्यस्त)|"
+                            r"(woh|wo|vo|unka|unki|unse|unko)\s+(\S+\s+){0,5}(nahi hai|nahi hain|nahi ho|busy|vyast)|"
+                            r"(वो|वह|उनसे|उनका|उनकी|उनको)\s+(\S+\s+){0,5}(नहीं है|नहीं हैं|नहीं हो|बिज़ी|बिजी|व्यस्त)|"
                             r"available\s+nahi|अवेलेबल\s+नहीं|अवेलेबर\s+नहीं|"
                             r"unse baat nahi|उनसे बात नहीं|baat nahi ho (sakti|payegi|rahi)|बात नहीं हो (सकती|पाएगी|रही)|"
                             r"baad mein (call|phone) (karna|kariye|karo|karein)|बाद में (कॉल|फोन|फ़ोन) (करना|करिए|करो|करें|कीजिए)",
@@ -318,11 +410,14 @@ _SAY_BACK = re.compile(r"hisaab|हिसाब|mutabik|मुताबिक|an
 
 
 def agent_questions(turns: list[dict[str, str]]) -> list[str]:
-    """Every question sentence the agent said on the call."""
+    """Every question sentence the agent said on the call. "?", "।" and "!" end a sentence even with no space after
+    (Sarvam joins its sentences: "...है।जी"), a full stop only before a space: call 282's address "Plot - fg/131
+    I.D.market.nayapalli .bbsr" was cut at each dot, the address question lost its "delivery", and the code made the
+    agent ask it a fourth time."""
     out = []
     for t in turns:
         if t["role"] == "agent":
-            out += [s for s in re.split(r"(?<=[?।.!])\s*", t["text"]) if s.strip().endswith("?")]
+            out += [s for s in re.split(r"(?<=[?।!])\s*|(?<=\.)\s+", t["text"]) if s.strip().endswith("?")]
     return out
 
 
@@ -349,31 +444,108 @@ CART_CLOSE_HINT = ("\n\nTHIS REPLY ONLY: the customer is answering what stopped 
                    "samajh nahi aaya, ek baar phir bata dijiye'.")
 
 
+# The coupon offer (owner, 19 Oct 2026): "ji, abhi hum online payment par coupon lagane se ... ki chhoot de rahe hain.
+# agar aap lena chahein, toh kya main woh coupon aapko bhej doon?": a turn that names the coupon and asks whether to
+# send it. The agents write "coupon" in English letters or in Devanagari.
+_COUPON = re.compile(r"coupon|cupon|kupon|कूपन|कुपन|कूपॉन|कूपोन|कोपन|కూపన్|கூப்பன்|ಕೂಪನ್|കൂപ്പൺ|কুপন|કૂપન|ਕੂਪਨ|କୁପନ",
+                     re.IGNORECASE)
+_SEND_IT = re.compile(r"bhej|भेज|share|शेयर|send|పంప|அனுப்ப|ಕಳುಹಿಸ|ಕಳಿಸ|അയ|পাঠা|पाठव|મોકલ|ਭੇਜ|ପଠା", re.IGNORECASE)
+# A yes that only says "send it", which the yes words do not hold ("bhej do"). "Mat bhejo" has a no in it.
+_SEND_YES = re.compile(_L + r"(bhej do|bhej dijiye|bhej dijie|bhej de|bhejiye|bhejo|send kar do|send karo|share kar do|"
+                       r"भेज दो|भेज दीजिए|भेज दीजिये|भेज दे|भेजिए|भेजिये|भेजो|सेंड कर दो|सेंड करो|शेयर कर दो)" + _R,
+                       re.IGNORECASE)
+_DONT_SEND = re.compile(r"mat bhej|मत भेज|rehne do|rahne do|रहने दो", re.IGNORECASE)
+
+
+def offers_coupon(text: str) -> bool:
+    """This agent turn makes the coupon offer: it names the coupon and asks whether to send it."""
+    return bool(_COUPON.search(text)) and any(_SEND_IT.search(q) for q in agent_questions([{"role": "agent", "text": text}]))
+
+
+def coupon_offered(turns: list[dict[str, str]]) -> bool:
+    return any(t["role"] == "agent" and offers_coupon(t["text"]) for t in turns)
+
+
+def yes_to_coupon(turns: list[dict[str, str]]) -> str:
+    """The customer's clear yes to the last coupon offer, unless a later turn of theirs takes it back; "" otherwise.
+    A bare "ji?" is "pardon?", not a yes."""
+    for i in range(len(turns) - 1, -1, -1):
+        if turns[i]["role"] == "agent" and offers_coupon(turns[i]["text"]):
+            later = [t["text"] for t in turns[i + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])]
+            if not later or any(_DONT_SEND.search(x) or _starts_with_no(x) for x in later[1:]):
+                return ""
+            answer = later[0]
+            sends = _SEND_YES.search(answer) is not None and _NO.search(answer) is None
+            return answer if sends or (said_yes(answer) and "?" not in answer) else ""
+    return ""
+
+
+def _starts_with_no(text: str) -> bool:
+    words = re.findall(r"[^\s.,;:!?।|\"'()\-]+", text.lower())
+    return bool(words) and words[0] in _OPENING_NO
+
+
+def _coupon_offer_hint(coupon: dict) -> str:
+    return ("\n\nTHIS REPLY ONLY: the customer is answering what stopped them. Do not say goodbye yet. A doubt or complaint: "
+            "the complaint reply from LISTEN FIRST, then 'dhanyavaad ji, aapka din shubh ho.', and no offer. Anything else: "
+            "at most one short sentence for what they said (a question: its answer from CART DETAILS), then THE OFFER, "
+            f"exactly: '{coupon_offer_line(coupon)}' Then stop and wait for their answer. Never ask about the order "
+            "again. If you could not make out their words: 'sorry ji, samajh nahi aaya, ek baar phir bata dijiye'.")
+
+
+def _coupon_answer_hint(voice: str) -> str:
+    return ("\n\nTHIS REPLY ONLY: the customer is answering your coupon offer; never make the offer again. A yes: say "
+            f"exactly '{coupon_yes_line(voice)}' Then call mark_outcome 'wants_coupon' and end_call. A question about it: "
+            "its answer in one short sentence from CART DETAILS, then 'toh kya main woh coupon aapko bhej doon?' Anything "
+            f"else: say exactly '{CART_NO_CLOSE}' Then call mark_outcome 'not_interested' and end_call. If you could not "
+            "make out their words: 'sorry ji, samajh nahi aaya, ek baar phir bata dijiye'.")
+
+
 def closing_hint(state: "CallState") -> str:
-    """Extra instructions for the reply to the customer's answer to the cart's why-question (ChatGPT only)."""
-    if state.provider != "openai" or state.call_type.key != "abandoned_cart" or state.outcome:
+    """Extra instructions for the reply to the customer's answer to the cart's why-question (ChatGPT; Sarvam too when
+    the call has a coupon to offer), and to their answer to the coupon offer."""
+    if state.call_type.key != "abandoned_cart" or state.outcome:
         return ""
     last = next((t["text"] for t in reversed(state.transcript) if t["role"] == "agent"), "")
-    return CART_CLOSE_HINT if any(_ASKED_WHY.search(q) for q in agent_questions([{"role": "agent", "text": last}])) else ""
+    asked_why = any(_ASKED_WHY.search(q) for q in agent_questions([{"role": "agent", "text": last}]))
+    if state.coupon and state.provider in ("openai", "sarvam"):
+        if offers_coupon(last):
+            return _coupon_answer_hint((ACTIVE.get(state.call_id) or {}).get("voice") or "")
+        if asked_why and not coupon_offered(state.transcript):
+            return _coupon_offer_hint(state.coupon)
+    return CART_CLOSE_HINT if state.provider == "openai" and asked_why else ""
 
 
-_GOODBYE = re.compile(r"dhanyavaad|dhanyawad|dhanyavad|धन्यवाद|shubh ho|शुभ हो", re.IGNORECASE)
+# Thanks in the other languages a customer may ask for (owner, 19 Oct 2026), and their closing lines (LANGUAGES).
+_THANKS_ANY = r"dhanyavaad|dhanyawad|dhanyavad|धन्यवाद|thank you|thanks|ధన్యవాదాలు|ధన్యవాదం|நன்றி|ಧನ್ಯವಾದ\S*|നന്ദി|ধন্যবাদ|ਧੰਨਵਾਦ|આભાર|ଧନ୍ୟବାଦ"
+_GOODBYE = re.compile(_THANKS_ANY + r"|shubh ho|शुभ हो", re.IGNORECASE)
 # The closing line as the last words of a turn ("... dhanyavaad ji, aapka din shubh ho."): the call is over.
-_FINAL_GOODBYE = re.compile(r"(shubh ho|शुभ हो)[\s.!।]*$", re.IGNORECASE)
+_FINAL_GOODBYE = re.compile("(" + "|".join(end for _, _, _, end in LANGUAGES.values()) + r")[\s.!।]*$", re.IGNORECASE)
 # "... dhanyavaad ji." as the last words: the close of the wrong-number and person-away lines. Counts as the end of
 # the call only once a result is recorded (see turn_ends_call), so a passing thanks mid-call does not hang up.
-_FINAL_THANKS = re.compile(r"(dhanyavaad|dhanyawad|dhanyavad|धन्यवाद)\s*(ji|जी)?[\s.!।]*$", re.IGNORECASE)
+_FINAL_THANKS = re.compile("(" + _THANKS_ANY + r")\s*(ji|जी|అండి)?[\s.!।]*$", re.IGNORECASE)
+
+
+# The confirmed order's close (owner, 19 Oct 2026): "ji, aapka order confirm ho gaya hai. dhanyavaad ji." ends the call
+# even before the result is written, so the line is cut right after it (the result is then asked for, as after "shubh ho").
+_ORDER_CONFIRMED_END = re.compile(r"(confirm|कंफर्म|कन्फर्म|कनफर्म)\s*(ho|हो)\s*(gaya|gayi|गया|गई|गयी).{0,60}"
+                                  r"(dhanyavaad|dhanyawad|dhanyavad|धन्यवाद)\s*(ji|जी)?[\s.!।]*$", re.IGNORECASE)
 
 
 def turn_ends_call(text: str, state: "CallState") -> bool:
-    """The agent's turn ended in its goodbye: "shubh ho", or "dhanyavaad ji" with the result already recorded."""
-    return _FINAL_GOODBYE.search(text) is not None or (bool(state.outcome) and _FINAL_THANKS.search(text) is not None)
+    """The agent's turn ended in its goodbye: "shubh ho", the confirmed order's close, or "dhanyavaad ji" with the
+    result already recorded."""
+    return (_FINAL_GOODBYE.search(text) is not None or _ORDER_CONFIRMED_END.search(text) is not None
+            or (bool(state.outcome) and _FINAL_THANKS.search(text) is not None))
 # Call 135: the agent said the closing line but never called end_call; 3 s later the silence check had it ask
 # "hello ji, meri awaaz aa rahi hai?" and say the goodbye again. Owner: after the closing line, hang up.
 GOODBYE_HANGUP_SECONDS = 0.0   # owner, 7 Oct 2026: cut the call the moment the goodbye has played
 # Call 176: a question and the goodbye in one turn ("koi dikkat aayi? ... aapka din shubh ho"). Owner: hear the answer,
 # note it, say goodbye, then hang up; if they say nothing, hang up this long after the goodbye finishes.
 ASK_BYE_WAIT_SECONDS = 5.0
+# On hold (owner, 19 Oct 2026, call 294): the agent waits in silence, and hangs up after this long if nobody comes back;
+# the order is rung again later like a busy line.
+HOLD_HANGUP_SECONDS = 30.0
 
 
 def said_goodbye(transcript: list[dict[str, str]]) -> bool:
@@ -394,13 +566,24 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
     """The goodbye the agent is told to say when it recorded a result without saying one (calls 178, 183)."""
     voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
     f = forms(voice)   # an unknown voice gets the feminine forms
+    if state.language != "hi-IN":
+        # The customer asked for another language (owner, 19 Oct 2026): the goodbye in it.
+        if state.language == "en-IN" and outcome == "confirmed" and state.call_type.key == "order_confirmation":
+            return "Your order is confirmed. Thank you."
+        if state.language == "en-IN" and outcome == "wants_coupon":
+            return "Okay, I will send you the coupon code and the product details by message. Thank you, have a nice day."
+        return LANGUAGES[state.language][2]
+    if outcome == "wants_coupon":
+        return coupon_yes_line(voice)   # owner, 19 Oct 2026
+    if outcome == "confirmed" and state.call_type.key == "order_confirmation":
+        return ORDER_CONFIRMED_CLOSE   # owner, 19 Oct 2026: it had said only "dhanyavaad ji, aapka din shubh ho"
     if outcome == "not_interested" and _COMPLAINT.search(probe_answer(state.transcript)):
         # Call 191: "aapki site fake product bhejti hai" to "koi dikkat aayi thi?" got only "theek hai ji, dhanyavaad".
         # The complaint reply (owner's words, 1 Oct 2026), then the goodbye.
         return (f"ji, aapki chinta samajh {f['sakti']} hoon. hamari poori koshish rehti hai ki original quality ka product hi "
                 f"pahunche. aapki yeh baat maine note kar li hai. dhanyavaad ji, aapka din shubh ho.")
     if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
-        return "theek hai ji, dhanyavaad. aapka din shubh ho."   # owner, 7 Oct 2026 (call 182)
+        return CART_NO_CLOSE   # owner, 7 Oct 2026 (call 182)
     return (f"achha ji, samajh {f['gayi']}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
 
 
@@ -433,7 +616,9 @@ def ever_yes_to_main_question(transcript: list[dict[str, str]], pattern: str) ->
     return ""
 
 
-_OPENING_NO = {"nahi", "nahin", "nai", "nhi", "no", "nope", "na", "नहीं", "नही", "नई", "ना", "ਨਹੀਂ", "ਨਹੀ", "نہیں"}
+_OPENING_NO = {"nahi", "nahin", "nai", "nhi", "no", "nope", "na", "नहीं", "नही", "नई", "ना", "ਨਹੀਂ", "ਨਹੀ", "نہیں",
+               "ledu", "vaddu", "లేదు", "వద్దు", "illai", "இல்லை", "வேண்டாம்", "ಇಲ್ಲ", "ಬೇಡ", "ഇല്ല", "വേണ്ട", "না",
+               "नाही", "नको", "ના", "ନା"}
 
 
 def no_to_main_question(transcript: list[dict[str, str]], pattern: str) -> str:
@@ -595,6 +780,13 @@ class CallState:
     order_refusals: int = 0             # "already_ordered" sent back: no clear yes to the check, or the order was being taken
     address_refusals: int = 0           # mark_outcome sent back because the address on record was never asked about
     say_back_refusals: int = 0          # mark_outcome sent back because a mismatch was never said back
+    coupon: dict | None = None          # the coupon this cart call may offer once (coupons.py), or None
+    coupon_refused: bool = False        # "not_interested" sent back once: the coupon offer was never made
+    coupon_yes_refusals: int = 0        # "wants_coupon" sent back: no clear yes to the offer
+    offer_wait_refused: bool = False    # a result sent back once: it came in the same breath as the coupon offer
+    later_cancel_refused: bool = False  # "confirmed" sent back once: asked to cancel, then "baad mein" to keeping it
+    hold_since: float | None = None     # the network's "your call is on hold" message is playing (machine_message)
+    language: str = "hi-IN"             # the language the customer asked to be spoken to in (LANGUAGES)
     reconnects: int = 0                 # reconnects to the current provider (reset when the call changes provider)
     drops: int = 0                      # times the line dropped and the call carried on (any provider)
     error: str | None = None
@@ -738,6 +930,8 @@ async def run_call(
         model = OPENAI_REALTIME_MODEL
     call_id = db.start_call(contact["id"] if contact else None, channel)
     state = CallState(call_id=call_id, call_type=call_type_for(contact), model=model)
+    if contact and state.call_type.offers_coupon:
+        state.coupon = call_coupon(contact)   # the one the prompt was built with (attached when the call was placed)
     if openai_bridge.is_openai_model(model):
         state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
     elif sarvam_bridge.is_sarvam_model(model):
@@ -770,6 +964,11 @@ async def run_call(
             state.held, state.unheard = True, True
             log.info("call %s: that turn was another voice, not the customer (%r); holding back the reply to it",
                      call_id, said[:40])
+            return
+        if may_hold_back() and said and machine_message(said):
+            # The network's recorded voice (hold, voicemail): nothing to answer. Sarvam never wrote a reply to it.
+            state.held, state.unheard = True, state.provider != "sarvam"
+            log.info("call %s: that turn was a recorded message (%r); holding back the reply to it", call_id, said[:60])
             return
         state.held = may_hold_back() and bool(said) and only_noise(said)
         if not state.held:
@@ -804,6 +1003,41 @@ async def run_call(
             state.goodbye_at = time.monotonic()   # a finished call, not a dropped one
             state.ended = True
             incoming_audio.put_nowait(None)
+
+    def end_unreached(outcome: str, note: str) -> None:
+        """Nobody to talk to on the line (a recorded message, a hold nobody came back from): hang up, ring again later."""
+        if state.ended:
+            return
+        if not state.outcome:
+            state.outcome, state.outcome_details = outcome, {"outcome": outcome, "notes": note}
+        log.info("call %s: %s; hanging up", call_id, note)
+        state.ended = True
+        incoming_audio.put_nowait(None)   # stops the session; the phone line hangs up after it
+
+    async def hang_up_if_still_on_hold(mark: float) -> None:
+        await asyncio.sleep(HOLD_HANGUP_SECONDS)
+        if state.hold_since == mark:
+            end_unreached("busy", f"customer put the call on hold and did not come back within {HOLD_HANGUP_SECONDS:.0f} s; "
+                                  "to be called again")
+
+    def customer_words(text: str) -> None:
+        """The customer's transcript so far this turn: a recorded message on the line, the customer back from hold, or
+        the customer asking for another language."""
+        if (code := asked_language(text)) and code != state.language and not machine_message(text):
+            log.info("call %s: the customer asked for %s; the agent speaks it from now on", call_id, LANGUAGES[code][0])
+            state.language = code
+        kind = machine_message(text)
+        if kind == "recorded":
+            end_unreached("no_answer", f"a recorded message answered ({text.strip()[:80]!r}): voicemail, call screening or "
+                                       "the network; to be called again")
+        elif kind == "hold":
+            if state.hold_since is None:
+                state.hold_since = time.monotonic()
+                log.info("call %s: the call is on hold; waiting quietly, hanging up after %.0f s", call_id, HOLD_HANGUP_SECONDS)
+                asyncio.create_task(hang_up_if_still_on_hold(state.hold_since))
+        elif state.hold_since is not None and not heard_nothing(text):
+            log.info("call %s: the customer is back from hold", call_id)
+            state.hold_since = None
 
     def drop_held_reply() -> None:
         """A held-back reply is over: keep it out of the transcript (nobody heard it), but in the log."""
@@ -885,7 +1119,10 @@ async def run_call(
                     if chunk is SILENT_HANGUP:
                         if in_activity:
                             continue   # they started talking after all
-                        if not state.outcome:
+                        if not state.outcome and state.hold_since is not None:
+                            state.outcome = "busy"   # on hold, not lost: rung again later
+                            state.outcome_details = {"outcome": "busy", "notes": "customer put the call on hold; to be called again"}
+                        elif not state.outcome:
                             state.outcome = "unclear"
                             state.outcome_details = {"outcome": "unclear", "notes": "no response on the line"}
                         log.info("call %s: still silent after asking twice; hanging up with no goodbye", call_id)
@@ -916,8 +1153,11 @@ async def run_call(
                         if in_activity:   # a marker left over from before a reconnect has no start
                             in_activity = False
                             log.info("call %s: customer stopped talking at %.1fs", call_id, time.monotonic() - state.started)
-                            if (hint := closing_hint(state)):
-                                log.info("call %s: answer to the why-question; this reply is told to close in one short turn", call_id)
+                            hint = closing_hint(state)
+                            if state.provider == "openai":   # Sarvam adds the language note itself (sarvam_bridge)
+                                hint += language_note(state.language)
+                            if hint:
+                                log.info("call %s: this reply gets its own instructions: %s", call_id, hint.strip()[:90])
                                 session.next_hint = hint
                             await session.send_realtime_input(activity_end=types.ActivityEnd())
                             if meta is not None:   # for the phone line's per-turn timing line
@@ -928,6 +1168,8 @@ async def run_call(
                         # our own speech detection a text turn has to sit inside start/end marks.
                         if state.goodbye_at is not None and chunk is not GOODBYE_NOTE:
                             continue   # the call is over: no "hello ji, meri awaaz aa rahi hai?" after the goodbye
+                        if state.hold_since is not None:
+                            continue   # on hold: no "awaaz aa rahi hai?" into the hold music (call 302)
                         if in_activity:
                             continue   # the customer is mid-sentence; that audio matters more
                         if state.ask_bye_at is not None:
@@ -974,6 +1216,9 @@ async def run_call(
                     if isinstance(chunk, str):
                         # Typed customer reply from the test page (no microphone needed).
                         state.transcript.append({"role": "customer", "text": chunk})
+                        customer_words(chunk)
+                        if state.ended:
+                            return
                         # Text goes on the realtime channel; mixing client_content turns with a
                         # live audio stream makes native-audio models reject the session.
                         await session.send_realtime_input(audio_stream_end=True)
@@ -1027,6 +1272,7 @@ async def run_call(
                                 if not state._in_buf:
                                     log.info("call %s: customer speech detected", call_id)
                                 state.add_input_text(sc.input_transcription.text)
+                                customer_words(state._in_buf)
                                 await send_event({"type": "transcript", "role": "customer",
                                                   "text": sc.input_transcription.text, "partial": True})
                                 if may_hold_back() and not state.noise_told and only_noise(state._in_buf):
@@ -1199,8 +1445,10 @@ async def run_call(
                     opening = "[The line is back again. Do not apologise; carry on from where you stopped.]"
     except Exception as exc:  # noqa: BLE001
         if is_billing_error(exc):
-            log.error("call %s failed: Gemini refused for billing reasons: %s", call_id, exc)
-            state.error = f"Gemini billing: {exc}"
+            # The agent that refused, not always Gemini: on 19 Oct 2026 Sarvam's credits ran out mid-campaign.
+            name = {"sarvam": "Sarvam", "openai": "ChatGPT"}.get(state.provider, "Gemini")
+            log.error("call %s failed: %s refused for billing reasons: %s", call_id, name, exc)
+            state.error = f"{name} billing: {exc}"
         else:
             log.exception("call %s failed", call_id)
             state.error = f"{type(exc).__name__}: {exc}"
@@ -1248,16 +1496,30 @@ async def run_call(
             state.outcome_details = details
             log.info("call %s: no result recorded, but the customer said yes to the main question; saved as %s",
                      call_id, state.outcome)
+        elif not state.outcome and state.coupon and (yes := yes_to_coupon(state.transcript)):
+            # A clear yes to the coupon offer, then the line went before the result was written: they still get it.
+            state.outcome = "wants_coupon"
+            state.outcome_details = {**(state.outcome_details or {}), "outcome": "wants_coupon",
+                                     "coupon_code": state.coupon["code"],
+                                     "notes": f"customer said yes to the coupon ({yes!r}); the call ended before the goodbye"}
+            if (why := probe_answer(state.transcript)[:200]) and not bare_no(why):
+                state.outcome_details["not_interested_reason"] = why
+            log.info("call %s: no result recorded, but the customer said yes to the coupon; saved as wants_coupon", call_id)
         elif not state.outcome and (no := no_to_main_question(state.transcript, state.call_type.main_question)):
             # A clear no, then the line went: a finished call, not a dropped one to ring again (call 139).
             refused = "not_interested" in state.call_type.outcomes
-            state.outcome = "not_interested" if refused else "unclear"
+            # Call 447 (owner, 19 Oct 2026): "nahi, mujhe woh nahi chahiye", then they hung up. A clear ask to cancel an
+            # order is a cancellation, not "unclear".
+            cancels = not refused and "cancelled" in state.call_type.outcomes and asked_to_cancel(state.transcript)
+            state.outcome = "not_interested" if refused else "cancelled" if cancels else "unclear"
             result = f"customer said no ({no!r}) to the main question, then the call ended"
             complaints = [t["text"][:120] for t in state.transcript if t["role"] == "customer" and _COMPLAINT.search(t["text"])]
             if complaints:
                 result += " (customer said: " + " | ".join(complaints[-3:]) + ")"
             state.outcome_details = {**(state.outcome_details or {}), "outcome": state.outcome, "notes": result,
-                                     **({"not_interested_reason": "not given (call ended)"} if refused else {})}
+                                     **({"not_interested_reason": "not given (call ended)"} if refused else {}),
+                                     **({"cancel_reason": probe_answer(state.transcript) or "not given (call ended)"}
+                                        if cancels else {})}
             log.info("call %s: no result recorded, but the customer said no to the main question; saved as %s",
                      call_id, state.outcome)
         elif not state.outcome and state.goodbye_at is not None:
@@ -1276,13 +1538,30 @@ async def run_call(
             result = notes
         notes = str((state.outcome_details or {}).get("notes") or "")
         if state.outcome_details is not None and was_abusive(state.transcript) and "abusive" not in notes:
-            state.outcome_details["notes"] = f"{notes} (customer used abusive language)".strip()
+            state.outcome_details["notes"] = notes = f"{notes} (customer used abusive language)".strip()
+        if state.outcome_details is not None and state.language != "hi-IN":
+            # So the team knows to call this customer in their language (owner, 19 Oct 2026).
+            state.outcome_details["notes"] = f"{notes} (customer asked to talk in {LANGUAGES[state.language][0]})".strip()
         if not result:
             result = (state.outcome or "").replace("_", " ")
             for key in state.call_type.summary_keys:
                 if (state.outcome_details or {}).get(key):
                     result += f": {state.outcome_details[key]}"
                     break
+        if state.outcome == "wants_coupon" and contact:
+            # Owner, 19 Oct 2026: the coupon code and the product go to them by message (messaging.py), to the number
+            # this call rang. Never stops the call being saved.
+            try:
+                code = str((state.outcome_details or {}).get("coupon_code") or "")
+                coupon = state.coupon or (coupons.get_by_code(code) if code else None)
+                message_id = messaging.queue_coupon(contact=contact, coupon=coupon, call_id=call_id,
+                                                    to=str((meta or {}).get("to") or ""), channel=channel) if coupon else None
+                if message_id:
+                    state.outcome_details = {**(state.outcome_details or {}), "message_id": message_id}
+                else:
+                    log.warning("call %s: the customer wants the coupon, but no message was queued", call_id)
+            except Exception:  # noqa: BLE001
+                log.exception("call %s: could not queue the coupon message", call_id)
         db.finish_call(
             call_id,
             outcome=state.outcome,
@@ -1368,7 +1647,7 @@ def classify_unanswered(cause: str) -> tuple[str, str]:
 
 
 async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_event: SendEvent) -> dict[str, Any]:
-    log.info("tool %s %s", name, json.dumps(args, ensure_ascii=False))
+    log.info("call %s: tool %s %s", state.call_id, name, json.dumps(args, ensure_ascii=False))
     if name == "product_info":
         # A lookup records nothing and ends nothing, so it is answered even with a reply to a noise.
         contact = (ACTIVE.get(state.call_id) or {}).get("contact") or {}
@@ -1522,6 +1801,63 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             outcome = "call_later"
             args = {"outcome": outcome, "callback_time": str(args.get("callback_time") or "").strip() or "thodi der baad",
                     "notes": ((args.get("notes") or "") + f" (the person named was not available: {away[:80]})").strip()}
+        if outcome in ("confirmed", "changed") and "cancelled" in state.call_type.outcomes and asked_to_cancel(turns):
+            # Call 403 (owner, 19 Oct 2026): "cancel kar dijiye", then "haan, baad mein kar denge phir" to "order rakhna
+            # chahengi?" was saved as confirmed. Later is not now: that answer keeps the cancellation.
+            at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
+                       and _KEEP_IT.search(turns[i]["text"])), None)
+            after = [] if at is None else [t["text"] for t in turns[at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])]
+            if after and _LATER.search(after[0]) and not any(_KEEPS.search(x) for x in after):
+                goodbye_said = _GOODBYE.search(clean_agent_text(state._out_buf)) is not None or said_goodbye(state.transcript)
+                if not state.later_cancel_refused and not goodbye_said:
+                    state.later_cancel_refused = state.record_pending = True
+                    log.info("call %s: mark_outcome %s refused; asked to cancel, then 'later' (%r)", state.call_id, outcome, after[0])
+                    return {"status": "not recorded", "reason": f"They asked to cancel, and to keeping it they said '{after[0]}': "
+                            "later is not now, so this is a cancellation. Say only: 'theek hai ji, maine aapki cancellation "
+                            "request note kar li hai. dhanyavaad ji, aapka din shubh ho.' Then mark_outcome 'cancelled' with "
+                            "cancel_reason in their words, then end_call."}
+                log.info("call %s: %s taken as cancelled; asked to cancel, then 'later' (%r)", state.call_id, outcome, after[0])
+                outcome = "cancelled"
+                # Their reason: what they said between "koi dikkat hai?" and "order rakhna chahenge?", then the "later".
+                why_at = next((i for i in range(at - 1, -1, -1) if turns[i]["role"] == "agent" and _ASKED_WHY.search(turns[i]["text"])), None)
+                why = " ".join(t["text"] for t in turns[(why_at if why_at is not None else at) + 1:at]
+                               if t["role"] == "customer" and not heard_nothing(t["text"]))
+                args = {**args, "outcome": outcome, "cancel_reason": f"{why} ({after[0]})".strip() if why else after[0],
+                        "notes": ((args.get("notes") or "") + f" (recorded as {args.get('outcome')}, but the customer asked to "
+                                                              f"cancel and then said '{after[0][:60]}'; order not to be sent)").strip()}
+        if (state.coupon and outcome in ("wants_coupon", "not_interested") and not state.offer_wait_refused
+                and offers_coupon(clean_agent_text(state._out_buf))):
+            # The offer and the result in one breath: the customer has not answered the offer yet.
+            state.offer_wait_refused = state.record_pending = True
+            log.info("call %s: mark_outcome %s refused; it came with the coupon offer, still unanswered", state.call_id, outcome)
+            return {"status": "not recorded", "reason": "You have just made the coupon offer and the customer has not "
+                    "answered it yet. Do not say it again and do not end the call: wait for their answer, then call "
+                    "mark_outcome."}
+        if outcome == "wants_coupon":
+            # Owner, 19 Oct 2026: the coupon message goes only to a customer who said yes to the offer itself.
+            offered, yes = coupon_offered(state.transcript), yes_to_coupon(turns)
+            if state.coupon and offered and yes:
+                args = {**args, "coupon_code": state.coupon["code"]}
+                if (why := probe_answer(turns)[:200]) and not bare_no(why):
+                    args["not_interested_reason"] = why   # what stopped them, in their words
+            else:
+                state.coupon_yes_refusals += 1
+                goodbye_said = _GOODBYE.search(clean_agent_text(state._out_buf)) is not None
+                if state.coupon and state.coupon_yes_refusals <= 1 and not goodbye_said:
+                    state.record_pending = True
+                    log.info("call %s: mark_outcome wants_coupon refused; offered: %s, answer: %r",
+                             state.call_id, offered, state.recent_customer_turns(1))
+                    reason = ("The customer has not clearly said yes to the coupon. A no is 'not_interested'. If you could "
+                              "not make out their answer, ask once, in a few words: 'ji, toh kya main woh coupon aapko bhej "
+                              "doon?' and go by it." if offered else
+                              "You have not made the coupon offer, so the customer has not said yes to it. Make it now, "
+                              f"exactly: '{coupon_offer_line(state.coupon)}' and wait for their answer.")
+                    return {"status": "not recorded", "reason": f"{reason} Then call mark_outcome again."}
+                log.info("call %s: mark_outcome wants_coupon taken as unclear; no clear yes to a coupon offer", state.call_id)
+                outcome = "unclear"
+                args = {**args, "outcome": outcome, "notes": ((args.get("notes") or "") +
+                                                              " (recorded as wanting the coupon, but no clear yes to it was "
+                                                              "heard; no message sent)").strip()}
         if outcome == "cancelled":
             said_no = asked_to_cancel(turns)
         elif outcome == "not_ordered":
@@ -1621,6 +1957,23 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                          "Ask once what stopped them (NOT INTERESTED): 'achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?'")
                 return {"status": "not recorded", "reason": "Do not end the call yet: you have asked nothing since the opening. "
                         f"{check} Wait for their answer, then go by it and call mark_outcome again."}
+        if outcome == "not_interested" and state.coupon and not state.coupon_refused:
+            # Owner, 19 Oct 2026: a customer who says no hears the coupon offer once before the goodbye. Not after a
+            # complaint or abuse, and not once the goodbye is out (the customer has heard the call end).
+            heard = turns + [{"role": "agent", "text": clean_agent_text(state._out_buf)}]
+            their_reason = probe_answer(turns) or " ".join(t["text"] for t in turns if t["role"] == "customer")
+            if (not coupon_offered(heard) and not _COMPLAINT.search(their_reason) and not was_abusive(turns)
+                    and _GOODBYE.search(clean_agent_text(state._out_buf)) is None and not said_goodbye(state.transcript)):
+                state.coupon_refused = state.record_pending = True
+                log.info("call %s: mark_outcome not_interested refused; the coupon offer was never made", state.call_id)
+                offer = coupon_offer_line(state.coupon)
+                voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
+                # "say": Sarvam speaks it as given; the others are told to. In another language the agent says it in that.
+                return {"status": "not recorded", **({"say": offer} if state.language == "hi-IN" else {}),
+                        "reason": "Not yet: before the goodbye, make THE OFFER once "
+                        f"(NOT INTERESTED). Say only this, nothing before or after it: '{offer}' Then wait for their answer. "
+                        f"A yes: '{coupon_yes_line(voice)}', mark_outcome 'wants_coupon', end_call. Anything else: "
+                        f"'{CART_NO_CLOSE}', mark_outcome 'not_interested' with their reason, end_call."}
         if outcome == "needs_help" and state.call_type.key == "abandoned_cart" and not state.help_refused:
             # Call 167: "haan ji, main yeh order lena chahti hoon", then a freebie question; the agent asked again,
             # heard "nahi haan ji", and closed as needs_help with no order taken.
@@ -1708,7 +2061,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             # Call 135: the agent took the order (payment, address), then recorded already_ordered. Call 137: the
             # customer answered "kya aapne yahi keychain order kar liya hai?" with a price question, the agent moved
             # on to the address, and took the "haan ji" to THAT as "already ordered". Only a yes to the check counts.
-            took_order = (any(_TAKING_ORDER.search(t["text"]) for t in turns if t["role"] == "agent")
+            took_order = (any(_TAKING_ORDER.search(t["text"]) for t in turns   # the coupon offer names "online payment"
+                              if t["role"] == "agent" and not offers_coupon(t["text"]))
                           or any(_ADDRESS_WORDS.search(q) for q in agent_questions(turns)))
             checked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
                                and any(_ALREADY_CHECK.search(q) for q in agent_questions([turns[i]]))), None)

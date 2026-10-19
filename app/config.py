@@ -401,3 +401,43 @@ PRONUNCIATION = {
     "Lakshmi": "लक्ष्मी",
     "Shiv": "शिव",
 }
+
+
+# --- Coupons, and the messages that carry them (app/coupons.py, app/messaging.py) ---
+# Owner, 19 Oct 2026: a customer who says no on an abandoned-cart call is offered the dashboard's call coupon once,
+# and on their yes the code and their product go to them in a message. Nothing is sent while MESSAGE_PROVIDER is
+# empty: the messages wait on the Coupons page, where a person can send them by hand.
+# The store's own address, for the link in the message when the cart has no link of its own.
+STORE_URL = (os.getenv("STORE_URL") or "https://vedicshop.store").strip().rstrip("/")
+if not STORE_URL.startswith(("http://", "https://")):
+    STORE_URL = "https://" + STORE_URL
+# Who sends them: "whatsapp" (Meta's WhatsApp Cloud API), "plivo_sms", "webhook" (another system sends them), or ""
+# (nobody yet).
+MESSAGE_PROVIDER = os.getenv("MESSAGE_PROVIDER", "").strip().lower()
+# The SMS sender (a number, or the sender id registered on DLT); empty = PLIVO_FROM_NUMBER.
+MESSAGE_FROM_NUMBER = os.getenv("MESSAGE_FROM_NUMBER", "").strip()
+# A message still waiting when the service is ready goes out on its own only while it is younger than this; an
+# older one is held for a person to decide (the customer agreed to it on a call long before).
+MESSAGE_MAX_AGE_HOURS = float(os.getenv("MESSAGE_MAX_AGE_HOURS", "24"))
+# Tries for one message while the service is down, busy or slow to answer; then it is marked failed.
+MESSAGE_RETRIES = max(1, int(os.getenv("MESSAGE_RETRIES", "3")))
+# The SMS text, word for word as registered on DLT, with {name}, {product}, {offer}, {code}, {link}, {store}...;
+# empty = messaging.DEFAULT_SMS_TEMPLATE.
+MESSAGE_SMS_TEMPLATE = os.getenv("MESSAGE_SMS_TEMPLATE", "").strip()
+# WhatsApp Cloud API: a permanent token and the sending number's id (Meta app > WhatsApp > API setup).
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+# A template approved by Meta. Without one, only a customer who wrote to us in the last 24 hours can get the message.
+WHATSAPP_TEMPLATE = os.getenv("WHATSAPP_TEMPLATE", "").strip()
+WHATSAPP_TEMPLATE_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en").strip()
+# What fills the template's {{1}}, {{2}}..., in that order (names from messaging.PLACEHOLDERS).
+WHATSAPP_TEMPLATE_PARAMS = [p.strip().lower() for p in os.getenv("WHATSAPP_TEMPLATE_PARAMS", "name,product,offer,code,link").split(",")
+                            if p.strip()]
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip()
+# Plivo SMS to Indian numbers: the DLT registration the text was approved under.
+PLIVO_DLT_ENTITY_ID = os.getenv("PLIVO_DLT_ENTITY_ID", "").strip()
+PLIVO_DLT_TEMPLATE_ID = os.getenv("PLIVO_DLT_TEMPLATE_ID", "").strip()
+PLIVO_DLT_TEMPLATE_CATEGORY = os.getenv("PLIVO_DLT_TEMPLATE_CATEGORY", "").strip()
+# Another system sends the messages: each one is POSTed here as JSON, with "Authorization: Bearer <token>" when set.
+MESSAGE_WEBHOOK_URL = os.getenv("MESSAGE_WEBHOOK_URL", "").strip()
+MESSAGE_WEBHOOK_TOKEN = os.getenv("MESSAGE_WEBHOOK_TOKEN", "").strip()

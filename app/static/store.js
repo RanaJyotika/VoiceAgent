@@ -24,7 +24,7 @@
   // The small line under a card's number. q: the day's limit on new orders (store_orders.quota).
   const NOTE = {
     left: (c, q) => c.calling ? `${c.calling} on a call now`
-      : q && q.limit ? (q.room ? `${q.room} more today · limit ${q.limit} a day` : `today's ${q.limit} done`) : 'not called yet',
+      : q && q.limit ? (q.room ? `${q.room} more today · limit ${q.limit} a day` : `batch of ${q.limit} done`) : 'not called yet',
     called: (c) => [c.confirmed && `${c.confirmed} confirmed`, c.cancelled && `${c.cancelled} cancelled`, c.review && `${c.review} need a look`].filter(Boolean).join(' · ') || 'none yet',
     no_pick: () => 'tried again later', busy: () => 'tried again later', scheduled: () => 'call booked for later',
     all: (c) => { const n = (c.not_calling || 0) + (c.not_picked || 0) + (c.too_late || 0); return n ? `${n} not being called` : ''; },
@@ -197,11 +197,12 @@
     el('so-settings-btn').setAttribute('aria-expanded', String(show));
   };
   let source = null;   // /api/store: since when orders are read, the give-up hours, the day's limit
-  const limitText = (q) => q && q.limit ? `at most ${q.limit} a day, from that day's orders, ${PICK_TEXT[q.pick] || q.pick} (${q.picked_today} called today)` : '';
+  const daysText = (q) => (q && q.days_label ? q.days_label : 'Any waiting order').toLowerCase();
+  const limitText = (q) => q && q.limit ? `at most ${q.limit} a day, from ${daysText(q)}, ${PICK_TEXT[q.pick] || q.pick} (${q.picked_today} in this batch)` : '';
   const rules = () => {
     if (!source || !source.since) return '';
     const q = source.quota || {};
-    const which = q.limit ? limitText(q) : (PICK_TEXT[q.pick] || 'newest first');
+    const which = q.limit ? limitText(q) : `${daysText(q)}, ${PICK_TEXT[q.pick] || 'newest first'}`;
     return ` <span class="hint">Calls only orders placed after ${esc(when(source.since))}, ${esc(which)}. An order not called within ${source.settings.order_max_hours} h is dropped.</span>`;
   };
   async function loadBar() {
@@ -232,13 +233,15 @@
         el('store-max').value = s.settings.order_max_hours;
         el('store-limit').value = s.settings.order_daily_limit ?? 0;
         el('store-pick').value = s.settings.order_pick || 'newest';
+        el('store-days').value = s.settings.order_days || 'all';
       }
       el('store-badge').innerHTML = !s.enabled ? '<span class="badge warning"><span class="dot"></span>Not connected</span>'
         : s.error ? '<span class="badge critical"><span class="dot"></span>Cannot read</span>' : '<span class="badge good"><span class="dot"></span>Reading</span>';
       el('store-sub').textContent = s.enabled ? `checked ${ago(s.last_check)}` : 'Add MONGODB_URI to .env and restart.';
       const q = s.quota || {};
       el('store-counts').textContent = [s.since ? `New orders are added from ${when(s.since)}.` : '',
-        q.limit ? `Automatic calling rings ${limitText(q)}; the rest are not called.` : ''].filter(Boolean).join(' ');
+        q.limit ? `Automatic calling rings ${limitText(q)}; the rest are not called.`
+          : `Automatic calling rings ${daysText(q)}, ${PICK_TEXT[q.pick] || 'newest first'}, with no daily limit.`].filter(Boolean).join(' ');
       el('store-warn').hidden = !s.error;
       el('store-warn').textContent = s.error ? `The database could not be read: ${s.error}` : '';
     } catch (e) { /* server away */ }
@@ -246,13 +249,82 @@
   el('store-save').onclick = async () => {
     const r = await fetch('/api/shopify/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ orders: el('store-orders').value, order_wait_minutes: el('store-wait').value, order_max_hours: el('store-max').value,
-        order_daily_limit: el('store-limit').value, order_pick: el('store-pick').value }) });
+        order_daily_limit: el('store-limit').value, order_pick: el('store-pick').value, order_days: el('store-days').value }) });
     window.toast(r.ok ? 'Saved.' : 'Could not save.');
     loadSource().then(loadBar);
     load();
   };
 
-  window.loadStore = () => { load(); loadSource().then(loadBar); };
+  // "Don't call orders that are...": switches, any number on at once (owner, 19 Oct 2026). Each one takes effect at
+  // once, and turning one off puts its orders back in the queue (store_orders.SKIP_RULES).
+  const skipBox = document.createElement('div');
+  skipBox.innerHTML = `<div class="hint" style="margin-bottom:6px"><b>Don't call orders that are</b> (tap to switch; any number at once)</div>
+    <div class="chips" id="store-skip" role="group" aria-label="Don't call orders that are"></div>
+    <div class="hint" id="store-skip-hint" style="margin:-4px 0 10px"></div>`;
+  el('store-counts').before(skipBox);
+  let skip = null;
+  const CHECK = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  function renderSkip() {
+    el('store-skip').innerHTML = skip.rules.map((r) =>
+      `<button type="button" data-skip="${esc(r.key)}" aria-pressed="${r.on}">${r.on ? CHECK : ''}${esc(r.label)}</button>`).join('');
+    const on = skip.rules.filter((r) => r.on).length;
+    el('store-skip-hint').textContent = on
+      ? `${skip.not_calling.toLocaleString('en-IN')} waiting order${skip.not_calling === 1 ? '' : 's'} not being called because of these. They show as "No call" with the reason.`
+      : 'All switches off: every order on the list gets a call.';
+  }
+  async function loadSkip() {
+    try { skip = await fetch('/api/store/skip').then(json); renderSkip(); } catch (e) { /* server away */ }
+  }
+  el('store-skip').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-skip]');
+    if (!b || !skip) return;
+    const on = skip.rules.filter((r) => (r.key === b.dataset.skip ? !r.on : r.on)).map((r) => r.key);
+    b.disabled = true;
+    try {
+      skip = await fetch('/api/store/skip', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).then(json);
+      renderSkip();
+      const c = skip.changed;
+      window.toast(c && (c.skipped || c.back) ? `Saved. ${c.skipped} order(s) taken off the queue, ${c.back} put back.` : 'Saved.');
+      load();
+    } catch (err) { window.toast(err.message); b.disabled = false; }
+  });
+
+  // ---------------- batches: each batch of automatic calling, what it reached and what it cost (owner, 19 Oct 2026) ----------------
+  const rs = (n) => n == null ? '—' : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const batchDay = (b) => new Date(`${b.day}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  async function loadBatches() {
+    let d;
+    try { d = await fetch('/api/store/batches').then(json); } catch (e) { return; }
+    const c = d.current || {};
+    el('so-batch-now').textContent = c.id
+      ? `Now: batch ${c.id}, ${c.picked} called${c.limit ? ` of ${c.limit} (${c.room} left)` : ' (no daily limit)'}, since ${when(c.started_at)}`
+      : 'The next batch starts with the next order automatic calling rings.';
+    // A day can hold several batches; number them within the day for the team ("19 Oct · 2").
+    const perDay = {};
+    for (const b of [...d.batches].reverse()) b.n = (perDay[b.day] = (perDay[b.day] || 0) + 1);
+    el('so-batch-empty').hidden = d.batches.length > 0;
+    el('so-batch-rows').innerHTML = d.batches.map((b) => `<tr>
+      <td><b>${esc(batchDay(b))}${b.n > 1 ? ` · ${b.n}` : ''}</b><br><small>${esc(when(b.started_at))}${b.size ? ` · limit ${b.size}` : ''}</small></td>
+      <td class="num">${b.orders}<br><small>${b.calls} call${b.calls === 1 ? '' : 's'}</small></td>
+      <td class="num">${b.answered}</td>
+      <td class="num">${b.confirmed}</td>
+      <td class="num">${b.cancelled}</td>
+      <td class="num">${b.not_reached}</td>
+      <td class="num" title="Picked up, then the call ended before an answer">${b.hung_up}</td>
+      <td class="num" title="Call back later, still waiting, or needs a look">${b.call_later + b.waiting + b.other}</td>
+      <td class="num">${b.minutes} min</td>
+      <td class="num"><b>${rs(b.cost_rs)}</b></td>
+      <td class="num">${rs(b.per_order_rs)}</td>
+      <td class="num">${rs(b.per_confirmed_rs)}</td>
+    </tr>`).join('');
+  }
+  el('so-batch-new').addEventListener('click', async () => {
+    if (!confirm('Start a new batch now? The next orders automatic calling rings count as a new batch, and the "Calls a day" number counts afresh from now.')) return;
+    try { await post('/api/store/batches/new'); window.toast('New batch started.'); loadSource().then(loadBar); loadBatches(); }
+    catch (e) { window.toast(e.message); }
+  });
+
+  window.loadStore = () => { load(); loadSource().then(loadBar); loadSkip(); loadBatches(); };
   setRange('today');
   window.loadStore();
   setInterval(() => { if (onPage() && !document.querySelector('#so-drawer textarea:focus, #so-drawer input:focus')) window.loadStore(); }, 10000);

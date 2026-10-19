@@ -21,7 +21,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
-from . import catalog, db, fillers, line_audio, vad, voiceprint
+from . import catalog, coupons, db, fillers, line_audio, vad, voiceprint
 from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, FILLER_DELAY_MS, FILLER_LATE_MS,
                      FILLER_MAX_PER_CALL, FILLER_MIN_VOICE_MS, FILLER_SLOW_MS, NOISE_SUPPRESSION, VOICEPRINT,
                      VOICEPRINT_CALLER, VOICEPRINT_OTHER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
@@ -942,6 +942,8 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
     contact = with_language(contact, language)
     # The order and its products, fresh from the main database (at most a few seconds; never stops the call).
     contact = await catalog.enrich(contact)
+    # The coupon an abandoned-cart call may offer, fixed for the whole call (coupons.py; owner, 19 Oct 2026).
+    contact = coupons.attach(contact)
     # Number typed on the screen wins; otherwise the number from the Excel row.
     to_number = normalise_phone(to) or normalise_phone(contact.get("phone", ""))
     if DIAL_ONLY_MY_NUMBER:
