@@ -16,7 +16,6 @@ Tags, worked out per order:
 - Has a question: the last call ended with something only the team can answer.
 """
 import asyncio
-import csv
 import io
 import logging
 import re
@@ -25,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
 from . import catalog, db, shopify, store_orders
 from .config import MONGODB_DB
@@ -123,7 +124,8 @@ async def _store_side(names: list[str]) -> dict[str, dict]:
             async for o in _db()[store_orders.STATUS_COLLECTION].find(
                     {"name": {"$in": names[i:i + 2000]}},
                     {"name": 1, "tags": 1, "shopifyGroupedStatus": 1, "deliveryStatus": 1, "courier": 1, "trackingNumber": 1,
-                     "cancelledAt": 1, "fulfillmentStatus": 1, "deliveredAt": 1, "shopifyCreatedAt": 1}):
+                     "cancelledAt": 1, "fulfillmentStatus": 1, "deliveredAt": 1, "shopifyCreatedAt": 1,
+                     "customerId": 1, "shopifyId": 1, "lineItems": 1}):   # the last three for the export
                 out[o["name"]] = o
         return out
     return await _cached(("store", hash(tuple(names))), 60, make)
@@ -153,6 +155,7 @@ def _our_side(names: list[str]) -> tuple[dict[str, dict], dict[int, dict]]:
             for r in conn.execute(f"SELECT * FROM contacts WHERE order_id IN ({','.join('?' for _ in chunk)}) ORDER BY id", chunk):
                 contacts[r["order_id"]] = dict(r)
         ids = [c["id"] for c in contacts.values()]
+        by_id = {c["id"]: c for c in contacts.values()}
         calls: dict[int, dict] = {}
         for i in range(0, len(ids), 900):
             chunk = ids[i:i + 900]
@@ -160,6 +163,11 @@ def _our_side(names: list[str]) -> tuple[dict[str, dict], dict[int, dict]]:
                     f"SELECT id, contact_id, started_at, duration_sec, outcome, outcome_details FROM calls "
                     f"WHERE contact_id IN ({','.join('?' for _ in chunk)}) ORDER BY id", chunk):
                 calls[r["contact_id"]] = dict(r)
+            # The tag our code last wrote on the order in Shopify (shopify.sync_results), for the export.
+            for r in conn.execute(f"SELECT contact_id, synced_status FROM shopify_links "
+                                  f"WHERE contact_id IN ({','.join('?' for _ in chunk)})", chunk):
+                if r["contact_id"] in by_id:
+                    by_id[r["contact_id"]]["synced_status"] = r["synced_status"]
     return contacts, calls
 
 
@@ -222,13 +230,17 @@ def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict, quota
     if call and call.get("outcome") == "needs_help":
         tags.append({"label": "Has a question", "tone": "serious"})
     items = []
+    rich_items = {str(li.get("title") or ""): li for li in s.get("lineItems") or [] if isinstance(li, dict)}
     for li in o.get("lineItems") or []:
         if not isinstance(li, dict) or not li.get("title"):
             continue
         p = catalog.STATE["by_title"].get(catalog._key(li["title"]))
         variant = str(li.get("variant_title") or "").strip()
+        rich = rich_items.get(str(li["title"])) or {}
         items.append({"title": li["title"], "variant": "" if variant.lower() == "default title" else variant,
-                      "qty": int(li.get("quantity") or 1), "image": (p or {}).get("image", "")})
+                      "qty": int(li.get("quantity") or 1), "image": (p or {}).get("image", ""),
+                      "price": shopify._money(li.get("price") if li.get("price") is not None else rich.get("price")),
+                      "sku": str(rich.get("sku") or li.get("sku") or "")})
     state = _state(contact, payment != "Prepaid", quota)
     label, tone = STATES[state]
     if state == "not_calling" and contact and contact.get("status") == store_orders.SKIPPED:
@@ -248,6 +260,12 @@ def _row(o: dict, store: dict, history: dict, contacts: dict, calls: dict, quota
         "result": (contact or {}).get("last_result") or "", "next_try_at": (contact or {}).get("next_try_at"),
         "last_call": {"id": call["id"], "at": call["started_at"], "seconds": round(call.get("duration_sec") or 0)} if call else None,
         "delivery": s.get("shopifyGroupedStatus") or "",
+        # For the export (owner, 19 Oct 2026): ids, every tag of the store's, ours apart, and the tag written to Shopify.
+        "customer_id": str(s.get("customerId") or ""), "shopify_id": str(s.get("shopifyId") or o.get("shopifyOrderId") or ""),
+        "email": str(o.get("email") or ""), "store_tags": [str(t) for t in s.get("tags") or []],
+        "our_tags": [t["label"] for t in tags if t["label"] not in {TAG_LABELS.get(x, x) for x in STORE_TAGS}],
+        "voice_tag": ", ".join(("voice-call", shopify._tag(contact["status"]))) if contact and contact.get("status") in db.FINAL_STATUSES else "",
+        "voice_tag_written": bool(contact and contact.get("synced_status") and contact.get("synced_status") == contact.get("status")),
     }
 
 
@@ -307,19 +325,63 @@ async def orders(day_from: str, day_to: str, tab: str = "all", q: str = "", tag:
 
 @router.get("/api/orders/export")
 async def export(day_from: str, day_to: str, tab: str = "all", q: str = "", tag: str = "", payment: str = "") -> Response:
+    """The orders on the page, as filtered, in an Excel file (owner, 19 Oct 2026): one sheet of orders with the customer
+    id, products and prices, the store's tags, our tags and the tag our code writes to Shopify; one sheet of products."""
     rows = [r for r in await _rows(day_from, day_to) if _in_view(r, tab) and _matches(r, q.strip(), tag, payment)]
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(["Order", "Placed", "Customer", "Phone", "Products", "Amount", "Payment", "Tags", "Call status", "Tries",
-                "Result", "Delivery"])
+    wb = Workbook()
+    orders = wb.active
+    orders.title = "Orders"
+    orders.append(["Order", "Shopify order id", "Placed", "Customer id", "Customer", "Phone", "Email", "Products", "Items",
+                   "Amount (Rs)", "Payment", "Store tags", "Our tags", "Voice tag in Shopify", "Voice tag written",
+                   "Call status", "Tries", "Last call", "Result", "Delivery"])
+    items = wb.create_sheet("Items")
+    items.append(["Order", "Customer id", "Customer", "Phone", "Product", "Variant", "SKU", "Qty", "Unit price (Rs)",
+                  "Line total (Rs)", "Order amount (Rs)", "Payment", "Call status"])
     for r in rows:
-        placed = datetime.fromisoformat(r["created_at"]).astimezone(IST).strftime("%d %b %Y %H:%M") if r["created_at"] else ""
-        w.writerow([r["name"], placed, r["customer"], r["phone"],
-                    "; ".join(f"{i['title']}{' (' + i['variant'] + ')' if i['variant'] else ''} x{i['qty']}" for i in r["items"]),
-                    r["amount"], r["payment"], ", ".join(t["label"] for t in r["tags"]), r["state_label"], r["attempts"],
-                    r["result"], r["delivery"]])
-    return Response("﻿" + out.getvalue(), media_type="text/csv",
-                    headers={"Content-Disposition": f"attachment; filename=store_orders_{day_from}_to_{day_to}.csv"})
+        placed = _ist(r["created_at"])
+        products = "; ".join(f"{i['title']}{' (' + i['variant'] + ')' if i['variant'] else ''} x{i['qty']}"
+                             + (f" @ Rs {i['price']}" if i.get("price") else "") for i in r["items"])
+        orders.append([r["name"], r["shopify_id"], placed, r["customer_id"], r["customer"], _phone(r["phone"]), r["email"],
+                       products, sum(i["qty"] for i in r["items"]), _num(r["amount"]), r["payment"],
+                       ", ".join(r["store_tags"]), ", ".join(r["our_tags"]), r["voice_tag"],
+                       ("yes" if r["voice_tag_written"] else "not yet") if r["voice_tag"] else "",
+                       r["state_label"], r["attempts"], _ist((r["last_call"] or {}).get("at")), r["result"], r["delivery"]])
+        for i in r["items"]:
+            price = _num(i.get("price"))
+            items.append([r["name"], r["customer_id"], r["customer"], _phone(r["phone"]), i["title"], i["variant"], i.get("sku", ""),
+                          i["qty"], price, round(price * i["qty"], 2) if isinstance(price, (int, float)) else "",
+                          _num(r["amount"]), r["payment"], r["state_label"]])
+    for ws in (orders, items):
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or "")) for c in col) + 2, 60)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=store_orders_{day_from}_to_{day_to}.xlsx"})
+
+
+def _ist(iso) -> str:
+    try:
+        return datetime.fromisoformat(str(iso)).astimezone(IST).strftime("%d %b %Y %H:%M") if iso else ""
+    except ValueError:
+        return str(iso)
+
+
+def _num(value):
+    """A money value as a number Excel can add up; the text as it is when it is not one."""
+    try:
+        f = float(str(value).replace(",", ""))
+        return int(f) if f.is_integer() else f
+    except (TypeError, ValueError):
+        return value or ""
+
+
+def _phone(last10: str) -> str:
+    return f"+91 {last10}" if last10 else ""
 
 
 async def _find(name: str) -> dict:
