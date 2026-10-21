@@ -16,13 +16,14 @@ import asyncio
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 
-from . import db
+from . import db, usage
 from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
                      STALE_PAGE, VOICES, plivo_missing)
+from .call_types import missing_facts
 from .db import IST
 from .plivo_bridge import PENDING, place_call
 from .prompts import LANGUAGES
@@ -66,6 +67,7 @@ class Settings:
     end_hour: int = 19             # exclusive end: 19 means calls stop at 7 pm
     limit: int = 0                 # stop after this many calls this run (0 = whole list)
     budget_rs: int = 0             # pause when today's estimated cost (all calls) reaches this (0 = no cap)
+    days: str = "0123456"          # weekdays calls may be placed on, Monday = 0 (owner, 21 Oct 2026: e.g. Mon to Sat)
 
 
 @dataclass
@@ -96,6 +98,7 @@ class Campaign:
             "started_at": self.started_at,
             "calls_made": self.calls_made, "settings": asdict(saved), "in_progress": len(PENDING),
             "within_hours": within_hours(saved), "now_ist": datetime.now(IST).strftime("%H:%M"),
+            "waiting": "" if within_hours(saved) else waiting_text(saved),
             "dial_only_my_number": DIAL_ONLY_MY_NUMBER, "my_number": PHONE_NUMBER if DIAL_ONLY_MY_NUMBER else "",
             "max_concurrent_allowed": MAX_CONCURRENT_CALLS,
             **counts,
@@ -112,8 +115,43 @@ def past_last_date(camp: dict | None) -> bool:
 
 
 def within_hours(s: Settings) -> bool:
-    hour = datetime.now(IST).hour
-    return s.start_hour <= hour < s.end_hour
+    """Inside the calling window, on one of the calling days (Indian time)."""
+    now = datetime.now(IST)
+    return s.start_hour <= now.hour < s.end_hour and str(now.weekday()) in (s.days or "0123456")
+
+
+DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def days_text(days: str) -> str:
+    """"0123456" -> "every day"; "01234" -> "Mon to Fri"; "0" -> "Mon"."""
+    on = sorted(int(d) for d in set(days or "0123456"))
+    if len(on) == 7:
+        return "every day"
+    if len(on) > 2 and on == list(range(on[0], on[-1] + 1)):
+        return f"{DAY_LABELS[on[0]]} to {DAY_LABELS[on[-1]]}"
+    return ", ".join(DAY_LABELS[d] for d in on)
+
+
+def next_window(s: Settings) -> datetime | None:
+    """When calling may next happen under the window and days (now, if inside them). Indian time."""
+    now = datetime.now(IST)
+    if within_hours(s):
+        return now
+    for add in range(8):
+        at = (now + timedelta(days=add)).replace(hour=s.start_hour, minute=0, second=0, microsecond=0)
+        if at > now and str(at.weekday()) in (s.days or "0123456"):
+            return at
+    return None
+
+
+def waiting_text(s: Settings) -> str:
+    """Why a running campaign places no call right now, and when the first one goes."""
+    nxt = next_window(s)
+    when = nxt.strftime("%a %d %b at %H:%M") if nxt else "never (no calling day is set)"
+    days = days_text(s.days)
+    return (f"Waiting: this campaign calls {'' if days == 'every day' else 'only '}{days}, {s.start_hour:02d}:00 to {s.end_hour:02d}:00 IST. "
+            f"It is {datetime.now(IST):%a %H:%M} now, so the next call goes {when}.")
 
 
 async def _run() -> None:
@@ -137,12 +175,19 @@ async def _run() -> None:
             if past_last_date(db.get_campaign(s.campaign_id)):
                 c.reason = "finished: the campaign's last calling day has passed"
                 break
+            if (over := usage.limit_reached()):
+                c.reason = f"paused: {over}"
+                break
             if not within_hours(s):
+                # Shown on the campaign page (owner, 21 Oct 2026: a run "started immediately" waited silently for Monday).
+                c.reason = waiting_text(s)
                 if not waiting_logged:
-                    log.info("campaign waiting: outside calling hours (%02d:00 to %02d:00 IST)", s.start_hour, s.end_hour)
+                    log.info("campaign waiting: calls only %s, %02d:00 to %02d:00 IST", days_text(s.days), s.start_hour, s.end_hour)
                     waiting_logged = True
                 await asyncio.sleep(30)
                 continue
+            if waiting_logged:
+                c.reason = ""
             waiting_logged = False
             if lines_in_use() >= s.max_concurrent:
                 await asyncio.sleep(1)
@@ -181,7 +226,7 @@ async def _run() -> None:
             w.add_done_callback(c.watchers.discard)
             await asyncio.sleep(GAP_SECONDS)
     except asyncio.CancelledError:
-        c.reason = c.reason or "stopped by you"
+        c.reason = "stopped by you" if not c.reason or c.reason.startswith("Waiting") else c.reason
     finally:
         c.running = False
         c.task = None
@@ -214,6 +259,31 @@ async def _after_call(pc, contact: dict, c: Campaign = CAMPAIGN) -> None:
             log.info("campaign: contact %s %s after %s attempts; giving up", contact["id"], outcome, attempts)
 
 
+def clean_settings(body: dict, campaign_id: int = 0) -> Settings:
+    """A campaign's run settings from the dashboard, each kept inside its limits. Used by Start, and by the new
+    dashboard's campaign wizard, which saves them on the campaign before it ever runs."""
+    try:
+        s = Settings(
+            campaign_id=campaign_id,
+            voice=body.get("voice") if body.get("voice") in VOICES else GEMINI_VOICE,
+            model=body.get("model") if body.get("model") in OFFERED_MODELS else OFFERED_MODELS[0],
+            language=body.get("language") if body.get("language") in LANGUAGES else "hinglish",
+            max_concurrent=max(1, min(MAX_CONCURRENT_CALLS, int(body.get("max_concurrent") or 1))),
+            max_attempts=max(1, min(6, int(body.get("max_attempts") or 3))),
+            retry_minutes=max(1, min(24 * 60, int(body.get("retry_minutes") or 30))),
+            start_hour=max(0, min(23, int(body.get("start_hour") or 10))),
+            end_hour=max(1, min(24, int(body.get("end_hour") or 19))),
+            limit=max(0, int(body.get("limit") or 0)),
+            budget_rs=max(0, int(body.get("budget_rs") or 0)),
+            days="".join(d for d in "0123456" if d in str(body.get("days") or "0123456")) or "0123456",
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Settings must be whole numbers.")
+    if s.end_hour <= s.start_hour:
+        raise HTTPException(400, "Calling hours: the end must be after the start.")
+    return s
+
+
 @router.get("/api/campaign")
 async def campaign_status(campaign_id: int | None = None) -> dict:
     return CAMPAIGN.snapshot(campaign_id)
@@ -222,34 +292,28 @@ async def campaign_status(campaign_id: int | None = None) -> dict:
 @router.post("/api/campaign/start")
 async def campaign_start(body: dict) -> dict:
     """Start (or resume) calling the list. Every call is a real, paid phone call."""
-    c = CAMPAIGN
     if str(body.get("build") or "") != PAGE_BUILD:
         raise HTTPException(409, STALE_PAGE)
-    if c.running:
-        raise HTTPException(400, "A campaign is already running. Stop it first; one campaign calls at a time.")
     camp = db.get_campaign(int(body.get("campaign_id") or 0))
     if not camp:
         raise HTTPException(400, "Pick a campaign to start.")
+    return begin(camp, clean_settings(body, camp["id"]))
+
+
+def begin(camp: dict, s: Settings) -> dict:
+    """Start calling a campaign, by the Start button or at its scheduled time: every check, then the run."""
+    c = CAMPAIGN
+    if c.running:
+        raise HTTPException(400, "A campaign is already running. Stop it first; one campaign calls at a time.")
     if past_last_date(camp):
         raise HTTPException(400, "This campaign's last calling day has passed. Change it on the campaign to call again.")
+    if missing_facts(camp):
+        raise HTTPException(400, "Fill in the campaign details first (Edit details): " + ", ".join(missing_facts(camp)))
     missing = plivo_missing()
     if missing:
         raise HTTPException(400, f"Phone line not ready. Missing: {', '.join(missing)}")
-    s = Settings(
-        campaign_id=camp["id"],
-        voice=body.get("voice") if body.get("voice") in VOICES else GEMINI_VOICE,
-        model=body.get("model") if body.get("model") in OFFERED_MODELS else OFFERED_MODELS[0],
-        language=body.get("language") if body.get("language") in LANGUAGES else "hinglish",
-        max_concurrent=max(1, min(MAX_CONCURRENT_CALLS, int(body.get("max_concurrent") or 1))),
-        max_attempts=max(1, min(6, int(body.get("max_attempts") or 3))),
-        retry_minutes=max(1, min(24 * 60, int(body.get("retry_minutes") or 30))),
-        start_hour=max(0, min(23, int(body.get("start_hour") or 10))),
-        end_hour=max(1, min(24, int(body.get("end_hour") or 19))),
-        limit=max(0, int(body.get("limit") or 0)),
-        budget_rs=max(0, int(body.get("budget_rs") or 0)),
-    )
-    if s.end_hour <= s.start_hour:
-        raise HTTPException(400, "Calling hours: the end must be after the start.")
+    if (over := usage.limit_reached()):
+        raise HTTPException(400, f"Budget limit reached: {over}.")
     counts = db.contact_counts(s.max_attempts, s.campaign_id)
     if not counts["to_call"]:
         raise HTTPException(400, "Nobody to call: every contact is done. Re-queue some contacts or upload a new sheet.")
@@ -258,7 +322,80 @@ async def campaign_start(body: dict) -> dict:
     c.running, c.reason, c.calls_made, c.errors_in_a_row = True, "", 0, 0
     c.started_at = db.now_iso()
     c.task = asyncio.create_task(_run())
+    db.update_campaign(s.campaign_id, start_at=None)   # a scheduled start is used up by any start
     return c.snapshot()
+
+
+# --- scheduled starts (owner, 21 Oct 2026: "Start: Immediately or Schedule") -------------------------------------
+SCHEDULE_TICK = 20                 # seconds between looks at the scheduled campaigns
+SCHEDULE_GRACE = 60 * 60           # a start missed by more than this (server off) is not made late: it is marked missed
+
+
+def _when(iso: str) -> str:
+    return datetime.fromisoformat(iso).astimezone(IST).strftime("%d %b %H:%M")
+
+
+def run_due_schedules() -> None:
+    """Start every campaign whose scheduled time has come, with the settings saved on it. One campaign calls at a time:
+    a start that finds another one calling waits (up to SCHEDULE_GRACE). Never a start long after the time set."""
+    now = datetime.now(IST)
+    for camp in db.list_campaigns():
+        at = camp.get("start_at")
+        if not at:
+            continue
+        due = datetime.fromisoformat(at)
+        if due > now:
+            continue
+        if (now - due).total_seconds() > SCHEDULE_GRACE:
+            db.update_campaign(camp["id"], start_at=None,
+                               start_note=f"missed: it was due {_when(at)}, but the server was off or another campaign was calling")
+            log.warning("scheduled start of campaign %s missed (due %s)", camp["id"], at)
+            continue
+        if CAMPAIGN.running:
+            continue   # one campaign calls at a time: try again on the next tick
+        saved = {**asdict(Settings()), **(camp.get("settings") or {})}
+        try:
+            begin(camp, clean_settings(saved, camp["id"]))
+        except HTTPException as exc:
+            db.update_campaign(camp["id"], start_at=None, start_note=f"not started at {_when(at)}: {exc.detail}")
+            log.warning("scheduled start of campaign %s refused: %s", camp["id"], exc.detail)
+            continue
+        db.update_campaign(camp["id"], start_note=f"started by its schedule at {datetime.now(IST).strftime('%d %b %H:%M')}")
+        log.info("campaign %s started by its schedule (due %s)", camp["id"], at)
+
+
+async def schedule_worker() -> None:
+    """Runs for as long as the server does."""
+    while True:
+        try:
+            run_due_schedules()
+        except Exception:  # noqa: BLE001
+            log.exception("scheduled starts: check failed")
+        await asyncio.sleep(SCHEDULE_TICK)
+
+
+@router.post("/api/campaigns/{campaign_id}/schedule")
+async def schedule_campaign(campaign_id: int, body: dict) -> dict:
+    """{"at": "2026-10-22T10:00"} (Indian time) makes the campaign start calling by itself then; {"at": null} cancels.
+    Starting then is a real start: real, paid calls, with the settings saved on the campaign."""
+    camp = db.get_campaign(campaign_id)
+    if not camp:
+        raise HTTPException(404, "No such campaign.")
+    raw = str(body.get("at") or "").strip()
+    if not raw:
+        db.update_campaign(campaign_id, start_at=None, start_note=None)
+        return {"start_at": None}
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(400, "The start time must look like 2026-10-22T10:00.")
+    when = when.replace(tzinfo=IST) if when.tzinfo is None else when.astimezone(IST)
+    if when <= datetime.now(IST):
+        raise HTTPException(400, "Pick a start time in the future.")
+    if missing_facts(camp):
+        raise HTTPException(400, "Fill in the campaign details first: " + ", ".join(missing_facts(camp)))
+    db.update_campaign(campaign_id, start_at=when.isoformat(), start_note=None)
+    return {"start_at": when.isoformat()}
 
 
 @router.post("/api/campaign/stop")
@@ -302,6 +439,19 @@ async def give_up_contact(contact_id: int) -> dict:
         raise HTTPException(404, "contact not found")
     db.give_up(contact_id)
     return {"ok": True}
+
+
+@router.post("/api/callbacks/giveup")
+async def give_up_many(body: dict) -> dict:
+    """Give up on several people of the call back list at once ({"ids": [...]}): each leaves the list for Needs review.
+    Only contacts still waiting for a call back are touched; a contact that has moved on since is left alone."""
+    ids = {int(i) for i in body.get("ids") or [] if str(i).isdigit()}
+    waiting = {c["id"] for c in db.callbacks()}
+    done = 0
+    for contact_id in ids & waiting:
+        db.give_up(contact_id)
+        done += 1
+    return {"given_up": done}
 
 
 @router.post("/api/contacts/requeue")

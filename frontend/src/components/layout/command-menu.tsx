@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeft, Search } from "lucide-react";
+import { CornerDownLeft, Phone, Search, type LucideIcon } from "lucide-react";
+import { useMakeCall } from "@/components/make-call/make-call-provider";
 import { NAV_ITEMS } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-/** Ctrl/⌘ K: type to jump to any page. */
+type Entry = { label: string; icon: LucideIcon; keywords?: string; run: () => void };
+
+/** Ctrl/⌘ K: type to jump to any page, or start a call. */
 export function CommandMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
   return <Menu onClose={onClose} />;
@@ -18,10 +21,22 @@ function Menu({ onClose }: { onClose: () => void }) {
   const [sel, setSel] = useState(0);
   const input = useRef<HTMLInputElement>(null);
 
+  const { openMakeCall } = useMakeCall();
+
   const results = useMemo(() => {
+    const entries: Entry[] = [
+      { label: "Make a call", icon: Phone, keywords: "single call phone test browser dial", run: openMakeCall },
+      ...NAV_ITEMS.map((i) => ({
+        label: i.label,
+        icon: i.icon,
+        keywords: i.keywords,
+        // Classic pages are outside this app: a full page load.
+        run: () => (i.classic ? (window.location.href = i.href) : router.push(i.href)),
+      })),
+    ];
     const s = q.trim().toLowerCase();
-    return NAV_ITEMS.filter((i) => !s || `${i.label} ${i.keywords ?? ""}`.toLowerCase().includes(s));
-  }, [q]);
+    return entries.filter((i) => !s || `${i.label} ${i.keywords ?? ""}`.toLowerCase().includes(s));
+  }, [q, openMakeCall, router]);
 
   useEffect(() => input.current?.focus(), []);
 
@@ -29,8 +44,7 @@ function Menu({ onClose }: { onClose: () => void }) {
     const item = results[i];
     if (!item) return;
     onClose();
-    if (item.classic) window.location.href = item.href;
-    else router.push(item.href);
+    item.run();
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -65,7 +79,7 @@ function Menu({ onClose }: { onClose: () => void }) {
               setSel(0);
             }}
             onKeyDown={onKey}
-            placeholder="Jump to a page…"
+            placeholder="Jump to a page or make a call…"
             className="h-12 flex-1 bg-transparent text-[14.5px] outline-none placeholder:text-muted-foreground"
           />
         </div>

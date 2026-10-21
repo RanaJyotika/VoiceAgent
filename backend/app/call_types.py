@@ -162,6 +162,153 @@ def _address_line(contact: dict) -> str:
 ORDER_CONFIRMED_CLOSE = "ji, aapka order confirm ho gaya hai. dhanyavaad ji."
 
 
+def offers_of(facts: dict) -> list[dict]:
+    """The campaign's offers: a JSON list in facts["offers"], each {title, code, max_discount, valid_until, details}."""
+    try:
+        raw = json.loads(facts.get("offers") or "[]")
+    except (TypeError, ValueError):
+        return []
+    keys = ("title", "code", "max_discount", "valid_until", "details")
+    out = [{k: str(o.get(k) or "").strip() for k in keys} for o in raw if isinstance(o, dict)] if isinstance(raw, list) else []
+    return [o for o in out if o["title"] or o["details"]]
+
+
+def _offers_block(facts: dict) -> str:
+    """Every offer still valid, for the agent; "" when there is none."""
+    lines = []
+    for o in offers_of(facts):
+        until = _parse_date(o["valid_until"]) if o["valid_until"] else None
+        if until and until < date.today():
+            continue
+        terms = [f"code {o['code']}" if o["code"] else "", f"at most {o['max_discount']} off" if o["max_discount"] else "",
+                 f"valid until {until.strftime('%d %B')}" if until else ""]
+        head = o["title"] or "Offer"
+        lines.append(f"- {head}" + (f": {o['details'].rstrip('.')}" if o["details"] else "") + "".join(f"; {x}" for x in terms if x))
+    if not lines:
+        return ""
+    return ("\nOFFERS (the only offers, codes or discounts you may mention)\n" + "\n".join(lines) +
+            "\n- Mention one only when it fits, once: they ask about price, discount or delivery charges, or are unsure "
+            "about a cash order. Never as pressure, never anything not written here.\n")
+
+
+# --- the prepaid coupon on WhatsApp (owner, 21 Oct 2026) -----------------------------------------------
+# Facts & offers has "Share a coupon on WhatsApp": facts["whatsapp_coupon"] holds the code of one of the campaign's offers.
+# On a cash-on-delivery order, once it is confirmed, the agent offers that coupon for paying online instead; on a yes
+# (checked in code, live_bridge) the code goes to the customer on WhatsApp (messaging.queue_prepaid_coupon).
+
+def whatsapp_offer(facts: dict | None) -> dict | None:
+    """The offer the campaign shares on WhatsApp, while it is still valid; None when the switch is off."""
+    code = str((facts or {}).get("whatsapp_coupon") or "").strip().upper()
+    if not code:
+        return None
+    for o in offers_of(facts or {}):
+        if o["code"].upper() == code:
+            until = _parse_date(o["valid_until"]) if o["valid_until"] else None
+            return None if until and until < date.today() else {**o, "code": code}
+    return None
+
+
+def paid_online(contact: dict | None) -> bool:
+    """The order's data says it is paid (prepaid / online); an empty or cash-on-delivery payment is not."""
+    pay = re.sub(r"[\s_-]+", " ", str((contact or {}).get("payment_mode") or "")).strip().lower()
+    return bool(pay) and not ("cod" in pay or "cash" in pay or "delivery" in pay)
+
+
+def prepaid_coupon_for(contact: dict | None, facts: dict | None = None) -> dict | None:
+    """The coupon this call may offer on WhatsApp: an order not paid yet (cash on delivery, or no payment in the data:
+    call 509, the customer is asked), a campaign that shares one, and a customer who does not have this code already.
+    facts: the campaign's (looked up when not given). Never raises."""
+    try:
+        if not contact or paid_online(contact):
+            return None
+        if facts is None:
+            from . import db   # here: db is not needed by the rest of this module
+            facts = ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {}
+        offer = whatsapp_offer(facts)
+        if not offer:
+            return None
+        from . import messaging   # here: messaging reads this module
+        return None if messaging.already_sent(contact.get("phone") or "", offer["code"]) else offer
+    except Exception:  # noqa: BLE001
+        log.exception("WhatsApp coupon lookup failed for contact %s; no offer on this call", (contact or {}).get("id"))
+        return None
+
+
+def _spoken_off(offer: dict) -> str:
+    """The offer's discount as the agent says it: "10%" -> "दस परसेंट", "₹100" -> "एक सौ रुपये", other words as written."""
+    text = " ".join(str(offer.get("max_discount") or "").split())
+    m = re.fullmatch(r"(?:rs\.?|inr|₹)?\s*(\d{1,7})\s*(%|percent|परसेंट|rs\.?|rupees?|रुपये|/-|₹)?(?:\s*off)?", text, re.IGNORECASE)
+    if m:
+        unit = (m.group(2) or "").lower()
+        words = hindi_number(int(m.group(1)))
+        # A bare number is a percentage up to 90 ("10"), else rupees ("200").
+        rupees = bool(re.match(r"(rs|inr|₹)", text, re.IGNORECASE)) or (unit not in ("%", "percent", "परसेंट")
+                                                                         and (unit or int(m.group(1)) > 90))
+        return f"{words} रुपये" if rupees else f"{words} परसेंट"
+    return text or str(offer.get("title") or "").strip()
+
+
+# Owner, 21 Oct 2026 (call 507): ask how they will pay; a cash-on-delivery answer gets the prepaid offer, made once to win
+# them over and never pressed again.
+PREPAID_PAYMENT_QUESTION = "aur payment aap cash on delivery rakhna chahenge, ya prepaid, yaani online payment karenge?"
+
+
+def _gain(offer: dict) -> str:
+    off = _spoken_off(offer)
+    return f"coupon code se {off} ki chhoot milegi" if offer.get("max_discount") else f"coupon code par yeh offer milega: {off}"
+
+
+def _saving(offer: dict, contact: dict | None) -> str:
+    """", yaani lagbhag pachaas rupaye ki bachat": a percentage of the order's amount, in rupees, when both are known."""
+    m = re.fullmatch(r"\s*(\d{1,2})\s*(%|percent|परसेंट)?\s*(off)?\s*", str(offer.get("max_discount") or ""), re.IGNORECASE)
+    amount = re.sub(r"[^\d.]", "", str((contact or {}).get("amount") or ""))
+    try:
+        rupees = round(float(amount) * int(m.group(1)) / 100) if m and amount and (m.group(2) or int(m.group(1)) <= 90) else 0
+    except ValueError:
+        rupees = 0
+    return f", yaani lagbhag {hindi_number(rupees)} rupaye ki bachat" if rupees >= 10 else ""
+
+
+def prepaid_offer_line(offer: dict, contact: dict | None = None) -> str:
+    """Their answer was cash on delivery (or unsure): the offer, once, to win them over; shall I send the code?"""
+    # Owner, 21 Oct 2026: "hmm, prepaid par offer de rahe hain. kya main woh coupon send kar doon?"
+    return (f"achha ji. abhi hum prepaid par offer de rahe hain: online payment karne par {_gain(offer)}"
+            f"{_saving(offer, contact)}. kya main woh coupon code aapke WhatsApp par bhej doon?")
+
+
+def prepaid_online_line(offer: dict) -> str:
+    """Their answer was online payment: the coupon goes with it."""
+    return f"bahut badhiya ji! online payment par aapko {_gain(offer)}. kya main coupon code aapke WhatsApp par bhej doon?"
+
+
+def prepaid_yes_line() -> str:
+    # Owner, 21 Oct 2026: a yes moves the order to online payment (shopify.mark_prepaid); "note kar liya", never "kar diya".
+    return ("theek hai ji, aapka order confirm ho gaya hai aur maine payment online mein note kar liya hai. coupon code "
+            "aapke WhatsApp par aa jayega. dhanyavaad ji, aapka din shubh ho.")
+
+
+PREPAID_NO_LINE = "koi baat nahi ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho."
+
+
+def _whatsapp_coupon_block(offer: dict | None, contact: dict | None = None) -> str:
+    if not offer:
+        return ""
+    cod = bool(str((contact or {}).get("payment_mode") or "").strip())
+    paid = ("they say it is already paid: MISMATCH (payment), no offer." if cod else
+            f'they say it is already paid: "theek hai ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho." '
+            'mark_outcome "confirmed" with notes "customer says already paid online", end_call. No offer.')
+    return f"""PAYMENT AND WHATSAPP COUPON (owner, 21 Oct 2026; the payment is asked here and nowhere else)
+After their yes to the address, with nothing different, in place of the usual close:
+a. Ask exactly: "{PREPAID_PAYMENT_QUESTION}" Then wait. If {paid}
+b. They choose online: "{prepaid_online_line(offer)}"
+   They want cash on delivery, or are unsure: try once to win them over, exactly: "{prepaid_offer_line(offer, contact)}"
+   Then wait for their answer.
+c. A yes ("haan", "bhej do", "theek hai"): "{prepaid_yes_line()}" mark_outcome "confirmed", end_call. The payment change and the code on WhatsApp happen by themselves; never read the code out or promise anything else.
+   A question about the offer: its answer in one short sentence from OFFERS, then "toh kya main coupon code aapke WhatsApp par bhej doon?"
+   A no, or anything else: "{PREPAID_NO_LINE}" mark_outcome "confirmed", end_call.
+Ask about the payment once and make the offer once: after a no, never ask again or push. Never after a mismatch, a cancellation or any other result."""
+
+
 def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
     rahi = forms(voice)["rahi"]
@@ -183,7 +330,7 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 - Expected delivery: {delivery_line(contact.get('delivery_date'))}
 - Notes: {contact.get('notes') or 'none'}
 - Answers to common questions: {answers or 'none'}
-{missing_block(contact)}"""
+{missing_block(contact)}{_offers_block(facts or {})}"""
 
     replies_first = [
         '- Yes ("haan", "ji", "sahi hai"): next step.',
@@ -232,10 +379,21 @@ b. On their yes: "theek hai ji, maine yeh note kar liya hai." Then step 3 if the
 Never argue about who is right, never agree to change anything, never quote a new price or a refund. In mark_outcome: outcome "unclear", mismatch = each difference as "customer says ...; record says ...", new_product if they named another product."""
 
     rules = ['- You cannot cancel, refund or change anything yourself: you note it, "maine note kar liya hai", never "kar diya".']
+    coupon = _whatsapp_coupon_block(prepaid_coupon_for(contact, facts or {}), contact)
+    if coupon:
+        # The payment is asked about after the address (PAYMENT AND WHATSAPP COUPON), so step 2 leaves it out.
+        flow = flow.replace("<amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?",
+                            "<amount> rupaye ka order kiya tha. kya aapka order confirm hai?\" Never mention or ask about the "
+                            "payment here (call 509 asked \"payment ho chuki hai?\"): it is asked after the address.")
+        flow = re.sub(r"(?m)^   - all correct \(owner.*$", "   - all correct: PAYMENT AND WHATSAPP COUPON (below), in place of the usual close", flow)
+        flow = flow.replace("Close in one turn, straight after their yes to the address (nothing more to ask), then mark_outcome, then end_call:",
+                            "Straight after their yes to the address:")
+        flow = flow.replace("Ask for a yes at most twice in the call:",
+                            "Ask for a yes at most twice in the call (the payment question and the coupon offer aside):")
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="ORDER DETAILS",
                    details_noun="order details", replies_first=replies_first, replies_last=replies_last, flow=flow,
-                   sections=[TAKING_AN_ADDRESS, cancellation, mismatch], rules=rules,
+                   sections=[TAKING_AN_ADDRESS, *([coupon] if coupon else []), cancellation, mismatch], rules=rules,
                    not_mine='not the person named, or not their number',
                    topic="aapke order")
 
@@ -261,21 +419,29 @@ ORDER_CONFIRMATION = CallType(
     summary_keys=("notes", "cancel_reason", "callback_time", "mismatch", "new_address"),
     description="Confirm an order placed on the website or app: product, amount, payment and address.",
     columns=(
+        # Owner, 21 Oct 2026: a sheet needs name, phone, product id, product name, price and payment; the rest is optional.
         Column("customer_name", "Customer name", True, "Ramesh Kumar"),
         Column("phone", "Phone", True, "PUT 10 DIGIT NUMBER"),
+        Column("product_ids", "Product ID", True, "8123456789012"),
+        Column("product", "Product name", True, "Rudraksha Mala 108 beads"),
+        Column("amount", "Price", True, "1499"),
+        Column("payment_mode", "Payment method (COD / Prepaid)", True, "COD"),
         Column("order_id", "Order ID", False, "VV-1001"),
-        Column("product", "Product", False, "Rudraksha Mala 108 beads"),
         Column("quantity", "Quantity", False, "1"),
-        Column("amount", "Amount", False, "1499"),
-        Column("payment_mode", "Payment (COD / Prepaid)", False, "COD"),
         Column("address", "Address", False, "12 MG Road, Indore, MP 452001"),
         Column("delivery_date", "Delivery date", False, "30 September 2026"),
         Column("notes", "Notes", False, ""),
     ),
     facts=(
         # Without these the agent invented them (call 99: "certificate bhi saath aayega").
-        Fact("answers", "Answers to common customer questions (optional)", long=True,
+        Fact("answers", "Business facts (optional)", long=True,
              hint="Sabhi products original hain. Rudraksha ke saath lab certificate aata hai. Delivery ke baad 7 din mein return."),
+        # Owner, 21 Oct 2026: any number of offers the agent may mention (_offers_block), kept as a JSON list of
+        # {title, code, max_discount, valid_until, details}; the new dashboard edits it as a list. None: it offers nothing.
+        Fact("offers", "Offers (optional)", long=True, hint='[{"title": "Free delivery on prepaid", "details": "..."}]'),
+        # Owner, 21 Oct 2026: the code of the offer above that a cash-on-delivery customer may get on WhatsApp for paying
+        # online (whatsapp_offer); empty = switched off.
+        Fact("whatsapp_coupon", "Share a coupon on WhatsApp (optional)", hint="The code of one of the offers above"),
     ),
 )
 
@@ -736,14 +902,96 @@ ABANDONED_CART = CallType(
 )
 
 
+# --- a single call for a reason typed on the dashboard ----------------------------------------------
+# Owner, 21 Oct 2026: the Make a call dialog takes a reason, and the agent calls about that.
+
+def call_reason(contact: dict) -> str:
+    """The reason typed for this call: set for the call (with_reason), or kept on a contact made for it."""
+    return str(contact.get("call_reason") or _xv(contact, "call_reason")).strip()
+
+
+def with_reason(contact: dict, reason: str) -> dict:
+    """This call is about `reason`, whatever the contact's own call type: only for this call, the row keeps its type."""
+    reason = str(reason or "").strip()[:1000]
+    return {**contact, "campaign": CUSTOM_CALL.key, "call_reason": reason} if reason else contact
+
+
+def _custom_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
+    agent_name, _ = persona(voice)
+    rahi = forms(voice)["rahi"]
+    order = ", ".join(x for x in (str(contact.get("order_id") or ""), str(contact.get("product") or "")) if x)
+    other = _block("Other details from the sheet:", _other_details(contact, {"call_reason"}))
+
+    intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products, for one "
+             "reason its team wrote below. Say it, answer what you can, note the customer's reply. Warm and short.")
+
+    details = f"""REASON FOR THIS CALL (written by the team; the only facts you may give about it)
+{call_reason(contact) or 'MISSING: say who you are, ask how you can help, and note what they say.'}
+
+CUSTOMER DETAILS
+- Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
+- Order: {order or 'none'}
+{other}"""
+
+    replies_first = [
+        '- They agree, accept or confirm: close (step 3).',
+        '- They refuse or are not interested: accept it at once, never push; ask the reason once only if the reason for '
+        'the call asks you to. Close with mark_outcome "not_interested".',
+        '- They want something you cannot do (a refund, a link, a person to call them): "theek hai ji, maine yeh note kar liya hai." '
+        'Close with mark_outcome "needs_help" and what they want in notes. Never promise a time.',
+        REPLY_WRONG,
+    ]
+
+    flow = f"""THE USUAL ORDER (short turns)
+1. Greet, say who you are and give the reason in one or two short sentences of your own, then STOP and wait: "namaste <name> ji, main {agent_name}, {STORE_NAME} se bol {rahi} hoon. <the reason>." If the reason asks the customer something, end with that question. Never read the reason out word for word; never ask whether they have a minute.
+2. Answer their questions from REASON FOR THIS CALL in one short sentence each. Not there: "maine aapka sawaal note kar liya hai", and put it in question.
+3. Once they have answered: "theek hai ji, maine yeh note kar liya hai. dhanyavaad ji, aapka din shubh ho." Then mark_outcome ("done" unless a case above says otherwise) with their answer in reply, then end_call.
+{GOODBYE}"""
+
+    rules = ['- Say only what REASON FOR THIS CALL says: never invent a price, date, offer, refund or promise.',
+             '- You cannot change orders, take payment or send anything yourself: "maine note kar liya hai" is the most you say.']
+
+    return compose(contact=contact, voice=voice, intro=intro, details=details,
+                   details_title="REASON FOR THIS CALL or CUSTOMER DETAILS", details_noun="reason and customer details",
+                   replies_first=replies_first, replies_last=[], flow=flow, sections=[], rules=rules,
+                   not_mine='"main aapka customer nahi hoon"', topic="isi baat")
+
+
+CUSTOM_CALL = CallType(
+    key="custom",
+    name="Custom reason",
+    kind="service",
+    outcomes=("done", "not_interested", "needs_help", "call_later", "wrong_number", "do_not_call", "unclear"),
+    positive=(),
+    details={
+        "reply": "What the customer said to the reason for the call, in their words.",
+        "question": "A question they asked that the reason for the call did not answer.",
+        **COMMON_DETAILS,
+    },
+    build_prompt=_custom_prompt,
+    summary_keys=("reply", "question", "notes", "callback_time"),
+    description="One call about a reason typed in the Make a call dialog.",
+)
+
+
+# The call types a campaign can be made of. CUSTOM_CALL is not one: it exists only for single calls.
 CALL_TYPES: dict[str, CallType] = {t.key: t for t in (ORDER_CONFIRMATION, BOOKING_CONFIRMATION, CAMPAIGN_INVITE, ABANDONED_CART)}
+ALL_TYPES: dict[str, CallType] = {**CALL_TYPES, CUSTOM_CALL.key: CUSTOM_CALL}
 DEFAULT = ORDER_CONFIRMATION
+
+
+def missing_facts(camp: dict | None) -> list[str]:
+    """The campaign details its call type needs that are still empty. A draft may lack them (the new dashboard's
+    wizard asks for them after the campaign exists), but it is never called until they are filled in."""
+    ct = CALL_TYPES.get(str((camp or {}).get("call_type") or ""))
+    facts = (camp or {}).get("facts") or {}
+    return [f.label for f in ct.facts if f.required and not str(facts.get(f.key) or "").strip()] if ct else []
 
 
 def call_type_for(contact: dict | None) -> CallType:
     """The call type a contact row names; order confirmation when it names none or an unknown one."""
     key = str((contact or {}).get("campaign") or "").strip()
-    return CALL_TYPES.get(key, DEFAULT)
+    return ALL_TYPES.get(key, DEFAULT)
 
 
 def get_prompt(contact: dict, voice: str) -> str:

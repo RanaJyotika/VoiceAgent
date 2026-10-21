@@ -14,3 +14,4 @@ data/*.log.*
 data/fillers/
 =
 backend/app/models/nemo_en_titanet_small.onnx
+data/voice_clips/

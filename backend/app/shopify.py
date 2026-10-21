@@ -10,6 +10,9 @@ goes back onto the order.
 - An order cancelled in Shopify (orders/cancelled) before its call is taken off the list.
 - Once an order's call has a result, the order gets tags (voice-call, voice-confirmed...) and a
   line in its notes, so the team sees it in Shopify.
+- A cash-on-delivery customer who chose to pay online on the call (the WhatsApp coupon): the order's
+  payment is set to Prepaid here, and in Shopify it gets the prepaid tags and a note (mark_prepaid).
+  This works for any order the call knows the number of, not only the ones that came by webhook.
 
 Both campaigns are made the first time they are needed and are marked for automatic calling;
 nothing is rung until automatic calling (autodial.py) is switched on. Without the .env settings the
@@ -29,7 +32,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from . import db
 from .config import (PUBLIC_BASE_URL, SHOPIFY_ADMIN_TOKEN, SHOPIFY_API_VERSION, SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET,
-                     SHOPIFY_STORE, SHOPIFY_WEBHOOK_SECRET)
+                     SHOPIFY_PREPAID_TAGS_ADD, SHOPIFY_PREPAID_TAGS_REMOVE, SHOPIFY_STORE, SHOPIFY_WEBHOOK_SECRET)
 from .contacts import DETAIL_LABELS, RESPONSES, is_valid_phone, normalise_phone
 
 log = logging.getLogger("shopify")
@@ -80,6 +83,22 @@ CREATE TABLE IF NOT EXISTS shopify_links (
     sync_tries INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS shopify_links_id ON shopify_links (shopify_id);
+-- Changes to one order that a call asked for (the payment switched to prepaid), sent by the worker.
+CREATE TABLE IF NOT EXISTS shopify_updates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_id INTEGER,
+    call_id INTEGER,
+    order_name TEXT,            -- the order number as the store shows it ("#1234"): found in Shopify by it
+    shopify_id TEXT,            -- the order's id, once known
+    tags_add TEXT,              -- JSON lists
+    tags_remove TEXT,
+    note TEXT,                  -- the line added to the order's notes ("" = none)
+    status TEXT DEFAULT 'pending',   -- pending, done, failed
+    tries INTEGER DEFAULT 0,
+    error TEXT,
+    created_at TEXT,
+    done_at TEXT
+);
 CREATE TABLE IF NOT EXISTS shopify_events (
     webhook_id TEXT PRIMARY KEY,
     topic TEXT,
@@ -459,6 +478,80 @@ async def _push_result(gid: str, contact_id: int, status: str, previous: str | N
     _user_errors(await graphql(ORDER_UPDATE, {"input": {"id": gid, "note": f"{note}\n{line}".strip()}}), "orderUpdate")
 
 
+ORDER_BY_NAME = "query orderByName($q: String!) { orders(first: 5, query: $q) { nodes { id name } } }"
+
+
+def mark_prepaid(contact: dict, code: str, call_id: int | None) -> str:
+    """A cash-on-delivery customer chose on the call to pay online (the WhatsApp coupon): the order's payment is Prepaid
+    in our records, and its Shopify order gets the prepaid tags and a note line (sent by the worker). Returns what
+    changed, for the call's notes. Never raises."""
+    what = "COD to Prepaid: customer chose online payment on the call" + (f"; coupon {code} sent on WhatsApp" if code else "")
+    try:
+        with db.connect() as conn:
+            conn.execute("UPDATE contacts SET payment_mode='Prepaid' WHERE id=?", (contact["id"],))
+            link = conn.execute("SELECT shopify_id FROM shopify_links WHERE contact_id=? AND kind='order'", (contact["id"],)).fetchone()
+            gid = link["shopify_id"] if link and str(link["shopify_id"]).startswith("gid://") else ""
+            when = datetime.now(db.IST).strftime("%d %b %H:%M")
+            # An order linked here gets the call's result line (sync_results), which carries the change already.
+            note = "" if gid else f"Voice call {when}: payment changed from COD to Prepaid (customer chose online payment" + \
+                (f", coupon {code} sent on WhatsApp)" if code else ")")
+            conn.execute("INSERT INTO shopify_updates (contact_id, call_id, order_name, shopify_id, tags_add, tags_remove, note, "
+                         "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (contact["id"], call_id, str(contact.get("order_id") or "").strip(), gid,
+                          json.dumps(SHOPIFY_PREPAID_TAGS_ADD), json.dumps(SHOPIFY_PREPAID_TAGS_REMOVE), note, db.now_iso()))
+        log.info("contact %s (order %s): payment COD -> Prepaid; Shopify update queued", contact["id"], contact.get("order_id"))
+    except Exception:  # noqa: BLE001
+        log.exception("contact %s: could not record the switch to prepaid", contact.get("id"))
+    return what
+
+
+async def _order_gid(name: str) -> str:
+    """The Shopify order with this number ("#1234"), found by search; ShopifyError when there is not exactly that one."""
+    if not name:
+        raise ShopifyError("the contact has no order number to find the order by")
+    nodes = (((await graphql(ORDER_BY_NAME, {"q": f'name:"{name}"'})).get("orders") or {}).get("nodes")) or []
+    found = [n for n in nodes if str(n.get("name") or "").strip().lower() == name.strip().lower()]
+    if len(found) != 1:
+        raise ShopifyError(f"order {name} not found in Shopify" if not found else f"more than one order named {name}")
+    return found[0]["id"]
+
+
+async def sync_updates() -> int:
+    """Send the order changes calls asked for (switched to prepaid). Returns how many went through."""
+    if not settings()["writeback"] or not admin_ready():
+        return 0
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM shopify_updates WHERE status='pending' AND tries < ? ORDER BY id LIMIT 20",
+                            (SYNC_TRIES,)).fetchall()
+    done = 0
+    for r in rows:
+        try:
+            gid = r["shopify_id"] or await _order_gid(r["order_name"] or "")
+            add, remove = json.loads(r["tags_add"] or "[]"), json.loads(r["tags_remove"] or "[]")
+            if add:
+                _user_errors(await graphql(TAGS_ADD, {"id": gid, "tags": add}), "tagsAdd")
+            if remove:
+                _user_errors(await graphql(TAGS_REMOVE, {"id": gid, "tags": remove}), "tagsRemove")
+            if r["note"]:
+                note = ((await graphql(ORDER_NOTE, {"id": gid})).get("order") or {}).get("note") or ""
+                _user_errors(await graphql(ORDER_UPDATE, {"input": {"id": gid, "note": f"{note}\n{r['note']}".strip()}}), "orderUpdate")
+        except Exception as exc:  # noqa: BLE001
+            tries = int(r["tries"] or 0) + 1
+            with db.connect() as conn:
+                conn.execute("UPDATE shopify_updates SET tries=?, error=?, status=? WHERE id=?",
+                             (tries, str(exc)[:300], "failed" if tries >= SYNC_TRIES else "pending", r["id"]))
+            log.warning("order %s: Shopify update %s not sent (try %s): %s", r["order_name"], r["id"], tries, exc)
+            if isinstance(exc, ShopifyError) and "not set up" in str(exc):
+                break
+            continue
+        with db.connect() as conn:
+            conn.execute("UPDATE shopify_updates SET status='done', shopify_id=?, error=NULL, done_at=? WHERE id=?",
+                         (gid, db.now_iso(), r["id"]))
+        log.info("order %s in Shopify: tags +%s -%s%s", r["order_name"], add, remove, ", note added" if r["note"] else "")
+        done += 1
+    return done
+
+
 async def sync_results() -> int:
     """Write finished order calls back to Shopify. Returns how many orders were updated."""
     if not settings()["writeback"] or not admin_ready():
@@ -496,6 +589,7 @@ async def worker() -> None:
             if n:
                 log.info("%s abandoned cart(s) added", n)
             await sync_results()
+            await sync_updates()
         except Exception:  # noqa: BLE001
             log.exception("shopify worker")
         await asyncio.sleep(TICK_SECONDS)

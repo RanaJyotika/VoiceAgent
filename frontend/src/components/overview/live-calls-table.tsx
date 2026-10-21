@@ -6,8 +6,10 @@ import { Badge, type Tone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { usePoll } from "@/hooks/use-poll";
 import type { Campaign, LiveCall } from "@/lib/api";
-import { fmtClock, fmtPhone, fmtTime } from "@/lib/format";
-import { classic } from "@/lib/nav";
+import { fmtClock, fmtPhone, fmtTime, fmtOrder } from "@/lib/format";
+import { pageHref } from "@/lib/nav";
+import { cn } from "@/lib/utils";
+import { CallPanel } from "./call-panel";
 
 const STAGE: Record<string, { label: string; tone: Tone }> = {
   ringing: { label: "Ringing", tone: "warn" },
@@ -16,10 +18,12 @@ const STAGE: Record<string, { label: string; tone: Tone }> = {
   ending: { label: "Ending", tone: "neutral" },
 };
 
-/** Ringing and in-progress calls, refreshed every 2 s; the clocks tick every second in between. */
+/** Ringing and in-progress calls, refreshed every 2 s; the clocks tick every second in between.
+ *  Clicking one opens its conversation on the right (CallPanel). */
 export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[]; campaignId?: number }) {
   const { data, updatedAt } = usePoll<LiveCall[]>("/api/live", 2_000);
   const [now, setNow] = useState(() => Date.now());
+  const [open, setOpen] = useState<number | null>(null); // the call shown in the side panel
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -29,6 +33,8 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
   const names = new Map(campaigns.map((c) => [c.id, c.name]));
   const calls = (data ?? []).filter((c) => !campaignId || c.campaign_id === campaignId);
   const drift = Math.max(0, (now - updatedAt) / 1000); // the clocks count on from the last poll
+  const campaignLabel = (c?: LiveCall) =>
+    !c ? undefined : c.campaign_id ? (names.get(c.campaign_id) ?? `Campaign ${c.campaign_id}`) : c.channel === "browser" ? "Browser test" : "Single call";
 
   return (
     <Card className="overflow-hidden">
@@ -39,9 +45,9 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
         </span>
         <div>
           <h2 className="text-[15px] font-medium">Live calls</h2>
-          <div className="text-[12.5px] text-muted-foreground">Updating in real time</div>
+          <div className="text-[12.5px] text-muted-foreground">Updating in real time{calls.length ? " · click a call to follow the conversation" : ""}</div>
         </div>
-        <a href={classic("history")} className="ml-auto text-[13px] font-medium hover:underline">
+        <a href={pageHref("history")} className="ml-auto text-[13px] font-medium hover:underline">
           All calls
         </a>
       </div>
@@ -70,19 +76,29 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
                 const stage = STAGE[c.status] ?? { label: c.status, tone: "neutral" as Tone };
                 const ringing = c.status === "ringing";
                 return (
-                  <tr key={c.call_id} className="hover:bg-muted/50">
+                  <tr
+                    key={c.call_id}
+                    tabIndex={0}
+                    aria-selected={open === c.call_id}
+                    onClick={() => setOpen(c.call_id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setOpen(c.call_id);
+                      }
+                    }}
+                    className={cn("cursor-pointer outline-none hover:bg-muted/50 focus-visible:bg-muted", open === c.call_id && "bg-muted")}
+                  >
                     <td className="px-4 py-2.5">
                       <div className="font-medium">{c.customer_name || "Unknown"}</div>
                       <div className="font-mono text-[12.5px] text-muted-foreground">{fmtPhone(c.to)}</div>
                     </td>
-                    <td className="px-4 py-2.5">
-                      {c.campaign_id ? (names.get(c.campaign_id) ?? `Campaign ${c.campaign_id}`) : c.channel === "browser" ? "Browser test" : "Single call"}
-                    </td>
+                    <td className="px-4 py-2.5">{campaignLabel(c)}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">
                       {c.voice}
                       {c.agent ? ` — ${c.agent}` : ""}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-[12.5px]">{c.order_id ? `#${c.order_id}` : "—"}</td>
+                    <td className="px-4 py-2.5 font-mono text-[12.5px]">{c.order_id ? fmtOrder(c.order_id) : "—"}</td>
                     <td className="px-4 py-2.5 text-muted-foreground tabular">{fmtTime(new Date(now - secs * 1000))}</td>
                     <td className="px-4 py-2.5 font-mono font-medium">
                       {ringing && c.ring_left != null ? `${Math.max(0, Math.round(c.ring_left - drift))}s left` : fmtClock(secs)}
@@ -101,6 +117,16 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
             </tbody>
           </table>
         </div>
+      )}
+
+      {open != null && (
+        <CallPanel
+          key={open}
+          callId={open}
+          summary={(data ?? []).find((c) => c.call_id === open)}
+          campaignName={campaignLabel((data ?? []).find((c) => c.call_id === open))}
+          onClose={() => setOpen(null)}
+        />
       )}
     </Card>
   );

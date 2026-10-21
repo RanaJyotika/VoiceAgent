@@ -1,4 +1,4 @@
-import { CalendarClock, History, LayoutGrid, Megaphone, Phone, ShoppingBag, Ticket, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarClock, History, LayoutGrid, Megaphone, ShoppingBag, Wallet, type LucideIcon } from "lucide-react";
 
 export type NavItem = {
   label: string;
@@ -14,25 +14,26 @@ export type NavGroup = { title: string; items: NavItem[] };
 /** Where a page of the original dashboard lives. */
 export const classic = (page: string) => `/classic#${page}`;
 
+/** Pages rebuilt here, by the name the server and the original dashboard use for them. */
+const REBUILT: Record<string, string> = { history: "/calls/", callback: "/callback/", campaigns: "/campaigns/", spend: "/usage/" };
+
+/** Where a page lives now: here once rebuilt, else on the original dashboard. */
+export const pageHref = (page: string) => REBUILT[page] ?? classic(page);
+
 export const NAV: NavGroup[] = [
   {
     title: "Operate",
     items: [
       { label: "Overview", href: "/", icon: LayoutGrid, keywords: "home dashboard" },
       { label: "Store orders", href: classic("store"), icon: ShoppingBag, classic: true, keywords: "shopify orders auto" },
-      { label: "Campaigns", href: classic("campaigns"), icon: Megaphone, classic: true, keywords: "contacts upload excel" },
-      { label: "Calls", href: classic("history"), icon: History, classic: true, keywords: "history transcripts recordings" },
-      { label: "Call back", href: classic("callback"), icon: CalendarClock, classic: true, keywords: "retry later" },
-      { label: "Single call", href: classic("call"), icon: Phone, classic: true, keywords: "test browser make call" },
+      { label: "Campaigns", href: "/campaigns/", icon: Megaphone, keywords: "contacts upload excel new campaign" },
+      { label: "Calls summary", href: "/calls/", icon: History, keywords: "calls history transcripts recordings" },
+      { label: "Call back", href: "/callback/", icon: CalendarClock, keywords: "retry later no answer busy" },
     ],
   },
   {
-    title: "Grow",
-    items: [{ label: "Coupons", href: classic("coupons"), icon: Ticket, classic: true, keywords: "offers messages whatsapp" }],
-  },
-  {
     title: "Insights",
-    items: [{ label: "Spending", href: classic("spend"), icon: Wallet, classic: true, keywords: "cost billing usage" }],
+    items: [{ label: "Usage", href: "/usage/", icon: Wallet, keywords: "spending cost billing budget limits" }],
   },
 ];
 

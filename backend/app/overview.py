@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from . import autodial, db
+from . import autodial, campaign, db, usage
 from .call_types import CALL_TYPES
-from .config import DIAL_ONLY_MY_NUMBER
+from .config import AGENT_LABELS, DIAL_ONLY_MY_NUMBER
 from .live_bridge import live_snapshot
 
 router = APIRouter()
@@ -122,11 +122,171 @@ def _attention(rows: list, auto: dict, spend_today: float) -> list[dict]:
     if DIAL_ONLY_MY_NUMBER:
         items.append({"level": "info", "title": "Test mode is on",
                       "detail": "Every phone call rings your own number (DIAL_ONLY_MY_NUMBER).", "page": "store"})
+    items += usage.alerts()   # the workspace budget (Usage page): an alert level passed
     review = sum(1 for r in rows if r["outcome"] in ("unclear", "wrong_number", "not_ordered"))
     if review:
         items.append({"level": "info", "title": f"{review} call{'s' if review != 1 else ''} need a look",
                       "detail": "Unclear answers, wrong numbers or orders the customer did not place.", "page": "history"})
     return items
+
+
+# --- the Overview's "Today" cards (owner, 21 Oct 2026) ---------------------------------------------------------
+# Per customer, by the result of their latest call today: a customer rung twice (no answer, then confirmed) is one
+# customer, convinced. Phone calls only: browser tests are not customers. Costs count every call, tests included.
+REVIEW_OUTCOMES = ("unclear", "wrong_number", "do_not_call", "not_ordered")   # as db.stats' "needs review"
+
+
+@router.get("/api/overview/today")
+async def overview_today() -> dict:
+    today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    with db.connect() as conn:
+        rows = conn.execute("SELECT id, contact_id, channel, duration_sec, outcome, error, usage FROM calls "
+                            "WHERE started_at >= ? ORDER BY id", (_utc(today),)).fetchall()
+    latest: dict[int, dict] = {}
+    agent_rs = line_rs = 0.0
+    for r in rows:
+        agent, line = db.cost_parts(r["channel"], r["duration_sec"], r["usage"])
+        agent_rs += agent
+        line_rs += line
+        if r["channel"] == "plivo" and r["contact_id"]:
+            latest[r["contact_id"]] = r   # ordered by id: the last one wins
+    last = list(latest.values())
+    outcome = lambda r: r["outcome"] or ("error" if r["error"] else "")  # noqa: E731
+    return {
+        "called": len(last),
+        "convinced": sum(1 for r in last if outcome(r) in CONVERSIONS),
+        "not_answered": sum(1 for r in last if outcome(r) == "no_answer"),
+        "busy": sum(1 for r in last if outcome(r) == "busy"),
+        "needs_review": sum(1 for r in last if outcome(r) in (*REVIEW_OUTCOMES, "error")),
+        # The rest of the customers called, so the cards add up: hung up before a result, or asked for a later call.
+        "hung_up": sum(1 for r in last if outcome(r) == "dropped"),
+        "call_later": sum(1 for r in last if outcome(r) == "call_later"),
+        "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2),
+        "calls": sum(1 for r in rows if r["channel"] == "plivo"),   # phone calls placed today
+    }
+
+
+# --- the Campaigns page: each campaign's status, how its list went and what it cost -----------------
+
+NOT_CONNECTED_STATUSES = ("no_answer", "busy")
+HUNG_UP_STATUSES = ("dropped",)   # the call ended before any result: the customer hung up or the line dropped
+NOT_CALLED_STATUSES = ("pending",)
+
+
+def _status(c: dict, to_call: int, running: bool) -> str:
+    """running · scheduled (set to start at a time) · completed (nobody left, or past its last day) · paused (started,
+    some left) · draft (never started: no contacts yet, or not launched)."""
+    if running:
+        return "running"
+    if c.get("start_at"):
+        return "scheduled"
+    if not c["total"]:
+        return "draft"
+    if to_call == 0 or campaign.past_last_date(c):
+        return "completed"
+    called = c["total"] - sum(c["by_status"].get(s, 0) for s in NOT_CALLED_STATUSES)
+    return "paused" if called else "draft"
+
+
+ENGAGED_LESS = ("unclear", "wrong_number")   # picked up, but no real conversation to an answer
+STATS_DAYS = 60                              # the calls-per-day chart covers at most this many days
+
+
+@router.get("/api/campaigns/{campaign_id}/stats")
+async def campaign_stats(campaign_id: int) -> dict:
+    """One campaign's page, Overview tab: its list from audience to converted (per contact, as the Campaigns page counts
+    them), what it cost, calls per day, and how many contacts each result has."""
+    c = db.get_campaign(campaign_id)
+    if not c:
+        raise HTTPException(404, "No such campaign.")
+    s = c.get("settings") or {}
+    counts = db.contact_counts(int(s.get("max_attempts") or 3), campaign_id)
+    by, total = counts["by_status"], counts["total"]
+    run = campaign.CAMPAIGN
+    running = (run.running and run.settings.campaign_id == campaign_id) or (bool(c.get("auto")) and autodial.AUTO.running)
+    called = total - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES)
+    not_connected = sum(by.get(k, 0) for k in NOT_CONNECTED_STATUSES)
+    hung_up = sum(by.get(k, 0) for k in HUNG_UP_STATUSES)
+    connected = max(0, called - not_connected - hung_up - by.get("calling", 0))
+    converted = sum(n for k, n in by.items() if k in CONVERSIONS)
+    engaged = max(converted, connected - sum(by.get(k, 0) for k in ENGAGED_LESS))
+
+    with db.connect() as conn:
+        calls = conn.execute("SELECT c.started_at, c.channel, c.duration_sec, c.outcome, c.usage FROM calls c "
+                             "JOIN contacts k ON k.id = c.contact_id WHERE k.campaign_id = ? ORDER BY c.id", (campaign_id,)).fetchall()
+    agent_rs = line_rs = 0.0
+    per_day: dict[str, list[int]] = {}
+    for r in calls:
+        a, l = db.cost_parts(r["channel"], r["duration_sec"], r["usage"])
+        agent_rs, line_rs = agent_rs + a, line_rs + l
+        day = datetime.fromisoformat(r["started_at"]).astimezone(IST).strftime("%Y-%m-%d")
+        d = per_day.setdefault(day, [0, 0])
+        d[0] += 1
+        d[1] += (r["duration_sec"] or 0) > 0 and r["outcome"] not in NOT_CONNECTED_STATUSES
+    series = []
+    if per_day:
+        today = datetime.now(IST).date()
+        start = max(datetime.strptime(min(per_day), "%Y-%m-%d").date(), today - timedelta(days=STATS_DAYS - 1))
+        day = start
+        while day <= today:
+            key = day.strftime("%Y-%m-%d")
+            series.append({"day": key, "label": day.strftime("%d %b"), "calls": per_day.get(key, [0, 0])[0],
+                           "connected": per_day.get(key, [0, 0])[1]})
+            day += timedelta(days=1)
+
+    ct = CALL_TYPES.get(c["call_type"])
+    keys = [*(ct.outcomes if ct else ()), "no_answer", "busy", "dropped"]
+    return {
+        "id": campaign_id, "status": _status({**c, "total": total, "by_status": by}, counts["to_call"], running),
+        "running": running, "agent": AGENT_LABELS.get(s.get("model") or "", s.get("model") or ""), "voice": s.get("voice") or "",
+        "budget_rs": int(s.get("budget_rs") or 0),
+        "audience": total, "called": called, "connected": connected, "engaged": engaged, "converted": converted,
+        "not_connected": not_connected, "hung_up": hung_up, "to_call": counts["to_call"],
+        "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2), "cost_rs": round(agent_rs + line_rs, 2),
+        "calls": len(calls), "series": series,
+        "outcomes": [{"key": k, "n": by.get(k, 0)} for k in dict.fromkeys(keys)],
+    }
+
+
+@router.get("/api/campaigns/board")
+async def campaigns_board() -> dict:
+    """The new dashboard's Campaigns page. The Store orders campaign has its own page and is left out, as before."""
+    camps = [c for c in db.list_campaigns() if c.get("source") != "store"]
+    run = campaign.CAMPAIGN
+    costs: dict[int, list[float]] = {}
+    with db.connect() as conn:
+        for r in conn.execute("SELECT k.campaign_id, c.channel, c.duration_sec, c.usage FROM calls c "
+                              "JOIN contacts k ON k.id = c.contact_id WHERE k.campaign_id IS NOT NULL"):
+            agent, line = db.cost_parts(r["channel"], r["duration_sec"], r["usage"])
+            acc = costs.setdefault(r["campaign_id"], [0.0, 0.0])
+            acc[0] += agent
+            acc[1] += line
+    rows = []
+    for c in camps:
+        s = c.get("settings") or {}
+        to_call = db.contact_counts(int(s.get("max_attempts") or 3), c["id"])["to_call"] if c["total"] else 0
+        running = (run.running and run.settings.campaign_id == c["id"]) or (bool(c.get("auto")) and autodial.AUTO.running)
+        by = c["by_status"]
+        called = c["total"] - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES)
+        not_connected = sum(by.get(k, 0) for k in NOT_CONNECTED_STATUSES)
+        hung_up = sum(by.get(k, 0) for k in HUNG_UP_STATUSES)
+        agent_rs, line_rs = costs.get(c["id"], [0.0, 0.0])
+        rows.append({
+            "id": c["id"], "name": c["name"], "call_type": c["call_type"], "auto": bool(c.get("auto")),
+            "created_at": c["created_at"], "last_call_at": c.get("last_call_at"),
+            "status": _status(c, to_call, running),
+            "model": s.get("model") or "", "agent": AGENT_LABELS.get(s.get("model") or "", s.get("model") or ""),
+            "voice": s.get("voice") or "",
+            "contacts": c["total"], "called": called, "to_call": to_call,
+            # A call in progress is called but has no result yet: it is in none of these three.
+            "connected": max(0, called - not_connected - hung_up - by.get("calling", 0)),
+            "not_connected": not_connected, "hung_up": hung_up,
+            "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2), "cost_rs": round(agent_rs + line_rs, 2),
+            "start_at": c.get("start_at"), "start_note": c.get("start_note"),
+        })
+    count = lambda st: sum(1 for r in rows if r["status"] == st)  # noqa: E731
+    return {"campaigns": rows,
+            "counts": {st: count(st) for st in ("running", "scheduled", "paused", "completed", "draft")}}
 
 
 @router.get("/api/overview")

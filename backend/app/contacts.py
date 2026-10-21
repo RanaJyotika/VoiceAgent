@@ -21,6 +21,7 @@ EXTRA_ALIASES = {
     "booking_id": "order_id", "booking_no": "order_id",
     # the template's own headers (call_types Column labels)
     "puja_seva": "product", "puja_or_seva": "product", "payment_cod_prepaid": "payment_mode",
+    "payment_method_cod_prepaid": "payment_mode",   # the order template's header since 21 Oct 2026
     # abandoned-cart exports (the template's "Items in cart" and "Cart value", and what stores call them)
     "items_in_cart": "product", "cart_items": "product", "cart": "product", "product_names": "product", "line_items": "product",
     "cart_value": "amount", "cart_total": "amount", "cart_amount": "amount", "checkout_value": "amount", "total_price": "amount",
@@ -186,7 +187,7 @@ DETAIL_LABELS = {
     "not_interested_reason": "Reason", "cancel_reason": "Reason", "callback_time": "Call back",
     "new_delivery_date": "New delivery date", "new_product": "Product they named", "mismatch": "Mismatch",
     "question": "Question", "notes": "Note", "payment_preference": "Payment", "order_changes": "Changes asked for",
-    "coupon_code": "Coupon",
+    "coupon_code": "Coupon", "payment_change": "Payment change",
 }
 # Details our own code writes into a result (not the agent), shown on the results sheet after the call type's own.
 SYSTEM_DETAILS = ("coupon_code",)   # the coupon a cart customer said yes to (owner, 19 Oct 2026)

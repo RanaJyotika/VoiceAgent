@@ -1,7 +1,9 @@
-"""The outbox for messages to customers: for now, the coupon after an abandoned-cart call.
+"""The outbox for messages to customers: the coupon after an abandoned-cart call, and the prepaid coupon after an
+order-confirmation call on a cash-on-delivery order (kind "prepaid_coupon": the campaign's "Share a coupon on
+WhatsApp", owner 21 Oct 2026).
 
 A message is written when the customer agreed on the call (queue_coupon, from live_bridge). It is sent by
-the message service set in .env (MESSAGE_PROVIDER: whatsapp, plivo_sms or webhook), or by a person from
+the message service set in .env (MESSAGE_PROVIDER: pinnacle, whatsapp, plivo_sms or webhook), or by a person from
 the dashboard (Coupons page: Open in WhatsApp, then Mark as sent) until one is set up. Nothing is ever
 sent while MESSAGE_PROVIDER is empty.
 
@@ -30,6 +32,9 @@ from . import catalog, coupons, db
 from .call_types import extra_of
 from .config import (DIAL_ONLY_MY_NUMBER, MESSAGE_FROM_NUMBER, MESSAGE_MAX_AGE_HOURS, MESSAGE_PROVIDER, MESSAGE_RETRIES,
                      MESSAGE_SMS_TEMPLATE, MESSAGE_WEBHOOK_TOKEN, MESSAGE_WEBHOOK_URL, PHONE_NUMBER, PLIVO_AUTH_ID,
+                     PINBOT_PHONE_NUMBER_ID, PINNACLE_API_KEY, PINNACLE_BASE_URL, PINNACLE_CART_PARAMS, PINNACLE_CART_TEMPLATE,
+                     PINNACLE_DEFAULT_IMAGE_URL, PINNACLE_PREPAID_BUTTON, PINNACLE_PREPAID_IMAGE, PINNACLE_PREPAID_PARAMS,
+                     PINNACLE_PREPAID_PARAMS_SET, PINNACLE_PREPAID_TEMPLATE, PINNACLE_TEMPLATE_LANGUAGE,
                      PLIVO_AUTH_TOKEN, PLIVO_DLT_ENTITY_ID, PLIVO_DLT_TEMPLATE_CATEGORY, PLIVO_DLT_TEMPLATE_ID,
                      PLIVO_FROM_NUMBER, STORE_NAME, STORE_URL, WHATSAPP_API_VERSION, WHATSAPP_PHONE_NUMBER_ID,
                      WHATSAPP_TEMPLATE, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_PARAMS, WHATSAPP_TOKEN)
@@ -74,7 +79,8 @@ NO_PHONE = "no valid phone number"
 NOT_SET_UP = "No message service is set up yet. Use Open in WhatsApp to send it by hand, then Mark as sent."
 
 # What a message may say, in this order; the dashboard lists them for the owner.
-PLACEHOLDERS = ("name", "product", "amount", "offer", "discount", "code", "link", "store", "min_order", "pay")
+PLACEHOLDERS = ("name", "product", "amount", "offer", "discount", "code", "link", "store", "min_order", "pay", "order", "until",
+                "link_path", "order_line", "offer_line", "pay_line")
 
 # Owner, 19 Oct 2026: the coupon code and the product in a beautifully drafted message (WhatsApp *bold*, Hinglish).
 # A line whose value is empty is left out (no cart value on record, no minimum order).
@@ -95,10 +101,61 @@ Kaise use karein:
 
 👉 {link}
 
-✨ Sabhi products 100% original aur lab tested hain.
+
 
 Dhanyavaad 🙏
 Team {store}"""
+
+# Owner, 21 Oct 2026: the coupon for paying online instead of cash on delivery, after the customer confirmed their order
+# on the call and said yes to getting the code on WhatsApp. A line whose value is empty is left out (no order id, no
+# last day for the offer).
+DEFAULT_PREPAID_TEMPLATE = """🙏 Namaste {name},
+
+{store} par order karne ke liye dil se dhanyavaad! ✨
+🛍️ Aapka order: *{product}*
+🧾 Order ID: {order}
+
+🎁 *Aapke liye ek khaas tohfa*
+Cash on Delivery ki jagah *online payment* karein aur paayein *{discount} OFF* 🎉
+
+🏷️ Use coupon code: *{code}*
+⏳ Offer {until} tak valid hai
+
+Kaise use karein:
+1️⃣ Neeche diye link par jaayein
+2️⃣ Checkout par coupon code *{code}* daalein
+3️⃣ Online payment karein aur chhoot ka laabh uthayein
+
+👉 {link}
+
+
+
+Dhanyavaad 🙏
+Team {store}"""
+
+# The same message as a WhatsApp template, to submit for approval in Pinnacle's console (Meta approves every message a
+# business starts). Its {{1}}..{{5}} are filled in the order of PINNACLE_PREPAID_PARAMS: name, product, discount, code,
+# link. A template cannot drop a line, so it has no order id or last day.
+PREPAID_WHATSAPP_TEMPLATE = """🙏 Namaste {{1}},
+
+Vedic Shop par order karne ke liye dil se dhanyavaad! ✨
+🛍️ Aapka order: *{{2}}*
+
+🎁 *Aapke liye ek khaas tohfa*
+Cash on Delivery ki jagah *online payment* karein aur paayein *{{3}} OFF* 🎉
+
+🏷️ Use coupon code: *{{4}}*
+
+Kaise use karein:
+1️⃣ Neeche diye link par jaayein
+2️⃣ Checkout par upar diya coupon code daalein
+3️⃣ Online payment karein aur chhoot ka laabh uthayein
+
+👉 {{5}}
+
+
+Dhanyavaad 🙏
+Team Vedic Shop"""
 
 # Indian SMS must match a DLT-registered template word for word, so MESSAGE_SMS_TEMPLATE replaces this one.
 DEFAULT_SMS_TEMPLATE = ("Namaste {name}, {store} par aapke cart ka {product} aapka intezaar kar raha hai. {offer}: coupon "
@@ -134,6 +191,16 @@ def _short(text, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip(" ,;") + "…"
 
 
+def _product(contact: dict) -> dict:
+    """The catalogue product behind the contact's order or cart ({} when it cannot be found)."""
+    try:
+        found = catalog.find_for_contact(contact)
+    except Exception:  # noqa: BLE001
+        log.exception("no catalogue product for contact %s", contact.get("id"))
+        found = []
+    return found[0] if found else {}
+
+
 def link_for(contact: dict) -> str:
     """Where the message sends the customer: their own cart when the store gave its link (Shopify's
     abandoned_checkout_url), else the product's page, else the store."""
@@ -143,14 +210,14 @@ def link_for(contact: dict) -> str:
         url = str((v.get("value") if isinstance(v, dict) else v) or "").strip()
         if url.lower().startswith(("http://", "https://")):
             return url
-    try:
-        found = catalog.find_for_contact(contact)
-    except Exception:  # noqa: BLE001
-        log.exception("no product page for contact %s; the message links the store", contact.get("id"))
-        found = []
-    if found and found[0].get("handle"):
-        return f"{STORE_URL}/products/{found[0]['handle']}"
-    return STORE_URL
+    product = _product(contact)
+    return f"{STORE_URL}/products/{product['handle']}" if product.get("handle") else STORE_URL
+
+
+def image_for(contact: dict) -> str:
+    """The product's first photo for the top of the WhatsApp message, else the default image ("" = none)."""
+    image = str(_product(contact).get("image") or "")
+    return image if image.lower().startswith("https://") else PINNACLE_DEFAULT_IMAGE_URL
 
 
 def _values(contact: dict, coupon: dict, link: str) -> dict[str, str]:
@@ -195,6 +262,66 @@ def queue_coupon(*, contact: dict, coupon: dict, call_id: int | None, to: str = 
     if not coupon or not coupon.get("code"):
         return None
     coupon = coupons.get_by_code(coupon["code"]) or coupon   # its message as it reads now
+    values = values_for(contact, coupon)
+    return _queue("coupon", contact=contact, code=coupon["code"], body=render(coupon.get("message") or DEFAULT_TEMPLATE, values),
+                  values=values, call_id=call_id, to=to, channel=channel)
+
+
+def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None = None) -> dict[str, str]:
+    """What fills the prepaid coupon message: the customer, their order, and the campaign's offer (call_types.offers_of)."""
+    name = " ".join(str(contact.get("customer_name") or "").split())
+    until = ""
+    if offer.get("valid_until"):
+        try:
+            until = datetime.fromisoformat(offer["valid_until"][:10]).strftime("%d %b %Y").lstrip("0")
+        except ValueError:
+            until = ""
+    discount = " ".join(str(offer.get("max_discount") or "").split()) or _short(offer.get("title"), 60) or "special"
+    name = name if name.lower().endswith(" ji") else f"{name} ji" if name else "ji"
+    product = _short(contact.get("product")) or "aapka product"
+    amount = coupons.parse_amount(contact.get("amount"))
+    price = f" (₹{coupons.rupees(amount)})" if amount and amount > 0 else ""
+    code = str(offer.get("code") or "").strip().upper()
+    link = link or link_for(contact)
+    return {
+        # Whole sentences for a template whose {{1}}, {{2}}, {{3}} each take one (owner, 21 Oct 2026): a template value
+        # cannot hold a line break, so each is one line. The name and the order; the offer and its code; the link.
+        "order_line": f"{name}, aapka order *{product}*{price} confirm ho gaya hai ✅",
+        "offer_line": f"🎁 Cash on Delivery ki jagah *online payment* karein aur paayein *{discount} OFF*! Checkout par coupon "
+                      f"code *{code}* lagayein" + (f" (offer {until} tak valid)." if until else "."),
+        "pay_line": f"👉 Abhi online payment karein: {link}",
+        "name": name,
+        "product": product,
+        "order": str(contact.get("order_id") or "").strip(),
+        "discount": discount,
+        "offer": f"online payment par {discount} OFF",
+        "code": code,
+        "link": link,
+        "store": STORE_NAME,
+        "until": until,
+        "link_path": "",   # filled below: the link without the store's address, for a button's dynamic link
+        "image": image if image is not None else image_for(contact),   # the template's image, not a line of the text
+    }
+
+
+def _with_path(values: dict) -> dict:
+    link = values.get("link") or ""
+    return {**values, "link_path": link[len(STORE_URL) + 1:] if link.startswith(STORE_URL + "/") else ""}
+
+
+def queue_prepaid_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo") -> int | None:
+    """Write the prepaid coupon message for a cash-on-delivery customer who said yes on the call to getting the code on
+    WhatsApp. Returns its id (or the one they already have for this code), or None when nothing was written."""
+    if not offer or not str(offer.get("code") or "").strip():
+        return None
+    values = _with_path(prepaid_values(contact, offer))
+    return _queue("prepaid_coupon", contact=contact, code=values["code"], body=render(DEFAULT_PREPAID_TEMPLATE, values),
+                  values=values, call_id=call_id, to=to, channel=channel)
+
+
+def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call_id: int | None, to: str,
+           channel: str) -> int | None:
+    """The message written for the number the call rang (the owner's own in test mode), once per number and code."""
     test = channel != "plivo" or DIAL_ONLY_MY_NUMBER
     status, error = "queued", None
     if channel == "plivo":
@@ -211,28 +338,26 @@ def queue_coupon(*, contact: dict, coupon: dict, call_id: int | None, to: str = 
     # a customer having the coupon, and the next test still gets its message.
     test = test or bool(PHONE_NUMBER and recipient == normalise_phone(PHONE_NUMBER))
     if recipient and recipient in db.do_not_call_phones():
-        log.info("coupon %s for contact %s not queued: %s asked not to be called", coupon["code"], contact.get("id"), recipient)
+        log.info("coupon %s for contact %s not queued: %s asked not to be called", code, contact.get("id"), recipient)
         return None
     if not test and is_valid_phone(recipient):
         with db.connect() as conn:
             row = conn.execute(
                 f"SELECT id FROM messages WHERE test=0 AND to_phone=? AND coupon_code=? COLLATE NOCASE "
                 f"AND status IN ({','.join('?' for _ in HAS_IT)}) ORDER BY id LIMIT 1",
-                (recipient, coupon["code"], *HAS_IT)).fetchone()
+                (recipient, code, *HAS_IT)).fetchone()
         if row:
             log.info("coupon %s for contact %s not queued again: %s already has it (message %s)",
-                     coupon["code"], contact.get("id"), recipient, row["id"])
+                     code, contact.get("id"), recipient, row["id"])
             return row["id"]
-    values = values_for(contact, coupon)
     with db.connect() as conn:
         message_id = conn.execute(
             "INSERT INTO messages (kind, contact_id, call_id, to_phone, customer_name, coupon_code, body, params, status, "
-            "test, error, attempts, created_at) VALUES ('coupon', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-            (contact.get("id"), call_id, recipient, str(contact.get("customer_name") or ""), coupon["code"],
-             render(coupon.get("message") or DEFAULT_TEMPLATE, values), json.dumps(values, ensure_ascii=False),
-             status, 1 if test else 0, error, db.now_iso())).lastrowid
-    log.info("coupon %s for contact %s (call %s) queued as message %s to %s: %s%s", coupon["code"], contact.get("id"),
-             call_id, message_id, recipient or "no number", status, " (test)" if test else "")
+            "test, error, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (kind, contact.get("id"), call_id, recipient, str(contact.get("customer_name") or ""), code,
+             body, json.dumps(values, ensure_ascii=False), status, 1 if test else 0, error, db.now_iso())).lastrowid
+    log.info("%s %s for contact %s (call %s) queued as message %s to %s: %s%s", kind.replace("_", " "), code,
+             contact.get("id"), call_id, message_id, recipient or "no number", status, " (test)" if test else "")
     return message_id
 
 
@@ -316,7 +441,17 @@ def provider_status() -> dict:
                 "note": "Messages wait here until a message service is set in .env (MESSAGE_PROVIDER). You can send them "
                         "by hand meanwhile."}
     notes = []
-    if p == "whatsapp":
+    if p == "pinnacle":
+        label = "WhatsApp (Pinnacle)"
+        need = {"API_Key": PINNACLE_API_KEY, "PINBOT_PHONE_NUMBER_ID (the sending number's id in Pinnacle)": PINBOT_PHONE_NUMBER_ID}
+        if (why := template_missing({"kind": "prepaid_coupon"}, "pinnacle")):
+            notes.append(f"Prepaid coupon messages wait: {why}.")
+        if not PINNACLE_CART_TEMPLATE:
+            notes.append("Abandoned-cart coupon messages wait until their template name is in .env (PINNACLE_CART_TEMPLATE).")
+        for name, keys in (("PINNACLE_PREPAID_PARAMS", PINNACLE_PREPAID_PARAMS), ("PINNACLE_CART_PARAMS", PINNACLE_CART_PARAMS)):
+            if unknown := [k for k in keys if k not in PLACEHOLDERS]:
+                need[f"{name} (not message values: {', '.join(unknown)})"] = ""
+    elif p == "whatsapp":
         label = "WhatsApp"
         need = {"WHATSAPP_TOKEN": WHATSAPP_TOKEN, "WHATSAPP_PHONE_NUMBER_ID": WHATSAPP_PHONE_NUMBER_ID}
         if not WHATSAPP_TEMPLATE:
@@ -337,7 +472,7 @@ def provider_status() -> dict:
         if MESSAGE_WEBHOOK_URL and not MESSAGE_WEBHOOK_URL.lower().startswith(("http://", "https://")):
             need = {"MESSAGE_WEBHOOK_URL (an address starting with https://)": ""}
     else:
-        return {"provider": p, "ready": False, "missing": ["MESSAGE_PROVIDER (whatsapp, plivo_sms or webhook)"],
+        return {"provider": p, "ready": False, "missing": ["MESSAGE_PROVIDER (pinnacle, whatsapp, plivo_sms or webhook)"],
                 "label": "Unknown service", "note": f'MESSAGE_PROVIDER is "{p}", which this server does not know.'}
     missing = [k for k, v in need.items() if not v]
     if missing:
@@ -406,6 +541,53 @@ async def _send_whatsapp(m: dict) -> str:
     return str((sent[0] if sent and isinstance(sent[0], dict) else {}).get("id") or "")
 
 
+# Pinnacle's template for each kind of message, and what fills its {{1}}, {{2}}...
+PINNACLE_TEMPLATES = {"prepaid_coupon": (PINNACLE_PREPAID_TEMPLATE, PINNACLE_PREPAID_PARAMS),
+                      "coupon": (PINNACLE_CART_TEMPLATE, PINNACLE_CART_PARAMS)}
+
+
+def template_missing(m: dict, provider: str | None = None) -> str:
+    """Why this message cannot go by the service in .env yet ("" = it can): Pinnacle sends only approved templates,
+    each with exactly the values its text has."""
+    if (provider or MESSAGE_PROVIDER) != "pinnacle":
+        return ""
+    if m.get("kind") == "prepaid_coupon":
+        if not PINNACLE_PREPAID_TEMPLATE:
+            return "no approved WhatsApp template named in .env (PINNACLE_PREPAID_TEMPLATE); send it by hand meanwhile"
+        if not PINNACLE_PREPAID_PARAMS_SET:
+            return ("what fills the template's {{1}}, {{2}}... is not set (PINNACLE_PREPAID_PARAMS in .env); send it by "
+                    "hand meanwhile")
+    elif not PINNACLE_TEMPLATES.get(m.get("kind") or "", ("", []))[0]:
+        return "no approved WhatsApp template named in .env (PINNACLE_CART_TEMPLATE); send it by hand meanwhile"
+    return ""
+
+
+async def _send_pinnacle(m: dict) -> str:
+    """A template message by Pinnacle (Pinbot), as the owner's other projects send it: the template by name, the product
+    photo as its image, the values for its {{1}}, {{2}}..., and the button's dynamic link when it has one. Pinbot answers
+    200 even when it refuses, with "status": "FAILED" or a "WA0..." code."""
+    name, keys = PINNACLE_TEMPLATES[m["kind"]]
+    components: list[dict] = []
+    if m["kind"] == "prepaid_coupon" and PINNACLE_PREPAID_IMAGE:
+        # A template with an image at the top needs one on every message.
+        image = PINNACLE_PREPAID_IMAGE if PINNACLE_PREPAID_IMAGE.startswith("https://") else (m["params"].get("image") or PINNACLE_DEFAULT_IMAGE_URL)
+        if not image:
+            raise SendError("no product photo for this order and no PINNACLE_DEFAULT_IMAGE_URL in .env", retry=False)
+        components.append({"type": "header", "parameters": [{"type": "image", "image": {"link": image}}]})
+    components.append({"type": "body", "parameters": [{"type": "text", "text": _param(m["params"].get(k))} for k in keys]})
+    if m["kind"] == "prepaid_coupon" and PINNACLE_PREPAID_BUTTON:
+        components.append({"type": "button", "sub_type": "url", "index": "0",
+                           "parameters": [{"type": "text", "text": _param(m["params"].get(PINNACLE_PREPAID_BUTTON))}]})
+    body = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": re.sub(r"\D", "", m["to_phone"]),
+            "type": "template", "template": {"name": name, "language": {"code": PINNACLE_TEMPLATE_LANGUAGE}, "components": components}}
+    j = await _post(f"{PINNACLE_BASE_URL}/v3/{PINBOT_PHONE_NUMBER_ID}/messages", body, headers={"apikey": PINNACLE_API_KEY})
+    if str(j.get("status") or "").upper() == "FAILED" or str(j.get("code") or "").startswith("WA0"):
+        raise SendError(f"Pinnacle: {j.get('code') or ''} {j.get('message') or 'refused'}".strip()[:300], retry=False)
+    sent = j.get("messages") if isinstance(j.get("messages"), list) else []
+    data = j.get("data") if isinstance(j.get("data"), dict) else {}
+    return str((sent[0] if sent and isinstance(sent[0], dict) else {}).get("id") or data.get("messageid") or "")
+
+
 async def _send_plivo_sms(m: dict) -> str:
     body = {"src": (MESSAGE_FROM_NUMBER or PLIVO_FROM_NUMBER).lstrip("+"), "dst": re.sub(r"\D", "", m["to_phone"]),
             "text": sms_text(m["params"])}
@@ -428,7 +610,7 @@ async def _send_webhook(m: dict) -> str:
     return str(j.get("id") or j.get("message_id") or "")
 
 
-SENDERS = {"whatsapp": _send_whatsapp, "plivo_sms": _send_plivo_sms, "webhook": _send_webhook}
+SENDERS = {"pinnacle": _send_pinnacle, "whatsapp": _send_whatsapp, "plivo_sms": _send_plivo_sms, "webhook": _send_webhook}
 
 
 async def send_message(message_id: int, manual: bool = False) -> dict:
@@ -452,6 +634,8 @@ async def send_message(message_id: int, manual: bool = False) -> dict:
         return get_message(message_id)
     if not is_valid_phone(m["to_phone"] or ""):
         raise ValueError("This message has no valid phone number.")
+    if (why := template_missing(m)):
+        raise ValueError(why[0].upper() + why[1:] + ".")
     if m["to_phone"] in db.do_not_call_phones():   # they asked on a later call, after the message was written
         _set(message_id, status="cancelled", error="this number asked not to be called", next_try_at=None)
         log.info("message %s cancelled: %s asked not to be called", message_id, m["to_phone"])
@@ -478,7 +662,7 @@ async def send_message(message_id: int, manual: bool = False) -> dict:
         return get_message(message_id)
     _set(message_id, status="sent", attempts=attempts, provider=provider, provider_id=provider_id or None, error=None,
          next_try_at=None, sent_at=db.now_iso())
-    log.info("message %s (coupon %s) sent to %s by %s%s", message_id, m["coupon_code"], m["to_phone"], provider,
+    log.info("message %s (%s %s) sent to %s by %s%s", message_id, m["kind"].replace("_", " "), m["coupon_code"], m["to_phone"], provider,
              " (Send now on the dashboard)" if manual else "")
     return get_message(message_id)
 
@@ -505,6 +689,8 @@ async def send_due() -> int:
             continue
         if not is_valid_phone(m["to_phone"] or ""):
             _hold(m["id"], NO_PHONE)
+            continue
+        if template_missing(m):
             continue
         if m["test"] and m["to_phone"] != normalise_phone(PHONE_NUMBER):   # a test reaches only the owner's own phone
             _hold(m["id"], "a test call's message to a number that is not PHONE_NUMBER: not sent automatically")
@@ -554,6 +740,29 @@ async def messages_status() -> dict:
     """For the badge on the Coupons button: messages waiting for the service or a person."""
     c = counts()
     return {"counts": c, "waiting": c["queued"] + c["held"], "service": provider_status()}
+
+
+@router.post("/api/messages/prepaid-preview")
+async def prepaid_preview(body: dict) -> dict:
+    """The prepaid coupon message as a sample customer gets it for this offer ({title, code, max_discount, valid_until}),
+    the same as a template to submit in Pinnacle's console, and whether the service can send it."""
+    offer = body.get("offer") if isinstance(body.get("offer"), dict) else {}
+    # A real product from the catalogue when it is loaded, so the preview shows the product link a customer gets.
+    product = next((x for x in catalog.STATE["products"] if x.get("handle") and x.get("title")), None)
+    sample = {"customer_name": "Ramesh", "product": product["title"] if product else "Rudraksha Mala 108 beads", "order_id": "#1001"}
+    link = f"{STORE_URL}/products/{product['handle']}" if product else STORE_URL
+    values = _with_path(prepaid_values(sample, {**offer, "code": str(offer.get("code") or "COUPON").strip().upper()}, link=link,
+                                       image=str((product or {}).get("image") or "") or PINNACLE_DEFAULT_IMAGE_URL))
+    service = provider_status()
+    waiting = template_missing({"kind": "prepaid_coupon"}) if service["provider"] == "pinnacle" else ""
+    return {"body": render(DEFAULT_PREPAID_TEMPLATE, values), "image": values["image"] if PINNACLE_PREPAID_IMAGE else "",
+            "template": PREPAID_WHATSAPP_TEMPLATE,
+            "template_params": PINNACLE_PREPAID_PARAMS, "service": service, "waiting": waiting,
+            # What the template named in .env gets, value by value, so it can be checked against its text.
+            "template_name": PINNACLE_PREPAID_TEMPLATE,
+            "sends": [{"slot": f"{{{{{i + 1}}}}}", "value": _param(values.get(k)), "from": k} for i, k in enumerate(PINNACLE_PREPAID_PARAMS)]
+            + ([{"slot": "button link", "value": _param(values.get(PINNACLE_PREPAID_BUTTON)), "from": PINNACLE_PREPAID_BUTTON}]
+               if PINNACLE_PREPAID_BUTTON else [])}
 
 
 @router.post("/api/messages/{message_id}/send")

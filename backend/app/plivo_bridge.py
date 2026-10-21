@@ -34,7 +34,7 @@ from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, SILENT_HANGUP, Nudge, run_call
 from .openai_bridge import is_openai_model, voice_for
 from .sarvam_bridge import is_sarvam_model
-from .call_types import get_prompt
+from .call_types import get_prompt, with_reason
 from .prompts import with_language
 
 log = logging.getLogger("plivo")
@@ -920,8 +920,9 @@ async def _expire(token: str, seconds: float) -> None:
 
 @router.post("/api/calls/dial/{contact_id}")
 async def dial(contact_id: int, voice: str = GEMINI_VOICE, to: str = "", model: str = "", language: str = "",
-               build: str = "") -> dict:
-    """Place one real phone call. This costs money: Plivo per minute plus Gemini per minute."""
+               build: str = "", reason: str = "") -> dict:
+    """Place one real phone call. This costs money: Plivo per minute plus Gemini per minute.
+    reason: what this one call is about, typed in the Make a call dialog (call_types.CUSTOM_CALL)."""
     if build != PAGE_BUILD:
         raise HTTPException(409, STALE_PAGE)
     missing = plivo_missing()
@@ -930,7 +931,7 @@ async def dial(contact_id: int, voice: str = GEMINI_VOICE, to: str = "", model: 
     contact = db.get_contact(contact_id)
     if not contact:
         raise HTTPException(404, "contact not found")
-    pc = await place_call(contact, voice, model, to, language)
+    pc = await place_call(with_reason(contact, reason), voice, model, to, language)
     return {"ok": True, "dialed": pc.to, "plivo": {"request_uuid": pc.request_uuid}}
 
 

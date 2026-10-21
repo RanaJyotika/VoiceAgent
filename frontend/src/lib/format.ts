@@ -28,3 +28,6 @@ export const fmtPhone = (raw: string) => {
 export const fmtTime = (d: Date) => d.toLocaleTimeString(IN, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
 export const fmtToday = () => new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+
+/** An order number as stored: store orders carry their own "#" (#75944), sheet ones are as typed (VV-1001). */
+export const fmtOrder = (id: string | null | undefined) => id ?? "";

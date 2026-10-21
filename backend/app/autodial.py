@@ -17,8 +17,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from . import db, store_orders
-from .call_types import CALL_TYPES
+from . import db, store_orders, usage
+from .call_types import CALL_TYPES, missing_facts
 from .campaign import (DIALING, GAP_SECONDS, STOP_ON_ERRORS, Campaign, Settings, _after_call, dial, lines_in_use,
                        past_last_date, within_hours)
 from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
@@ -48,7 +48,7 @@ def _settings_from(saved: dict) -> Settings:
 
 def _campaigns() -> list[dict]:
     """Automatic campaigns still inside their calling days, most urgent first."""
-    camps = [c for c in db.auto_campaigns() if not past_last_date(c)]
+    camps = [c for c in db.auto_campaigns() if not past_last_date(c) and not missing_facts(c)]   # a draft is never rung
     return sorted(camps, key=lambda c: (PRIORITY.get(c["call_type"], 9), c["id"]))
 
 
@@ -92,6 +92,10 @@ async def _run() -> None:
                     _set_reason(f"waiting for tomorrow: today's estimated cost is Rs {spent:.0f}, the budget is Rs {s.budget_rs}")
                     await asyncio.sleep(60)
                     continue
+            if (over := usage.limit_reached()):
+                _set_reason(f"waiting: {over}")
+                await asyncio.sleep(60)
+                continue
             if lines_in_use() >= s.max_concurrent:
                 await asyncio.sleep(1)
                 continue
@@ -226,7 +230,10 @@ async def auto_stop() -> dict:
 @router.post("/api/campaigns/{campaign_id}/auto")
 async def campaign_auto(campaign_id: int, body: dict) -> dict:
     """Mark a campaign for automatic calling ({"auto": true}) or take it off ({"auto": false})."""
-    if not db.get_campaign(campaign_id):
+    camp = db.get_campaign(campaign_id)
+    if not camp:
         raise HTTPException(404, "No such campaign.")
+    if body.get("auto") and missing_facts(camp):
+        raise HTTPException(400, "Fill in the campaign details first: " + ", ".join(missing_facts(camp)))
     db.set_campaign_auto(campaign_id, bool(body.get("auto")))
     return {"ok": True, "auto": bool(body.get("auto"))}

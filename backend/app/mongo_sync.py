@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 
 from . import db
-from .call_types import CALL_TYPES
+from .call_types import ALL_TYPES
 from .config import MONGODB_CALLS_COLLECTION, MONGODB_CALLS_DB, MONGODB_URI
 
 log = logging.getLogger("mongo_sync")
@@ -47,7 +47,7 @@ def _document(r) -> dict:
     usage = db._json(d.get("usage"), {})
     agent_rs, phone_rs = db.cost_parts(d.get("channel") or "", d.get("duration_sec") or 0, usage)
     model, provider = db.call_agent(usage)
-    ct = CALL_TYPES.get(d.get("campaign_call_type") or d.get("k_campaign") or "")
+    ct = ALL_TYPES.get(d.get("campaign_call_type") or d.get("k_campaign") or "")
     doc = {
         "_id": d["id"], "call_id": d["id"],
         "channel": d.get("channel"),          # "plivo" = a real phone call, "browser" = a test on the dashboard

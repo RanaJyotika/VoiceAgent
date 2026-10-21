@@ -297,23 +297,58 @@ SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3-realtime")
 # "codemix" writes Hindi words in Devanagari and English words in English letters, as Hinglish is spoken.
 SARVAM_STT_MODE = os.getenv("SARVAM_STT_MODE", "codemix")
 SARVAM_LANGUAGE = os.getenv("SARVAM_LANGUAGE", "hi-IN")
-SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
-# Bulbul v3 speakers for Gauri (female) and Arjun (male). Owner picked Priya and Varun (13 Oct 2026).
-SARVAM_VOICE_FEMALE = os.getenv("SARVAM_VOICE_FEMALE", "priya").strip().lower()
-SARVAM_VOICE_MALE = os.getenv("SARVAM_VOICE_MALE", "varun").strip().lower()
-# Every Bulbul v3 speaker (docs.sarvam.ai, 13 Oct 2026), offered on the dashboard when the agent is Sarvam;
-# the two above first. They join VOICES, so a call, campaign or auto-dialer can carry one; Gemini and ChatGPT
-# then speak in their own voice of the same gender (gemini_voice below). Sarvam's docs call varun deep and
-# dramatic, not a neutral default.
-_BULBUL_FEMALE = ["priya", "ishita", "ritu", "neha", "pooja", "simran", "kavya", "shreya", "roopa", "tanya",
-                  "shruti", "suhani", "kavitha", "rupali"]
-_BULBUL_MALE = ["varun", "shubh", "aditya", "rahul", "rohan", "amit", "dev", "ratan", "manan", "sumit", "kabir",
-                "aayan", "ashutosh", "advait", "anand", "tarun", "sunny", "mani", "gokul", "vijay", "mohit", "rehan", "soham"]
-SARVAM_VOICES = {
-    **{n.capitalize(): "female" for n in dict.fromkeys([SARVAM_VOICE_FEMALE, *_BULBUL_FEMALE])},
-    **{n.capitalize(): "male" for n in dict.fromkeys([SARVAM_VOICE_MALE, *_BULBUL_MALE])},
+# Bulbul v4 Flash replaces v3 (owner, 21 Oct 2026: v3 is to be retired). v4 speaks in persona voices, one per
+# name, language and style ("priya_hi_recovery"); a bare v3 name ("priya") is refused with a 400.
+SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v4-flash")
+# For a language v4 has no voice for (Malayalam, Odia, a Tamil or Punjabi woman): v3 and its own speakers.
+SARVAM_TTS_FALLBACK_MODEL = os.getenv("SARVAM_TTS_FALLBACK_MODEL", "bulbul:v3")
+SARVAM_V3_FEMALE = os.getenv("SARVAM_V3_FEMALE", "priya").strip().lower()
+SARVAM_V3_MALE = os.getenv("SARVAM_V3_MALE", "varun").strip().lower()
+# The Hindi persona each dashboard name speaks in (docs.sarvam.ai voices page, 21 Oct 2026): a customer-care or
+# conversational style where the name has one. Priya has only "recovery". Varun has no Hindi voice in v4, so
+# Shubh, in his customer-care style, is Arjun's voice now. Kids, news, devotional and suspense voices left out.
+_BULBUL_FEMALE = {
+    "priya": "priya_hi_recovery", "ritu": "ritu_hi_customer", "aparna": "aparna_hi_customer",
+    "aarti": "aarti_hi_customer", "chaitra": "chaitra_hi_customer", "simran": "simran_hi_conversation",
+    "sanchita": "sanchita_hi_assistant", "ishita": "ishita_hi_banking", "kavya": "kavya_hi_conversational",
+    "roopa": "roopa_hi_conversational", "shreya": "shreya_hi_conversational", "sarika": "sarika_hi_conversation",
+    "shalini": "shalini_hi_companion", "suchitra": "suchitra_hi_ecomm", "vandana": "vandana_hi_ecomm",
+    "shruti": "shruti_hi_edtech", "suhani": "suhani_hi_social", "tanya": "tanya_hi_narration",
 }
+_BULBUL_MALE = {
+    "shubh": "shubh_hi_customer", "rahul": "rahul_hi_conversational", "aditya": "aditya_hi_conversational",
+    "aayan": "aayan_hi_conversational", "amit": "amit_hi_conversational", "ashutosh": "ashutosh_hi_conversational",
+    "kabir": "kabir_hi_conversational", "manan": "manan_hi_conversational", "sumit": "sumit_hi_conversational",
+    "mohit": "mohit_hi_conversational", "tarun": "tarun_hi_conversational", "mani": "mani_hi_conversational",
+    "ratan": "ratan_hi_customer_expressive", "aryaman": "aryaman_hi_ads", "sunny": "sunny_hi_ads",
+    "mukul": "mukul_hi_ads", "vaibhav": "vaibhav_hi_social", "rehan": "rehan_hi_social", "chirag": "chirag_hi_social",
+}
+# Gauri's (female) and Arjun's (male) voice: a name above, or any full persona id. Owner picked Priya (13 Oct 2026).
+SARVAM_VOICE_FEMALE = os.getenv("SARVAM_VOICE_FEMALE", "priya").strip().lower()
+SARVAM_VOICE_MALE = os.getenv("SARVAM_VOICE_MALE", "shubh").strip().lower()
+for _own, _table in ((SARVAM_VOICE_FEMALE, _BULBUL_FEMALE), (SARVAM_VOICE_MALE, _BULBUL_MALE)):
+    if "_" in _own:   # a persona id: offered under its name
+        _table[_own.split("_")[0]] = _own
+SARVAM_VOICE_FEMALE, SARVAM_VOICE_MALE = SARVAM_VOICE_FEMALE.split("_")[0], SARVAM_VOICE_MALE.split("_")[0]
+# Dashboard name -> persona, offered when the agent is Sarvam, the two above first. They join VOICES, so a call,
+# campaign or auto-dialer can carry one; Gemini and ChatGPT then speak in their own voice of the same gender
+# (gemini_voice below).
+_female = {n.capitalize(): _BULBUL_FEMALE[n] for n in dict.fromkeys([SARVAM_VOICE_FEMALE, *_BULBUL_FEMALE])}
+_male = {n.capitalize(): _BULBUL_MALE[n] for n in dict.fromkeys([SARVAM_VOICE_MALE, *_BULBUL_MALE])}
+SARVAM_SPEAKERS = {**_female, **_male}
+SARVAM_VOICES = {**dict.fromkeys(_female, "female"), **dict.fromkeys(_male, "male")}
 VOICES.update(SARVAM_VOICES)
+# When the customer asks for another language: v4's voice for it, by gender. Missing: v3 speaks it.
+SARVAM_V4_OTHER = {
+    "en-IN": {"female": "simran_en_customer", "male": "dev_en_conversational"},
+    "bn-IN": {"female": "roopa_bn_conversational", "male": "arnab_bn_conversation"},
+    "gu-IN": {"female": "pooja_gu_customer", "male": "bhavik_gu_conversation"},
+    "kn-IN": {"female": "chaitra_kn_conversation", "male": "chetan_kn_conversation"},
+    "mr-IN": {"female": "ishita_mr_conversational", "male": "nilesh_mr_conversation"},
+    "te-IN": {"female": "kavitha_te_conversation", "male": "tarun_te_narration"},
+    "ta-IN": {"male": "aravind_ta_ads"},
+    "pa-IN": {"male": "anand_pa_customer"},
+}
 
 
 def gemini_voice(voice: str) -> str:
@@ -328,14 +363,15 @@ def gemini_voice(voice: str) -> str:
 
 # 0.5 to 2.0. At 1.0 Priya and Varun sounded slow, as if reading a script (owner, 13 Oct 2026).
 SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.15"))
-# Rupees, from Sarvam's price page (8 Oct 2026): chat per million tokens, Saaras Rs 30 an hour of
-# audio, Bulbul Rs 30 per 10,000 characters. Held as USD per million units, like the other agents.
+# Rupees, pay-as-you-go, from sarvam.ai/api-pricing (21 Oct 2026): Sarvam 105B per million tokens, Saaras
+# Rs 29.40 an hour of audio, Bulbul v4 Flash Rs 20 per 10,000 characters (v3, still used for Malayalam and
+# Odia, is Rs 30). Held as USD per million units, like the other agents.
 SARVAM_PRICE_PER_M = {k: v / USD_INR for k, v in {
-    "text_in": float(os.getenv("SARVAM_RS_TEXT_IN", "29.28")),
-    "cached_text_in": float(os.getenv("SARVAM_RS_CACHED_TEXT_IN", "10.98")),
-    "text_out": float(os.getenv("SARVAM_RS_TEXT_OUT", "73.20")),
-    "stt_seconds": float(os.getenv("SARVAM_RS_STT_HOUR", "30")) / 3600 * 1_000_000,
-    "tts_chars": float(os.getenv("SARVAM_RS_TTS_10K_CHARS", "30")) * 100,
+    "text_in": float(os.getenv("SARVAM_RS_TEXT_IN", "15")),
+    "cached_text_in": float(os.getenv("SARVAM_RS_CACHED_TEXT_IN", "5")),
+    "text_out": float(os.getenv("SARVAM_RS_TEXT_OUT", "60")),
+    "stt_seconds": float(os.getenv("SARVAM_RS_STT_HOUR", "29.40")) / 3600 * 1_000_000,
+    "tts_chars": float(os.getenv("SARVAM_RS_TTS_10K_CHARS", "20")) * 100,
 }.items()}
 
 # The agents the owner picks between on the dashboard, for a single call or a whole campaign; the
@@ -412,9 +448,41 @@ PRONUNCIATION = {
 STORE_URL = (os.getenv("STORE_URL") or "https://vedicshop.store").strip().rstrip("/")
 if not STORE_URL.startswith(("http://", "https://")):
     STORE_URL = "https://" + STORE_URL
-# Who sends them: "whatsapp" (Meta's WhatsApp Cloud API), "plivo_sms", "webhook" (another system sends them), or ""
-# (nobody yet).
-MESSAGE_PROVIDER = os.getenv("MESSAGE_PROVIDER", "").strip().lower()
+# A cash-on-delivery customer who says yes on the call to paying online with the WhatsApp coupon (owner, 21 Oct 2026):
+# the order in Shopify gets these tags added and removed (comma-separated), and a line in its notes.
+SHOPIFY_PREPAID_TAGS_ADD = [x.strip() for x in os.getenv("SHOPIFY_PREPAID_TAGS_ADD", "voice-prepaid").split(",") if x.strip()]
+SHOPIFY_PREPAID_TAGS_REMOVE = [x.strip() for x in os.getenv("SHOPIFY_PREPAID_TAGS_REMOVE", "").split(",") if x.strip()]
+# Pinnacle's WhatsApp Business API (Pinbot), sent the way the owner's other projects send (Vedic Vaibhav site, Astro
+# Vaibhav; owner, 21 Oct 2026): POST {base}/v3/{phone number id}/messages with the API key in an "apikey" header and a
+# Meta-style template message. API_Key and WABA_number are the names the owner put in .env. The .env "username" is
+# never read: on Windows it is the signed-in user's name (USERNAME), which load_dotenv does not override.
+PINNACLE_API_KEY = (os.getenv("PINNACLE_API_KEY") or os.getenv("API_Key") or "").strip()
+PINNACLE_WABA_NUMBER = (os.getenv("PINNACLE_WABA_NUMBER") or os.getenv("WABA_number") or "").strip()
+PINNACLE_BASE_URL = (os.getenv("WHATSAPP_API_BASE_URL_PINNACLE") or os.getenv("PINNACLE_BASE_URL") or "https://partnersv1.pinbot.ai").strip().rstrip("/")
+# Meta's id of the sending number (Pinnacle console; the Vedic Vaibhav site's backend has it as PINBOT_PHONE_NUMBER_ID).
+PINBOT_PHONE_NUMBER_ID = os.getenv("PINBOT_PHONE_NUMBER_ID", "").strip()
+# WhatsApp lets a business start a chat only with a template Meta approved, sent by its NAME. One per message: the
+# prepaid coupon after an order-confirmation call, and the abandoned-cart coupon. Empty = that message waits.
+PINNACLE_PREPAID_TEMPLATE = (os.getenv("PINNACLE_PREPAID_TEMPLATE") or "").strip()
+PINNACLE_CART_TEMPLATE = (os.getenv("PINNACLE_CART_TEMPLATE") or "").strip()
+PINNACLE_TEMPLATE_LANGUAGE = os.getenv("PINNACLE_TEMPLATE_LANGUAGE", "en").strip()
+# What fills each template's {{1}}, {{2}}..., in that order (names from messaging.PLACEHOLDERS). The prepaid one must
+# be set to match the template's text: a template refuses any other number of values.
+PINNACLE_PREPAID_PARAMS_SET = bool(os.getenv("PINNACLE_PREPAID_PARAMS", "").strip())
+PINNACLE_PREPAID_PARAMS = [p.strip().lower() for p in os.getenv("PINNACLE_PREPAID_PARAMS", "name,product,discount,code,link").split(",")
+                           if p.strip()]
+# A "Visit website" button with a dynamic link (https://vedicshop.store/{{1}}): the value for its {{1}}, e.g.
+# "link_path" (products/<handle>). Empty = the template's button has a fixed link, or there is none.
+PINNACLE_PREPAID_BUTTON = os.getenv("PINNACLE_PREPAID_BUTTON", "").strip().lower()
+# The image at the top of the prepaid coupon template (owner, 21 Oct 2026: the product's first photo). "product" = the
+# ordered product's photo from the catalogue, else PINNACLE_DEFAULT_IMAGE_URL; "" = a template without an image.
+PINNACLE_PREPAID_IMAGE = os.getenv("PINNACLE_PREPAID_IMAGE", "product").strip().lower()
+PINNACLE_DEFAULT_IMAGE_URL = os.getenv("PINNACLE_DEFAULT_IMAGE_URL", "").strip()
+PINNACLE_CART_PARAMS = [p.strip().lower() for p in os.getenv("PINNACLE_CART_PARAMS", "name,product,offer,code,link").split(",")
+                        if p.strip()]
+# Who sends them: "pinnacle" (Pinnacle's WhatsApp API; the default once its API key is in .env), "whatsapp" (Meta's
+# WhatsApp Cloud API), "plivo_sms", "webhook" (another system sends them), or "" (nobody yet).
+MESSAGE_PROVIDER = (os.getenv("MESSAGE_PROVIDER", "").strip() or ("pinnacle" if PINNACLE_API_KEY else "")).lower()
 # The SMS sender (a number, or the sender id registered on DLT); empty = PLIVO_FROM_NUMBER.
 MESSAGE_FROM_NUMBER = os.getenv("MESSAGE_FROM_NUMBER", "").strip()
 # A message still waiting when the service is ready goes out on its own only while it is younger than this; an

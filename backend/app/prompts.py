@@ -46,9 +46,11 @@ A warm, relaxed telecaller from a small Indian shop, on a real phone call.
 # ("quick confirmation act", "esko", "batadungi"), so it is told plainly which Hindi to speak.
 # Calls 150-151 (6 Oct 2026): told to "think" in Devanagari, it still wrote every reply in English letters and
 # kept the accent, so it is now told to write its replies in Devanagari (its words are what it voices).
-def openai_accent(voice: str) -> str:
+def openai_accent(voice: str, speaks: bool = True) -> str:
     """OPENAI_ACCENT plus the agent's own gender: on call 138 the ChatGPT agent, a woman's voice named Gauri,
-    said "thoda sa time leta hoon, phir main aage batata hoon". Owner's wording, 6 Oct 2026."""
+    said "thoda sa time leta hoon, phir main aage batata hoon". Owner's wording, 6 Oct 2026.
+    speaks=False (Sarvam): the model only writes, Bulbul speaks, so the accent lines are left out; they were
+    paid for on every turn and could change nothing (21 Oct 2026)."""
     female = VOICES.get(voice, "female") != "male"
     pairs = [("kar rahi hoon", "kar raha hoon"), ("bata dungi", "bata dunga"), ("check karti hoon", "check karta hoon"),
              ("dekh leti hoon", "dekh leta hoon"), ("samajh gayi", "samajh gaya"),
@@ -58,7 +60,8 @@ def openai_accent(voice: str) -> str:
         pairs = [(b, a) for a, b in pairs]
     own, forms_ = ("FEMALE", "feminine") if female else ("MALE", "masculine")
     examples = "\n".join(f'  "main {say}", never "main {never}"' for say, never in pairs)
-    return OPENAI_ACCENT + f"""
+    head = OPENAI_ACCENT if speaks else "\nWRITING YOUR REPLIES (most important of all)" + _WRITING
+    return head + f"""
 LANGUAGE AND AGENT GENDER (strict)
 - You are a {own} Hindi/Hinglish-speaking calling agent, and your voice is {own.lower()}. Whenever you refer to
   yourself, in every turn, use {forms_} forms, even if the customer is of the other gender:
@@ -69,16 +72,10 @@ LANGUAGE AND AGENT GENDER (strict)
 """
 
 
-OPENAI_ACCENT = """
-VOICE AND ACCENT (most important of all)
-- Speak natural conversational Hindi/Hinglish the way people in North India (Delhi / western Uttar Pradesh)
-  speak on the phone, with a neutral North-Indian Hindi pronunciation. Keep Hindi words natural and clear.
-- NEVER a South Indian, Tamil, Telugu, Malayalam or Kannada accent or turn of phrase, and never an American or
-  British accent. Do not drift into any other regional accent, and do not imitate the customer's accent:
-  keep the same speaking style for the whole call.
+_WRITING = """
 - WRITE every reply in Devanagari, as a Hindi speaker types it, keeping only the English words below in English
   letters: "जी, आपका order confirm है?", "धन्यवाद जी, आपका दिन शुभ हो।" Never write a reply in English letters.
-- Always write and say the names as "वैदिक वैभव" and "वैदिक शॉप", slowly and clearly, the Hindi way, every word.
+- Always write the names as "वैदिक वैभव" and "वैदिक शॉप", the Hindi way, every word.
 - Write every price in Hindi words, exactly as the details give it ("दो सौ पचास रुपये"), never in digits.
 - The Hindi lines in this prompt are in English letters only for convenience. Say the same words, written in
   Devanagari: "theek hai" is "ठीक है", "bata dijiye" is "बता दीजिए", "isko" is "इसको", "bata dungi" is "बता दूँगी".
@@ -99,6 +96,14 @@ TALK LIKE A PERSON, NOT A SYSTEM
 - If you did not understand them, say so simply ("sorry ji, samajh nahi aaya, ek baar phir bata dijiye")
   instead of guessing what they meant.
 """
+OPENAI_ACCENT = """
+VOICE AND ACCENT (most important of all)
+- Speak natural conversational Hindi/Hinglish the way people in North India (Delhi / western Uttar Pradesh)
+  speak on the phone, with a neutral North-Indian Hindi pronunciation. Keep Hindi words natural and clear.
+- NEVER a South Indian, Tamil, Telugu, Malayalam or Kannada accent or turn of phrase, and never an American or
+  British accent. Do not drift into any other regional accent, and do not imitate the customer's accent:
+  keep the same speaking style for the whole call.
+- Say the names "वैदिक वैभव" and "वैदिक शॉप" slowly and clearly.""" + _WRITING
 
 # Hindi number words 0-99: irregular, so they are listed. Call 159: ChatGPT said "Rs 250" wrong in Hindi twice,
 # so the prompt now gives the exact words to say.

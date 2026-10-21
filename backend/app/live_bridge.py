@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import catalog, coupons, db, messaging, openai_bridge, sarvam_bridge
+from . import catalog, coupons, db, messaging, openai_bridge, sarvam_bridge, shopify
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
@@ -27,7 +27,8 @@ from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, 
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
                      TRANSCRIPT_LANGUAGES, gemini_voice)
 from .call_types import (CART_NO_CLOSE, DEFAULT as DEFAULT_CALL_TYPE, ORDER_CONFIRMED_CLOSE, CallType, call_coupon,
-                         call_type_for, coupon_offer_line, coupon_yes_line)
+                         call_type_for, coupon_offer_line, coupon_yes_line, PREPAID_NO_LINE,
+                         PREPAID_PAYMENT_QUESTION, prepaid_coupon_for, prepaid_yes_line)
 from .prompts import forms
 from .tools import tools_for
 
@@ -480,6 +481,14 @@ def yes_to_coupon(turns: list[dict[str, str]]) -> str:
     return ""
 
 
+def _yes_before_coupon(state: "CallState") -> str:
+    """Order confirmation with the WhatsApp coupon (owner, 21 Oct 2026): a "nahi" to the coupon offer is not a no to the
+    order. Their yes to the order before the offer, if the offer was made; "" otherwise."""
+    if state.call_type.key != "order_confirmation" or not coupon_offered(state.transcript):
+        return ""
+    return ever_yes_to_main_question(state.transcript, state.call_type.main_question)
+
+
 def _starts_with_no(text: str) -> bool:
     words = re.findall(r"[^\s.,;:!?।|\"'()\-]+", text.lower())
     return bool(words) and words[0] in _OPENING_NO
@@ -576,6 +585,9 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
     if outcome == "wants_coupon":
         return coupon_yes_line(voice)   # owner, 19 Oct 2026
     if outcome == "confirmed" and state.call_type.key == "order_confirmation":
+        if state.prepaid_offer and coupon_offered(state.transcript):
+            # Call 507: a yes to the WhatsApp coupon got the plain close; the coupon's own close, by their answer.
+            return prepaid_yes_line() if yes_to_coupon(state.transcript) else PREPAID_NO_LINE
         return ORDER_CONFIRMED_CLOSE   # owner, 19 Oct 2026: it had said only "dhanyavaad ji, aapka din shubh ho"
     if outcome == "not_interested" and _COMPLAINT.search(probe_answer(state.transcript)):
         # Call 191: "aapki site fake product bhejti hai" to "koi dikkat aayi thi?" got only "theek hai ji, dhanyavaad".
@@ -781,6 +793,7 @@ class CallState:
     address_refusals: int = 0           # mark_outcome sent back because the address on record was never asked about
     say_back_refusals: int = 0          # mark_outcome sent back because a mismatch was never said back
     coupon: dict | None = None          # the coupon this cart call may offer once (coupons.py), or None
+    prepaid_offer: dict | None = None   # the WhatsApp coupon this COD order call may offer once (call_types), or None
     coupon_refused: bool = False        # "not_interested" sent back once: the coupon offer was never made
     coupon_yes_refusals: int = 0        # "wants_coupon" sent back: no clear yes to the offer
     offer_wait_refused: bool = False    # a result sent back once: it came in the same breath as the coupon offer
@@ -932,6 +945,8 @@ async def run_call(
     state = CallState(call_id=call_id, call_type=call_type_for(contact), model=model)
     if contact and state.call_type.offers_coupon:
         state.coupon = call_coupon(contact)   # the one the prompt was built with (attached when the call was placed)
+    if contact and state.call_type.key == "order_confirmation":
+        state.prepaid_offer = prepaid_coupon_for(contact)   # the prompt's WHATSAPP COUPON, if it has one
     if openai_bridge.is_openai_model(model):
         state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
     elif sarvam_bridge.is_sarvam_model(model):
@@ -1479,7 +1494,8 @@ async def run_call(
                 result = f"not called: {state.error}"     # our failure; the customer was never rung
             else:
                 state.outcome, result = classify_unanswered(cause)
-        elif not state.outcome and (yes := yes_to_main_question(state.transcript, state.call_type.main_question)):
+        elif not state.outcome and (yes := yes_to_main_question(state.transcript, state.call_type.main_question)
+                                    or _yes_before_coupon(state)):
             # The customer said yes to the call's main question and the call ended before the result was
             # written (calls 88 and 92: confirmed orders saved as "dropped" and queued to be rung again).
             has_address = bool(state.address or (contact or {}).get("address"))
@@ -1548,6 +1564,24 @@ async def run_call(
                 if (state.outcome_details or {}).get(key):
                     result += f": {state.outcome_details[key]}"
                     break
+        if (state.call_type.key == "order_confirmation" and contact and state.outcome in ("confirmed", "changed", "unclear")
+                and coupon_offered(state.transcript)):
+            # Owner, 21 Oct 2026: the coupon for paying online goes to a cash-on-delivery customer on WhatsApp, only on their
+            # own yes to the offer (checked here, not taken from the model). Never stops the call being saved.
+            try:
+                offer, yes = prepaid_coupon_for(contact), yes_to_coupon(state.transcript)
+                if offer and yes:
+                    message_id = messaging.queue_prepaid_coupon(contact=contact, offer=offer, call_id=call_id,
+                                                                to=str((meta or {}).get("to") or ""), channel=channel)
+                    # Owner, 21 Oct 2026: the order's payment becomes Prepaid, with a note, and its Shopify tags follow.
+                    change = shopify.mark_prepaid(contact, offer["code"], call_id)
+                    state.outcome_details = {**(state.outcome_details or {}), "whatsapp_coupon": offer["code"],
+                                             "payment_change": change, **({"message_id": message_id} if message_id else {})}
+                    log.info("call %s: prepaid coupon %s for WhatsApp, message %s (yes: %r)", call_id, offer["code"], message_id, yes[:80])
+                else:
+                    log.info("call %s: prepaid coupon offered, not sent (%s)", call_id, "no clear yes" if offer else "no offer to send")
+            except Exception:  # noqa: BLE001
+                log.exception("call %s: could not queue the prepaid coupon message", call_id)
         if state.outcome == "wants_coupon" and contact:
             # Owner, 19 Oct 2026: the coupon code and the product go to them by message (messaging.py), to the number
             # this call rang. Never stops the call being saved.
@@ -1762,7 +1796,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
         # Call 160: "haan ji, kar do confirm" three replies back, then a garbled answer to the address question; only
         # the last two replies were looked at, the order was refused after the goodbye and the agent asked again.
         if (outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2))
-                and not yes_to_main_question(state.transcript, state.call_type.main_question)):
+                and not yes_to_main_question(state.transcript, state.call_type.main_question) and not _yes_before_coupon(state)):
             # No clear yes on record: the model is confirming on silence or noise (call 53 did exactly this).
             state.confirm_refusals += 1
             goodbye_said = _GOODBYE.search(clean_agent_text(state._out_buf)) is not None
@@ -2102,6 +2136,11 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
         state.record_pending = False
         await send_event({"type": "outcome", "outcome": state.outcome, "details": args})
         spoken = clean_agent_text(state._out_buf).strip()
+        if (state.prepaid_offer and outcome == "confirmed" and not coupon_offered(state.transcript) and not offers_coupon(spoken)
+                and not said_goodbye(state.transcript) and _GOODBYE.search(spoken) is None and "?" not in spoken):
+            # The confirmed order recorded before the payment was asked about (owner, 21 Oct 2026): ask it first.
+            return {"status": "recorded", "next": f"Before the goodbye, ask only this: '{PREPAID_PAYMENT_QUESTION}' Then go on "
+                    "with PAYMENT AND WHATSAPP COUPON from step b."}
         if not said_goodbye(state.transcript) and _GOODBYE.search(spoken) is None and "?" not in spoken:
             # Call 178: the reason was written down with nothing said, and the reply asked for after it was
             # "theek hai, main aapki baat samajh rahi hoon. dekhti hoon, phir aage badhte hain." Owner: say the goodbye.
@@ -2154,6 +2193,26 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
     return {"error": f"unknown tool {name}"}
 
 
+def _lines_so_far(state: "CallState", last: int | None = None) -> list[dict]:
+    """The conversation so far (the last `last` turns, or all), with the words still being spoken at the end."""
+    lines = list(state.transcript[-last:] if last else state.transcript)
+    if state._in_buf.strip():
+        lines.append({"role": "customer", "text": state._in_buf.strip()})
+    if clean_agent_text(state._out_buf) and not state.held:   # a held-back reply is never heard
+        lines.append({"role": "agent", "text": clean_agent_text(state._out_buf)})
+    return lines[-last:] if last else lines
+
+
+def live_call(call_id: int) -> dict | None:
+    """One call in progress with its whole conversation so far, for the dashboard's side panel; None once it ended."""
+    a = ACTIVE.get(call_id)
+    row = next((r for r in live_snapshot() if r["call_id"] == call_id), None) if a else None
+    if not row:
+        return None
+    state: CallState = a["state"]
+    return {**row, "lines": _lines_so_far(state), "outcome_details": state.outcome_details}
+
+
 def live_snapshot() -> list[dict]:
     """What the dashboard shows for calls that are ringing or in progress."""
     now = time.monotonic()
@@ -2173,11 +2232,7 @@ def live_snapshot() -> list[dict]:
             status, seconds = "agent_speaking", now - state.started
         else:
             status, seconds = "listening", now - state.started
-        lines = list(state.transcript[-3:])
-        if state._in_buf.strip():
-            lines.append({"role": "customer", "text": state._in_buf.strip()})
-        if clean_agent_text(state._out_buf) and not state.held:   # a held-back reply is never heard
-            lines.append({"role": "agent", "text": clean_agent_text(state._out_buf)})
+        lines = _lines_so_far(state, 3)
         c = a["contact"]
         out.append({
             "call_id": call_id, "channel": a["channel"], "status": status, "seconds": round(seconds),

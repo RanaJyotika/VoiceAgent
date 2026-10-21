@@ -46,6 +46,7 @@
     wants_to_order: ['good', 'check', 'Wants to order'],
     already_ordered: ['good', 'check', 'Already ordered'],
     wants_coupon: ['good', 'tag', 'Wants coupon'],
+    done: ['good', 'check', 'Done'],   // a single call for a typed reason (call_types.CUSTOM_CALL)
     error: ['critical', 'alert', 'Error'],
     none: ['', 'minus', 'No outcome'],
     // contact statuses that are not call outcomes
@@ -61,7 +62,7 @@
 
   // ---------------- sidebar pages, phone drawer, transcript modal ----------------
   // Every page has exactly one button, in the sidebar.
-  const PAGES = ['overview', 'store', 'campaigns', 'coupons', 'callback', 'call', 'history', 'spend'];
+  const PAGES = ['overview', 'store', 'campaigns', 'coupons', 'callback', 'history', 'spend'];   // single calls: the new dashboard's Make a call
   const navButtons = [...document.querySelectorAll('.nav [data-page]')];
   window.showPage = (name) => {
     if (!PAGES.includes(name)) name = 'overview';
@@ -90,12 +91,11 @@
   el('burger').onclick = () => (side.classList.contains('open') ? closeDrawer() : openDrawer());
 
   // openSheet is what the older code calls; sheets are now pages, except the transcript, which is a modal.
-  const SHEET_TO_PAGE = { contacts: 'campaigns', call: 'call', console: 'call' };
+  const SHEET_TO_PAGE = { contacts: 'campaigns' };
   window.openSheet = (name) => {
     if (name === 'transcript') { el('sheet-transcript').classList.add('on'); el('scrim').classList.add('on'); return; }
     if (name === null) { el('sheet-transcript').classList.remove('on'); closeDrawer(); el('scrim').classList.remove('on'); return; }
     window.showPage(SHEET_TO_PAGE[name] || name);
-    if (name === 'console') el('sheet-console').scrollIntoView({ block: 'nearest' });
   };
   for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => window.openSheet(null);
   el('scrim').onclick = () => window.openSheet(null);

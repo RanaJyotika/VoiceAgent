@@ -3,22 +3,25 @@
 import { useState, useSyncExternalStore } from "react";
 import { AlertTriangle, Phone, Plus, RefreshCw } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { LinkButton } from "@/components/ui/button";
+import Link from "next/link";
+import { Button, buttonClass } from "@/components/ui/button";
+import { useMakeCall } from "@/components/make-call/make-call-provider";
 import { usePoll } from "@/hooks/use-poll";
 import { overviewUrl, type Overview, type OverviewQuery } from "@/lib/api";
 import { fmtInt, fmtPct, fmtRs, fmtToday, pct } from "@/lib/format";
-import { classic } from "@/lib/nav";
 import { AttentionList } from "./attention-list";
 import { CallVolumeChart } from "./call-volume-chart";
 import { FiltersBar } from "./filters-bar";
 import { LiveCallsTable } from "./live-calls-table";
 import { StatCard, change } from "./stat-card";
+import { TodayCards } from "./today-cards";
 
 const VS: Record<string, string> = { today: "vs yesterday", yesterday: "vs day before", "7d": "vs prev 7d", "30d": "vs prev 30d", custom: "vs period before" };
 const noSubscribe = () => () => {};
 
 export function OverviewView() {
   const [query, setQuery] = useState<OverviewQuery>({ range: "today" });
+  const { openMakeCall } = useMakeCall();
   // Today's date is known only in the browser (the page itself is built ahead of time).
   const today = useSyncExternalStore(noSubscribe, fmtToday, () => "");
 
@@ -37,14 +40,14 @@ export function OverviewView() {
             <p className="mt-0.5 text-[13.5px] text-muted-foreground">{today ? `${today} · Vedic Shop` : "Vedic Shop"}</p>
           </div>
           <div className="ml-auto flex gap-2">
-            <LinkButton href={classic("call")} variant="outline">
+            <Button variant="outline" onClick={openMakeCall}>
               <Phone />
               Make call
-            </LinkButton>
-            <LinkButton href={classic("campaigns")} variant="primary">
+            </Button>
+            <Link href="/campaigns/new/" className={buttonClass("primary")}>
               <Plus />
               Create campaign
-            </LinkButton>
+            </Link>
           </div>
         </div>
         <div className="mt-4">
@@ -108,6 +111,8 @@ export function OverviewView() {
             {data ? <AttentionList items={data.attention} /> : <div className="px-4 py-6 text-muted-foreground">Loading…</div>}
           </Card>
         </div>
+
+        <TodayCards />
       </div>
     </div>
   );

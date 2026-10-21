@@ -11,5 +11,5 @@ if exist frontend\package.json (
   call npm run build
   popd
 )
-.venv\Scripts\python.exe scripts\start_with_tunnel.py
+.venv\Scripts\python.exe backend\scripts\start_with_tunnel.py
 pause

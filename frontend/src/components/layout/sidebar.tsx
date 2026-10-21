@@ -8,8 +8,12 @@ import { fmtRs } from "@/lib/format";
 import { NAV, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-type Stats = { cost_rs: number; calls: number };
-type Auto = { enabled: boolean; running: boolean; settings: { budget_rs: number } };
+/** The page or one under it: /campaigns/ is lit on /campaigns/view/?id=3 too. */
+const isActive = (pathname: string, href: string) => (href === "/" ? pathname === "/" : pathname.replace(/\/$/, "").startsWith(href.replace(/\/$/, "")));
+
+/** /api/budget: the workspace limits set on the Usage page, and what has been spent against them. */
+type Budget = { monthly_rs: number; daily_rs: number; spent_today_rs: number; spent_month_rs: number };
+type Auto = { enabled: boolean; running: boolean };
 
 function NavLink({ item, active, onNavigate }: { item: NavItem; active: boolean; onNavigate: () => void }) {
   const cls = cn(
@@ -38,11 +42,13 @@ function NavLink({ item, active, onNavigate }: { item: NavItem; active: boolean;
 
 export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
   const pathname = usePathname();
-  const stats = usePoll<Stats>("/api/stats?period=today", 30_000).data;
+  const b = usePoll<Budget>("/api/budget", 30_000).data;
   const auto = usePoll<Auto>("/api/auto", 30_000).data;
 
-  const budget = auto?.settings.budget_rs ?? 0;
-  const spent = stats?.cost_rs ?? 0;
+  // The daily limit if one is set, else the monthly one, else just what was spent today.
+  const monthly = !b?.daily_rs && !!b?.monthly_rs;
+  const budget = (monthly ? b?.monthly_rs : b?.daily_rs) ?? 0;
+  const spent = (monthly ? b?.spent_month_rs : b?.spent_today_rs) ?? 0;
   const used = budget ? Math.min(100, Math.round((100 * spent) / budget)) : null;
 
   return (
@@ -63,7 +69,7 @@ export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
             <div className="px-2.5 pb-1.5 text-[12.5px] text-muted-foreground">{group.title}</div>
             <div className="flex flex-col gap-0.5">
               {group.items.map((item) => (
-                <NavLink key={item.label} item={item} active={!item.classic && pathname === item.href} onNavigate={onNavigate} />
+                <NavLink key={item.label} item={item} active={!item.classic && isActive(pathname, item.href)} onNavigate={onNavigate} />
               ))}
             </div>
           </div>
@@ -73,7 +79,9 @@ export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
       <div className="space-y-3 p-2 pb-3">
         <div className="rounded-lg border bg-card p-3">
           <div className="flex items-baseline justify-between text-[12.5px]">
-            <span className="text-muted-foreground">Spent today</span>
+            <Link href="/usage/" className="text-muted-foreground hover:text-foreground hover:underline" onClick={onNavigate}>
+              {monthly ? "Spent this month" : "Spent today"}
+            </Link>
             <span className="font-medium tabular">{used == null ? "" : `${used}%`}</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -81,7 +89,7 @@ export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
           </div>
           <div className="mt-2 text-[12.5px] text-muted-foreground tabular">
             {fmtRs(spent)}
-            {budget ? ` of ${fmtRs(budget)} daily budget` : ""}
+            {budget ? ` of ${fmtRs(budget)} ${monthly ? "monthly" : "daily"} limit` : " · no limit set"}
           </div>
         </div>
         <div className="flex items-center gap-2.5 px-2 text-[13px]">

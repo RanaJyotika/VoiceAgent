@@ -18,18 +18,21 @@ A reply's tool calls are handed over only once its sound has all arrived, so a g
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 import random
 import re
 import time
 import urllib.parse
+from collections import deque
 
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
-from .config import (OUTPUT_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_LANGUAGE, SARVAM_MODEL, SARVAM_PACE, SARVAM_STT_MODE,
-                     SARVAM_STT_MODEL, SARVAM_TTS_MODEL, SARVAM_VOICE_FEMALE, SARVAM_VOICE_MALE, SARVAM_VOICES, VOICES)
+from .config import (DATA_DIR, OUTPUT_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_LANGUAGE, SARVAM_MODEL, SARVAM_PACE, SARVAM_SPEAKERS,
+                     SARVAM_STT_MODE, SARVAM_STT_MODEL, SARVAM_TTS_FALLBACK_MODEL, SARVAM_TTS_MODEL, SARVAM_V3_FEMALE,
+                     SARVAM_V3_MALE, SARVAM_V4_OTHER, SARVAM_VOICE_FEMALE, SARVAM_VOICE_MALE, SARVAM_VOICES, VOICES)
 from .openai_bridge import (OPENING_ONLY, _FunctionCall, _Message, _ModelTurn, _Part, _Blob,
                             _ServerContent, _Text, _TokenDetail, _ToolCall, _Usage, openai_tools)
 from .prompts import about_hint, openai_accent
@@ -57,6 +60,62 @@ _HELPER = {
              "अच्छा जी, एक सेकंड, मैं चेक कर लेता हूँ।"],
 }
 _STILL = {"female": ["बस एक पल और जी।", "जी, बस देख रही हूँ।"], "male": ["बस एक पल और जी।", "जी, बस देख रहा हूँ।"]}
+
+
+class _Clips:
+    """Bulbul's sound for sentences the agent says word for word again and again ("ji, aapka order confirm ho gaya
+    hai. dhanyavaad ji.", "हेलो जी, मेरी आवाज़ आ रही है?"). The second time a sentence is said its sound is kept, and
+    from the third on it plays from disk instead of being paid for again (owner, 21 Oct 2026: cut the calling cost).
+    Only hashes are counted, never the words. A sound is kept only if its length fits its text: a missed "final"
+    could otherwise file one sentence's sound under another."""
+
+    MAX_SEEN = 20_000   # sentences counted; past this, those heard only once are forgotten
+    CHUNK = OUTPUT_SAMPLE_RATE * 2 // 10   # 100 ms, the size Bulbul's own chunks come in
+
+    def __init__(self, folder) -> None:
+        self.folder = folder
+        self._seen: dict[str, int] | None = None
+
+    @staticmethod
+    def key(*parts: str) -> str:
+        return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:24]
+
+    def get(self, key: str) -> bytes | None:
+        path = self.folder / f"{key}.pcm"
+        return path.read_bytes() if path.exists() else None
+
+    def wanted(self, key: str) -> bool:
+        """Counts one more saying of this sentence; True when its sound should be kept."""
+        if self._seen is None:
+            try:
+                self._seen = json.loads((self.folder / "seen.json").read_text())
+            except (OSError, ValueError):
+                self._seen = {}
+        self._seen[key] = self._seen.get(key, 0) + 1
+        if len(self._seen) > self.MAX_SEEN:
+            self._seen = {k: n for k, n in self._seen.items() if n > 1}
+        self._write("seen.json", json.dumps(self._seen).encode())
+        return self._seen[key] >= 2
+
+    def keep(self, key: str, pcm: bytes, chars: int) -> bool:
+        seconds = len(pcm) / (OUTPUT_SAMPLE_RATE * 2)
+        if not 0.025 * chars <= seconds <= 0.25 * chars + 1:
+            return False
+        self._write(f"{key}.pcm", pcm)
+        return True
+
+    def _write(self, name: str, data: bytes) -> None:
+        try:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            tmp = self.folder / (name + ".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(self.folder / name)
+        except OSError as exc:
+            log.warning("could not save a voice clip (%s)", exc)
+
+
+_CLIPS = _Clips(DATA_DIR / "voice_clips")
+
 # A sentence ends at a danda, "?" or "!", or at a full stop with a space after it ("2." may be "2.5" in the making).
 _SENTENCE_END = re.compile(r"[।?!]|\.(?=\s)")
 _MARKUP = re.compile(r"[*#`_~>\[\]]|[\U0001F300-\U0001FAFF☀-➿]")
@@ -67,10 +126,22 @@ def is_sarvam_model(model: str) -> bool:
 
 
 def voice_for(gemini_voice: str) -> str:
-    """The Bulbul speaker chosen on the dashboard (Priya or Varun); for a Gemini voice, the one of its gender."""
+    """The Sarvam voice chosen on the dashboard (Priya, Shubh...); for a Gemini voice, the default one of its gender."""
     if gemini_voice in SARVAM_VOICES:
-        return gemini_voice.lower()
-    return SARVAM_VOICE_MALE if VOICES.get(gemini_voice, "female") == "male" else SARVAM_VOICE_FEMALE
+        return gemini_voice
+    return (SARVAM_VOICE_MALE if VOICES.get(gemini_voice, "female") == "male" else SARVAM_VOICE_FEMALE).capitalize()
+
+
+def tts_voice(voice: str, language: str) -> tuple[str, str]:
+    """The Bulbul model and speaker for a dashboard voice in a language: the voice's own Hindi persona, v4's voice of
+    its gender in another language, or v3 where v4 has none (Malayalam, Odia, a Tamil or Punjabi woman)."""
+    gender = SARVAM_VOICES.get(voice, "female")
+    if SARVAM_TTS_MODEL.startswith("bulbul:v4"):
+        persona = SARVAM_SPEAKERS.get(voice) if language == "hi-IN" else SARVAM_V4_OTHER.get(language, {}).get(gender)
+        if persona:
+            return SARVAM_TTS_MODEL, persona
+        return SARVAM_TTS_FALLBACK_MODEL, SARVAM_V3_MALE if gender == "male" else SARVAM_V3_FEMALE
+    return SARVAM_TTS_MODEL, SARVAM_V3_MALE if gender == "male" else SARVAM_V3_FEMALE
 
 
 def chat_tools(tools: list | None = None) -> list[dict]:
@@ -90,16 +161,17 @@ def _pcm(data: bytes) -> bytes:
 class SarvamSession:
     """One call's conversation, presenting the handful of methods live_bridge calls."""
 
-    def __init__(self, *, prompt: str, speaker: str, label: str, manual_vad: bool, tools: list[dict],
+    def __init__(self, *, prompt: str, voice: str, label: str, manual_vad: bool, tools: list[dict],
                  greeting: str = "") -> None:
         self.prompt = prompt
-        self.speaker = speaker
+        self.voice = voice              # the dashboard's name for it (Priya); self.speaker is Bulbul's id for it
         self.label = label
         self.manual_vad = manual_vad    # the phone line marks the turns; on the browser test Saaras finds them
         self.tools = tools
         self.greeting = greeting
         self.next_hint = ""             # extra instructions for the reply to the next customer turn only (live_bridge)
         self.language = SARVAM_LANGUAGE   # what Saaras listens for and Bulbul speaks; the customer may ask for another
+        self.tts_model, self.speaker = tts_voice(voice, self.language)
         self._stt_switch: asyncio.Task | None = None
         self.history: list[dict] = []   # the conversation, without the system prompt
         self._q: asyncio.Queue = asyncio.Queue()
@@ -131,13 +203,14 @@ class SarvamSession:
         self._last_tts = 0.0            # last time Bulbul sent anything, or we sent it text
         self._odd = b""                 # a half sample left over from the last chunk
         self._warned_codec = False
+        self._pending: deque = deque()  # per sentence sent, oldest first: [clip key or None, its sound so far, chars]
         # the reply
         self._reply: asyncio.Task | None = None
         self._responding = False        # a reply is being written or spoken right now
         self._said = ""                 # this reply's words sent to Bulbul
         self._got_audio = False         # this reply has produced sound
         self._tools_spoke = False       # the reply that called the tools waiting for answers had words in it
-        self._gender = SARVAM_VOICES.get(speaker.capitalize(), "female")
+        self._gender = SARVAM_VOICES.get(voice, "female")
         self._helped = False            # this reply already said "let me check"
         self._after_lookup = False      # the next reply answers a lookup: say "one moment more" if it is slow
         self._ready: tuple[list, list] = ([], [])   # tool calls of a reply fully written, not handed over yet
@@ -172,11 +245,12 @@ class SarvamSession:
             "speech_sample_rate": OUTPUT_SAMPLE_RATE, "output_audio_codec": "linear16"}})
 
     async def _open_tts(self) -> None:
-        params = {"model": SARVAM_TTS_MODEL, "send_completion_event": "true"}
+        params = {"model": self.tts_model, "send_completion_event": "true"}
         ws = await ws_connect(TTS_URL + "?" + urllib.parse.urlencode(params), additional_headers=self._headers,
                               max_size=None, open_timeout=15, ping_interval=20)
         await ws.send(self._tts_config())
         self._tts, self._flushes, self._odd = ws, 0, b""
+        self._pending.clear()
         self._tts_reader = asyncio.create_task(self._read_tts(ws))
 
     def _language_note(self) -> str:
@@ -185,12 +259,20 @@ class SarvamSession:
 
     async def _switch_language(self, code: str) -> None:
         """The customer asked for another language (owner, 19 Oct 2026): Bulbul speaks it from the next reply on (a new
-        config is taken at any point), and Saaras listens for it on a fresh socket, opened while the reply is made."""
-        log.info("%s: the customer asked for %s; voice and speech-to-text switch to it", self.label, code)
+        config is taken at any point), and Saaras listens for it on a fresh socket, opened while the reply is made.
+        Bulbul v4's voices each speak one language, so the speaker changes too, and where v3 takes over, the socket."""
         self.language = code
-        ws = await self._ready_tts()
-        async with self._tts_lock:
-            await ws.send(self._tts_config())
+        model, self.speaker = tts_voice(self.voice, code)
+        log.info("%s: the customer asked for %s; voice (%s %s) and speech-to-text switch to it", self.label, code,
+                 model, self.speaker)
+        if model != self.tts_model:
+            self.tts_model = model
+            await self._fresh_tts()
+            await self._ready_tts()   # a new socket is configured as it opens
+        else:
+            ws = await self._ready_tts()
+            async with self._tts_lock:
+                await ws.send(self._tts_config())
         self._stt_switch = asyncio.create_task(self._reopen_stt())
 
     async def _reopen_stt(self) -> None:
@@ -516,11 +598,26 @@ class SarvamSession:
             return
         if self._said:
             text = " " + text
+        key = _CLIPS.key(self.tts_model, self.speaker, self.language, str(SARVAM_PACE), str(OUTPUT_SAMPLE_RATE),
+                         text.strip())
+        clip = _CLIPS.get(key)
+        if clip:
+            await self._spoken()   # the sentences before it first: their sound may still be arriving
+            await self._q.put(_Message(server_content=_ServerContent(output_transcription=_Text(text))))
+            for at in range(0, len(clip), _CLIPS.CHUNK):
+                await self._q.put(_Message(server_content=_ServerContent(
+                    model_turn=_ModelTurn(parts=[_Part(inline_data=_Blob(data=clip[at:at + _CLIPS.CHUNK]))]))))
+            self._got_audio = True
+            self._said += text
+            self._last_tts = time.monotonic()
+            log.info("%s: said from a saved clip, no voice charge: %s", self.label, text.strip())
+            return
         await self._q.put(_Message(server_content=_ServerContent(output_transcription=_Text(text))))
         ws = await self._ready_tts()
         async with self._tts_lock:
             await ws.send(json.dumps({"type": "text", "data": {"text": text.strip()}}))
             await ws.send(json.dumps({"type": "flush"}))   # speak it now, not when Bulbul's buffer fills
+        self._pending.append([key if _CLIPS.wanted(key) else None, bytearray(), len(text.strip())])
         self._flushes += 1
         self._said += text
         self._last_tts = time.monotonic()
@@ -532,6 +629,7 @@ class SarvamSession:
             if time.monotonic() - self._last_tts > TTS_QUIET_SECONDS:
                 log.info("%s: no word from the voice for %.0f s; taking the reply as spoken", self.label, TTS_QUIET_SECONDS)
                 self._flushes = 0
+                self._pending.clear()   # which sound was whose is no longer certain: keep none of it
                 break
             await asyncio.sleep(0.05)
 
@@ -622,11 +720,17 @@ class SarvamSession:
                     pcm, self._odd = (pcm[:-1], pcm[-1:]) if len(pcm) % 2 else (pcm, b"")
                     if pcm:
                         self._got_audio = True
+                        if self._pending and self._pending[0][0]:
+                            self._pending[0][1].extend(pcm)
                         await self._q.put(_Message(server_content=_ServerContent(
                             model_turn=_ModelTurn(parts=[_Part(inline_data=_Blob(data=pcm))]))))
                 elif kind == "event" and data.get("event_type") == "final":
                     self._last_tts = time.monotonic()
                     self._flushes = max(0, self._flushes - 1)
+                    if self._pending:
+                        key, pcm, chars = self._pending.popleft()
+                        if key and pcm and _CLIPS.keep(key, bytes(pcm), chars):
+                            log.info("%s: kept a clip of a sentence said before; next time it costs nothing", self.label)
                 elif kind == "error":
                     msg = data.get("message") or json.dumps(evt, ensure_ascii=False)[:200]
                     log.warning("%s: voice error %s: %s", self.label, data.get("code"), msg)
@@ -695,13 +799,13 @@ async def connect(*, prompt: str, voice: str, label: str = "", manual_vad: bool 
     while the phone is still ringing."""
     if not SARVAM_API_KEY:
         raise RuntimeError("SARVAM_API is not set in .env")
-    speaker = voice_for(voice)
-    session = SarvamSession(prompt=prompt + openai_accent(voice), speaker=speaker, label=label, manual_vad=manual_vad,
-                            tools=chat_tools(tools), greeting=greeting)
+    session = SarvamSession(prompt=prompt + openai_accent(voice, speaks=False), voice=voice_for(voice), label=label,
+                            manual_vad=manual_vad, tools=chat_tools(tools), greeting=greeting)
     try:
         await session.open()
         log.info("%s: connected to Sarvam (chat %s, words %s/%s, voice %s %s, turns marked %s)", label, SARVAM_MODEL,
-                 SARVAM_STT_MODEL, SARVAM_STT_MODE, SARVAM_TTS_MODEL, speaker, "by us" if manual_vad else "by Saaras")
+                 SARVAM_STT_MODEL, SARVAM_STT_MODE, session.tts_model, session.speaker,
+                 "by us" if manual_vad else "by Saaras")
         yield session
     finally:
         await session.aclose()

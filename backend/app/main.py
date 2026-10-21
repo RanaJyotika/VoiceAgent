@@ -1,26 +1,29 @@
 """FastAPI app: contact upload, browser test call over WebSocket, call history."""
 import asyncio
+from dataclasses import asdict
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog, coupons, db, messaging, mongo_sync, orders_view, shopify, store_orders
 from .autodial import resume_after_restart, router as autodial_router
-from .campaign import CAMPAIGN, router as campaign_router
+from .campaign import CAMPAIGN, clean_settings, router as campaign_router, schedule_worker as campaign_schedules
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
                      ROOT, SARVAM_VOICES, STALE_PAGE, VOICES)
 from .contacts import (build_results, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
-from .live_bridge import live_snapshot, run_call
+from .live_bridge import live_call, live_snapshot, run_call
 from .intake import router as intake_router
 from .overview import router as overview_router
+from .store_import import router as store_import_router
+from .usage import router as usage_router
 from .plivo_bridge import router as plivo_router
-from .call_types import CALL_TYPES, get_prompt
+from .call_types import CALL_TYPES, CUSTOM_CALL, get_prompt, with_reason
 from .prompts import LANGUAGES, with_language
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -41,7 +44,9 @@ class _QuietPolling(logging.Filter):
         a = record.args
         if not isinstance(a, tuple) or len(a) < 5:
             return True
-        return not (a[1] == "GET" and str(a[2]).split("?")[0] in self.NOISY and a[4] == 200)
+        path = str(a[2]).split("?")[0]
+        # /api/live/<id>: the new dashboard's call panel asks every second while it is open.
+        return not (a[1] == "GET" and (path in self.NOISY or path.startswith("/api/live/")) and a[4] == 200)
 
 
 logging.getLogger("uvicorn.access").addFilter(_QuietPolling())
@@ -67,6 +72,8 @@ app.include_router(mongo_sync.router)
 app.include_router(store_orders.router)
 app.include_router(orders_view.router)
 app.include_router(overview_router)
+app.include_router(store_import_router)
+app.include_router(usage_router)
 
 
 async def stall_monitor() -> None:
@@ -89,6 +96,7 @@ async def _start_monitor() -> None:
     asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
     asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
     asyncio.create_task(messaging.worker())   # coupon messages, once a message service is set up
+    asyncio.create_task(campaign_schedules())   # campaigns set to start at a time start then
     resume_after_restart()   # automatic calling always starts off; only the Switch on button starts it
 
 
@@ -125,7 +133,8 @@ def _campaign_or_404(campaign_id: int) -> dict:
 
 
 def _clean_campaign(body: dict, call_type_key: str) -> dict:
-    """Name, facts and last call date from the dashboard form, checked against the call type."""
+    """Name, facts and last call date from the dashboard form, checked against the call type. {"draft": true} (the
+    wizard) may leave required facts empty for now: Start and Automatic refuse until they are filled in."""
     ct = CALL_TYPES.get(call_type_key)
     if not ct:
         raise HTTPException(400, "Pick a call type.")
@@ -133,12 +142,25 @@ def _clean_campaign(body: dict, call_type_key: str) -> dict:
     if not name:
         raise HTTPException(400, "Give the campaign a name.")
     given = body.get("facts") or {}
-    facts = {f.key: str(given.get(f.key) or "").strip()[:2000] for f in ct.facts}
+    # The offers list (JSON) may run longer than one written detail.
+    facts = {f.key: str(given.get(f.key) or "").strip()[:8000 if f.key == "offers" else 2000] for f in ct.facts}
     missing = [f.label for f in ct.facts if f.required and not facts[f.key]]
-    if missing:
+    if missing and not body.get("draft"):
         raise HTTPException(400, "Missing: " + ", ".join(missing))
     last = str(body.get("last_call_date") or "").strip()[:10]
     return {"name": name, "facts": facts, "last_call_date": last}
+
+
+def _save_settings(campaign_id: int, body: dict) -> None:
+    """The new dashboard's wizard sends the run settings (agent, calling rules, budget) with the campaign; they are
+    what the campaign's Start form opens with. Without "settings" nothing changes. Not while it is calling."""
+    raw = body.get("settings")
+    if not isinstance(raw, dict):
+        return
+    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+        raise HTTPException(400, "Stop this campaign before changing how it calls.")
+    s = clean_settings(raw, campaign_id)
+    db.update_campaign(campaign_id, settings={k: v for k, v in asdict(s).items() if k != "campaign_id"})
 
 
 @app.get("/api/campaigns")
@@ -156,7 +178,10 @@ async def campaigns() -> list[dict]:
 async def create_campaign(body: dict) -> dict:
     key = str(body.get("call_type") or "")
     clean = _clean_campaign(body, key)
+    if isinstance(body.get("settings"), dict):
+        clean_settings(body["settings"])   # refused here, before the campaign exists, rather than half made
     campaign_id = db.create_campaign(clean["name"], key, clean["facts"], clean["last_call_date"])
+    _save_settings(campaign_id, body)
     return db.get_campaign(campaign_id)
 
 
@@ -170,6 +195,7 @@ async def edit_campaign(campaign_id: int, body: dict) -> dict:
     camp = _campaign_or_404(campaign_id)
     clean = _clean_campaign(body, camp["call_type"])
     db.update_campaign(campaign_id, **clean)
+    _save_settings(campaign_id, body)
     return db.get_campaign(campaign_id)
 
 
@@ -187,6 +213,29 @@ async def remove_campaign(campaign_id: int) -> dict:
 @app.get("/api/contacts")
 async def contacts(campaign_id: int | None = None) -> list[dict]:
     return db.list_contacts(campaign_id)
+
+
+@app.get("/api/contacts/search")
+async def contacts_search(q: str = "", limit: int = 20) -> list[dict]:
+    """The Make a call picker in the new dashboard: a few matching contacts, not the whole list."""
+    return db.search_contacts(q, limit)
+
+
+@app.post("/api/contacts/single")
+async def contacts_single(body: dict) -> dict:
+    """A contact for one call to a number typed in the Make a call dialog, about a typed reason. It belongs to no
+    campaign, so automatic calling never rings it; the reason stays on it for a call back."""
+    phone = normalise_phone(body.get("phone"))
+    if not is_valid_phone(phone):
+        raise HTTPException(400, "Type a valid 10-digit mobile number.")
+    reason = str(body.get("reason") or "").strip()[:1000]
+    if not reason:
+        raise HTTPException(400, "Write the reason for the call: the agent speaks about it.")
+    row = {"customer_name": str(body.get("name") or "").strip()[:120], "phone": phone,
+           "extra": {"call_reason": {"label": "Reason for the call", "value": reason}}}
+    contact_id = db.insert_contact(row, None, CUSTOM_CALL.key)
+    log.info("single call contact %s added for %s", contact_id, phone)
+    return {"id": contact_id}
 
 
 def _read_sheet(file: UploadFile, content: bytes, camp: dict) -> dict:
@@ -273,6 +322,15 @@ async def delete_contacts(campaign_id: int) -> dict:
     return {"ok": True}
 
 
+@app.delete("/api/campaigns/{campaign_id}/contacts/{contact_id}")
+async def delete_contact(campaign_id: int, contact_id: int) -> dict:
+    """Take one customer off the list before they are called (the wizard's Audience list). A called one stays."""
+    _campaign_or_404(campaign_id)
+    if not db.remove_uncalled_contact(campaign_id, contact_id):
+        raise HTTPException(400, "Only a contact not called yet can be taken off the list.")
+    return {"ok": True}
+
+
 @app.get("/api/campaigns/{campaign_id}/export")
 async def export_results(campaign_id: int) -> Response:
     """Each contact's details with why we called, whether they picked up and what they said, for the team."""
@@ -331,6 +389,22 @@ async def live() -> list[dict]:
     return live_snapshot()
 
 
+@app.get("/api/live/{call_id}")
+async def live_one(call_id: int) -> dict:
+    """One call for the side panel: the whole conversation so far while it is on, then what was saved when it ended."""
+    on = live_call(call_id)
+    if on:
+        return {**on, "live": True}
+    row = db.get_call(call_id)
+    if not row:
+        raise HTTPException(404, "No such call.")
+    return {"live": False, "call_id": call_id, "channel": row.get("channel"), "status": "ended",
+            "customer_name": row.get("customer_name") or "", "order_id": row.get("order_id") or "",
+            "to": row.get("phone") or "", "seconds": round(row.get("duration_sec") or 0),
+            "outcome": row.get("outcome"), "outcome_details": row.get("outcome_details") or {},
+            "error": row.get("error"), "lines": row.get("transcript") or []}
+
+
 @app.get("/api/stats")
 async def get_stats(period: str = "today") -> dict:
     return db.stats("all" if period == "all" else "today")
@@ -361,8 +435,8 @@ async def browser_call(ws: WebSocket, contact_id: int) -> None:
     model = ws.query_params.get("model") or GEMINI_LIVE_MODEL
     if model not in OFFERED_MODELS:
         model = OFFERED_MODELS[0]
-    contact = db.get_contact(contact_id)
-    if not contact:
+    contact = with_reason(db.get_contact(contact_id) or {}, ws.query_params.get("reason") or "")
+    if not contact.get("id"):
         await ws.send_text(json.dumps({"type": "error", "text": "contact not found"}))
         await ws.close()
         return
@@ -426,8 +500,14 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 class _Pages(StaticFiles):
     """The built dashboard. Its pages are never cached, so a rebuild shows at once; its scripts carry a hash in the name."""
     async def get_response(self, path: str, scope) -> Response:
+        rel = path.replace("\\", "/")   # a file path: backslashes on Windows
+        if rel.startswith(("api/", "ws/")):
+            # An address the server does not have (often: the page is newer than the running server). Say so in
+            # JSON like every other API error, not with the dashboard's HTML 404 page.
+            return JSONResponse({"detail": "Not Found: restart the server (run.bat / run_phone.bat) to load the latest code."},
+                                status_code=404)
         resp = await super().get_response(path, scope)
-        if not path.startswith("_next/"):
+        if not rel.startswith("_next/"):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
 

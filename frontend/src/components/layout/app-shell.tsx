@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MakeCallProvider } from "@/components/make-call/make-call-provider";
+import { FeedbackProvider } from "@/components/ui/feedback";
 import { cn } from "@/lib/utils";
 import { CommandMenu } from "./command-menu";
 import { Sidebar } from "./sidebar";
@@ -30,25 +32,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex min-h-screen">
-      <aside
-        className={cn(
-          "fixed inset-y-0 left-0 z-40 w-[256px] border-r bg-sidebar transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen",
-          mobileOpen ? "translate-x-0 shadow-xl" : "-translate-x-full",
-          collapsed ? "lg:hidden" : "lg:translate-x-0",
-        )}
-        aria-label="Sections"
-      >
-        <Sidebar onNavigate={() => setMobileOpen(false)} />
-      </aside>
-      {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setMobileOpen(false)} aria-hidden />}
+    <FeedbackProvider>
+      <MakeCallProvider>
+        <div className="flex min-h-screen">
+          <aside
+            className={cn(
+              "fixed inset-y-0 left-0 z-40 w-[256px] border-r bg-sidebar transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen",
+              mobileOpen ? "translate-x-0 shadow-xl" : "-translate-x-full",
+              collapsed ? "lg:hidden" : "lg:translate-x-0",
+            )}
+            aria-label="Sections"
+          >
+            <Sidebar onNavigate={() => setMobileOpen(false)} />
+          </aside>
+          {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setMobileOpen(false)} aria-hidden />}
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
-        <main className="min-w-0 flex-1">{children}</main>
-      </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <Topbar onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
+            <main className="min-w-0 flex-1">{children}</main>
+          </div>
 
-      <CommandMenu open={searchOpen} onClose={() => setSearchOpen(false)} />
-    </div>
+          <CommandMenu open={searchOpen} onClose={() => setSearchOpen(false)} />
+        </div>
+      </MakeCallProvider>
+    </FeedbackProvider>
   );
 }

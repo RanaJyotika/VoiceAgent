@@ -83,13 +83,16 @@ def init_db() -> None:
         _add_columns(conn, "campaigns", {
             "auto": "INTEGER DEFAULT 0",       # 1: automatic calling (autodial.py) rings this list
             "source": "TEXT DEFAULT ''",       # '' = made by hand (Excel, typed numbers); 'store' = filled from the store
+            "start_at": "TEXT",                # Indian-time ISO when a scheduled campaign starts calling by itself (campaign.py)
+            "start_note": "TEXT",              # what happened to the last scheduled start: started, not started and why, missed
         })
         # A server restart mid-campaign must not leave contacts stuck on "calling".
         conn.execute("UPDATE contacts SET status='pending' WHERE status='calling'")
         # Contacts from before campaigns existed go into one campaign of their own call type, so
-        # the list, its results and its history stay exactly as they were.
+        # the list, its results and its history stay exactly as they were. A single call's own contact
+        # (Make a call, call type "custom") has no campaign on purpose: leave it out (21 Oct 2026).
         loose = conn.execute("SELECT DISTINCT COALESCE(NULLIF(campaign, ''), 'order_confirmation') AS t "
-                             "FROM contacts WHERE campaign_id IS NULL").fetchall()
+                             "FROM contacts WHERE campaign_id IS NULL AND COALESCE(campaign, '') != 'custom'").fetchall()
         for r in loose:
             cur = conn.execute("INSERT INTO campaigns (name, call_type, facts, settings, created_at) VALUES (?, ?, '{}', '{}', ?)",
                                ("Order confirmation" if r["t"] == "order_confirmation" else r["t"].replace("_", " ").capitalize(),
@@ -190,6 +193,26 @@ def list_contacts(campaign_id: int | None = None) -> list[dict]:
         return out
 
 
+def search_contacts(q: str = "", limit: int = 20) -> list[dict]:
+    """A few contacts matching a name, phone, order number or product, newest first (the Make a call picker).
+    Light rows only: the full list is megabytes."""
+    q = q.strip()
+    where, args = "", []
+    if q:
+        like = f"%{q}%"
+        digits = "".join(ch for ch in q if ch.isdigit())
+        where = ("WHERE k.customer_name LIKE ? OR k.order_id LIKE ? OR k.product LIKE ? OR g.name LIKE ?"
+                 + (" OR k.phone LIKE ?" if digits else ""))
+        args = [like, like, like, like] + ([f"%{digits}%"] if digits else [])
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT k.id, k.customer_name, k.phone, k.order_id, k.product, k.quantity, k.amount, k.payment_mode, "
+            "k.address, k.status, k.campaign_id, g.name AS campaign_name, g.call_type "
+            f"FROM contacts k LEFT JOIN campaigns g ON g.id = k.campaign_id {where} ORDER BY k.id DESC LIMIT ?",
+            (*args, max(1, min(50, limit))))
+        return [dict(r) for r in rows]
+
+
 # --- campaigns -------------------------------------------------------------------------------------
 
 def _campaign_row(r) -> dict:
@@ -214,9 +237,9 @@ def get_campaign(campaign_id: int) -> dict | None:
 
 
 def update_campaign(campaign_id: int, **fields) -> None:
-    """Change name, facts, settings or last_call_date."""
+    """Change name, facts, settings, last_call_date, start_at or start_note."""
     sets, args = [], []
-    for key in ("name", "facts", "settings", "last_call_date"):
+    for key in ("name", "facts", "settings", "last_call_date", "start_at", "start_note"):
         if key in fields:
             value = fields[key]
             sets.append(f"{key}=?")
@@ -310,6 +333,14 @@ def clear_contacts(campaign_id: int | None = None) -> None:
             conn.execute("DELETE FROM contacts WHERE campaign_id=?", (campaign_id,))
         else:
             conn.execute("DELETE FROM contacts")
+
+
+def remove_uncalled_contact(campaign_id: int, contact_id: int) -> bool:
+    """Take one contact off a campaign's list, only if it has never been called (its history stays whole)."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM contacts WHERE id=? AND campaign_id=? AND status='pending' AND COALESCE(attempts, 0)=0 "
+                           "AND NOT EXISTS (SELECT 1 FROM calls WHERE contact_id=?)", (contact_id, campaign_id, contact_id))
+        return cur.rowcount > 0
 
 
 def clear_calls() -> None:
