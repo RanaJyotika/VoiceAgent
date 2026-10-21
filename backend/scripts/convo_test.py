@@ -1,5 +1,5 @@
 """Run a full scripted conversation through the WebSocket using typed customer replies.
-Usage: .venv\\Scripts\\python.exe scripts\\convo_test.py [contact_id] [voice]
+Usage: .venv\\Scripts\\python.exe backend\scripts\\convo_test.py [contact_id] [voice]
 """
 import asyncio
 import json

@@ -2181,7 +2181,7 @@ def live_snapshot() -> list[dict]:
         c = a["contact"]
         out.append({
             "call_id": call_id, "channel": a["channel"], "status": status, "seconds": round(seconds),
-            "ring_left": ring_left,
+            "ring_left": ring_left, "campaign_id": c.get("campaign_id"),
             "customer_name": c.get("customer_name", ""), "order_id": c.get("order_id", ""),
             "product": c.get("product", ""), "to": a["meta"].get("to") or c.get("phone", ""),
             "voice": a["voice"], "outcome": state.outcome, "lines": lines[-3:],

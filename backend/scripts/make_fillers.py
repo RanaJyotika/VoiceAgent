@@ -4,7 +4,7 @@ PAID: Gemini text-to-speech for Gemini voices and OpenAI text-to-speech for Chat
 voice. Only clips that do not exist yet are made, so running it again costs nothing. Nothing makes clips
 during a call (owner, 6 Oct 2026: "only once").
 
-Usage: .venv\\Scripts\\python.exe scripts\\make_fillers.py [voice ...]
+Usage: .venv\\Scripts\\python.exe backend\scripts\\make_fillers.py [voice ...]
        (default: Aoede Orus for Gemini and marin cedar coral for ChatGPT)
 """
 import logging

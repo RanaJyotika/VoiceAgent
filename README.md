@@ -8,7 +8,7 @@ AI outbound calling agent on the Gemini Live API. Stage 1: order-confirmation ag
 2. Double-click `run.bat`, or run:
 
 ```bash
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
 ```
 
 3. Open http://127.0.0.1:8000 in Chrome or Edge. Use headphones.
@@ -48,6 +48,20 @@ With `DIAL_ONLY_MY_NUMBER=true` every campaign call rings your own phone: the da
 | notes | anything the agent should know | |
 
 ## Layout
+
+```
+backend/            the Python server: FastAPI, calls, database (run from the project folder)
+frontend/           the dashboard: Next.js, built by `npm run build` to frontend/out, served by Python at /
+.env, data/, company.txt, tools/   settings, database and recordings, company facts, cloudflared
+```
+
+The original dashboard is at http://127.0.0.1:8000/classic until each page is rebuilt in `frontend/`.
+
+Working on the dashboard: start the Python server (`run.bat`), then in `frontend/` run `npm run dev` and open
+http://localhost:3000. It forwards `/api` to the Python server on port 8000. `npm run build` makes the version
+the Python server shows; `run.bat` does this on every start.
+
+Inside `backend/`:
 
 ```
 app/

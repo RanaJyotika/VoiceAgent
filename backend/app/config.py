@@ -5,7 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
+# The project folder: .env, data/, company.txt and tools/ live there, the Python code in backend/.
+ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_GEMINI_LIVE_API") or os.getenv("GOOGLE_API_KEY") or ""

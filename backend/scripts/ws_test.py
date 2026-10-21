@@ -1,5 +1,5 @@
 """Exercise the browser WebSocket path without a microphone: stream silence, collect events.
-Usage: .venv\\Scripts\\python.exe scripts\\ws_test.py [contact_id] [seconds]
+Usage: .venv\\Scripts\\python.exe backend\scripts\\ws_test.py [contact_id] [seconds]
 """
 import asyncio
 import json

@@ -1,6 +1,6 @@
 """What is in the Vedic Vaibhav MongoDB, for setting up the product catalogue. Free: reads only.
 
-    .venv\\Scripts\\python.exe scripts\\mongo_inspect.py
+    .venv\\Scripts\\python.exe backend\scripts\\mongo_inspect.py
 
 Lists the database's collections with their sizes, then shows the layout (field names and types, values
 cut short) of one document from each collection whose name mentions products or collections. Other

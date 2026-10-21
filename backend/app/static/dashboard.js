@@ -100,7 +100,11 @@
   for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => window.openSheet(null);
   el('scrim').onclick = () => window.openSheet(null);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.openSheet(null); });
-  try { window.showPage(localStorage.getItem('page') || 'overview'); } catch (e) { window.showPage('overview'); }
+  // The new dashboard (frontend/) links here as /classic#store, /classic#campaigns... for pages it does not have yet.
+  const hashPage = () => location.hash.slice(1);
+  if (PAGES.includes(hashPage())) window.showPage(hashPage());
+  else try { window.showPage(localStorage.getItem('page') || 'overview'); } catch (e) { window.showPage('overview'); }
+  window.addEventListener('hashchange', () => { if (PAGES.includes(hashPage())) window.showPage(hashPage()); });
 
   let toastTimer = null;
   window.toast = (text) => {

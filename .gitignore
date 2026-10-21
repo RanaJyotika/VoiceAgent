@@ -13,4 +13,4 @@ data/*.wav
 data/*.log.*
 data/fillers/
 =
-app/models/nemo_en_titanet_small.onnx
+backend/app/models/nemo_en_titanet_small.onnx

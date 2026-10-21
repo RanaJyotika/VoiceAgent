@@ -13,11 +13,12 @@ from . import catalog, coupons, db, messaging, mongo_sync, orders_view, shopify,
 from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, router as campaign_router
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
-                     SARVAM_VOICES, STALE_PAGE, VOICES)
+                     ROOT, SARVAM_VOICES, STALE_PAGE, VOICES)
 from .contacts import (build_results, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
 from .live_bridge import live_snapshot, run_call
 from .intake import router as intake_router
+from .overview import router as overview_router
 from .plivo_bridge import router as plivo_router
 from .call_types import CALL_TYPES, get_prompt
 from .prompts import LANGUAGES, with_language
@@ -65,6 +66,7 @@ app.include_router(catalog.router)
 app.include_router(mongo_sync.router)
 app.include_router(store_orders.router)
 app.include_router(orders_view.router)
+app.include_router(overview_router)
 
 
 async def stall_monitor() -> None:
@@ -90,8 +92,9 @@ async def _start_monitor() -> None:
     resume_after_restart()   # automatic calling always starts off; only the Switch on button starts it
 
 
-@app.get("/")
-async def index() -> Response:
+@app.get("/classic")
+async def classic() -> Response:
+    """The original dashboard (static/). The new one (frontend/) links here for the pages it does not have yet."""
     # The browser kept running yesterday's scripts after a restart (new filters with nothing behind
     # them). Never cache the page, and tag each script with this server's build so a restart fetches them fresh.
     page = (STATIC / "index.html").read_text(encoding="utf-8").replace('.js"></script>', f'.js?v={PAGE_BUILD}"></script>')
@@ -418,3 +421,21 @@ async def browser_call(ws: WebSocket, contact_id: int) -> None:
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+class _Pages(StaticFiles):
+    """The built dashboard. Its pages are never cached, so a rebuild shows at once; its scripts carry a hash in the name."""
+    async def get_response(self, path: str, scope) -> Response:
+        resp = await super().get_response(path, scope)
+        if not path.startswith("_next/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+# The new dashboard, built by `npm run build` in frontend/. Mounted last: every route above comes first.
+# Until it has been built, / shows the original dashboard.
+FRONTEND = ROOT / "frontend" / "out"
+if (FRONTEND / "index.html").is_file():
+    app.mount("/", _Pages(directory=FRONTEND, html=True), name="frontend")
+else:
+    app.add_api_route("/", classic, methods=["GET"])

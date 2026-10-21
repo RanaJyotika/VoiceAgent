@@ -1,7 +1,7 @@
 """Replay a recorded call through the phone-line speech detector, with no API calls.
 
-    .venv\\Scripts\\python.exe scripts\\replay.py data\\recordings\\call_53.wav
-    .venv\\Scripts\\python.exe scripts\\replay.py data\\recordings\\call_53.wav --long   (as after "address batayein?")
+    .venv\\Scripts\\python.exe backend\scripts\\replay.py data\\recordings\\call_53.wav
+    .venv\\Scripts\\python.exe backend\scripts\\replay.py data\\recordings\\call_53.wav --long   (as after "address batayein?")
 
 For every burst of sound in the recording it prints how much of it the detector took as speech,
 then the turns it would have sent to Gemini. "captured" close to "present" is the goal; many short

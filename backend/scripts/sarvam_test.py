@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sarvamai import SarvamAI
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 key = os.getenv("SARVAM_API") or os.getenv("SARVAM_API_KEY")
 if not key:
     raise SystemExit("SARVAM_API is not set in .env")

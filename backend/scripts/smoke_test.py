@@ -1,5 +1,5 @@
 """Connect to Gemini Live, send one text turn, confirm we get audio + transcription back.
-Usage: .venv\\Scripts\\python.exe scripts\\smoke_test.py [model]
+Usage: .venv\\Scripts\\python.exe backend\scripts\\smoke_test.py [model]
 """
 import asyncio
 import sys

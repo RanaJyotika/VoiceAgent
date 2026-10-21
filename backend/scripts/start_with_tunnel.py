@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # the project folder: tools/, data/
 CLOUDFLARED = ROOT / "tools" / "cloudflared.exe"
 PORT = "8000"
 URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
@@ -61,7 +61,7 @@ def main() -> int:
     env = dict(os.environ, PUBLIC_BASE_URL=url, PYTHONIOENCODING="utf-8")
     try:
         return subprocess.call(
-            [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", PORT],
+            [sys.executable, "-m", "uvicorn", "app.main:app", "--app-dir", str(ROOT / "backend"), "--host", "127.0.0.1", "--port", PORT],
             cwd=ROOT, env=env,
         )
     finally:
