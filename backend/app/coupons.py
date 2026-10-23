@@ -213,19 +213,17 @@ def call_coupon() -> dict | None:
 
 def offer_for(contact: dict | None) -> dict | None:
     """The coupon this contact's call may offer, or None: only a call type that offers one (abandoned carts), the
-    live call coupon, a cart worth its minimum order, and never to a customer who already has this code."""
+    campaign's WhatsApp coupon (Facts & offers, as for order confirmations: owner, 22 Oct 2026; it was this page's call
+    coupon), and never to a customer who already has this code. Shape: {title, code, max_discount, valid_until, details}."""
     if not contact:
         return None
-    from .call_types import call_type_for   # here, not at the top: the call types read this module
+    from .call_types import call_type_for, whatsapp_offer   # here, not at the top: the call types read this module
     if not getattr(call_type_for(contact), "offers_coupon", False):
         return None
-    coupon = call_coupon()
+    campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
+    coupon = whatsapp_offer((campaign or {}).get("facts") or {})
     if not coupon:
         return None
-    if coupon["min_order"] > 0:
-        amount = parse_amount(contact.get("amount"))
-        if amount is None or amount < coupon["min_order"]:
-            return None
     from . import messaging   # here: messaging reads this module
     if messaging.already_sent(contact.get("phone") or "", coupon["code"]):
         return None

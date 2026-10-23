@@ -24,7 +24,7 @@ from .campaign import (DIALING, GAP_SECONDS, STOP_ON_ERRORS, Campaign, Settings,
 from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
                      STALE_PAGE, VOICES, plivo_missing)
 from .db import IST
-from .plivo_bridge import PENDING
+from .plivo_bridge import PENDING, line_problem
 from .prompts import LANGUAGES
 
 log = logging.getLogger("autodial")
@@ -197,6 +197,8 @@ async def auto_start(body: dict) -> dict:
     missing = plivo_missing()
     if missing:
         raise HTTPException(400, f"Phone line not ready. Missing: {', '.join(missing)}")
+    if (why := await line_problem()):
+        raise HTTPException(400, why)
     s = Settings(
         voice=body.get("voice") if body.get("voice") in VOICES else GEMINI_VOICE,
         model=body.get("model") if body.get("model") in OFFERED_MODELS else OFFERED_MODELS[0],

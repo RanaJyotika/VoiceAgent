@@ -10,4 +10,6 @@ if exist frontend\package.json (
   popd
 )
 echo Voice Agent running at http://127.0.0.1:8000  (close this window to stop)
-.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+rem --timeout-keep-alive 75: the dashboard asks every 5 s and uvicorn dropped idle connections after 5 s, so `npm run dev`
+rem now and then sent on a closing connection ("Failed to proxy ... ECONNRESET / socket hang up"). Keep them open longer.
+.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --timeout-keep-alive 75

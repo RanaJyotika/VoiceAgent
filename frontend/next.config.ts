@@ -8,6 +8,8 @@ export default function config(phase: string): NextConfig {
   const base: NextConfig = {
     // Pages end in "/" so each one builds to its own folder/index.html, which the Python server serves as is.
     trailingSlash: true,
+    // No round "N" badge in the corner while `npm run dev` runs (owner, 22 Oct 2026).
+    devIndicators: false,
     turbopack: {
       rules: {
         "*.css": {

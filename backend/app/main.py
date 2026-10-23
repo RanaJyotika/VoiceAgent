@@ -15,7 +15,7 @@ from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, clean_settings, router as campaign_router, schedule_worker as campaign_schedules
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
                      ROOT, SARVAM_VOICES, STALE_PAGE, VOICES)
-from .contacts import (build_results, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
+from .contacts import (build_calls_export, build_results, filter_calls, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
 from .live_bridge import live_call, live_snapshot, run_call
 from .intake import router as intake_router
@@ -23,7 +23,7 @@ from .overview import router as overview_router
 from .store_import import router as store_import_router
 from .usage import router as usage_router
 from .plivo_bridge import router as plivo_router
-from .call_types import CALL_TYPES, CUSTOM_CALL, get_prompt, with_reason
+from .call_types import CALL_TYPES, CUSTOM_CALL, call_reason, call_type_for, get_prompt, with_reason
 from .prompts import LANGUAGES, with_language
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -365,6 +365,32 @@ async def calls(campaign_id: int | None = None, day_from: str | None = None, day
         raise HTTPException(400, "Dates must look like 2026-10-05.")
 
 
+@app.get("/api/calls/export")
+async def export_calls(campaign_id: int | None = None, day_from: str | None = None, day_to: str | None = None,
+                       outcome: str = "all", kind: str = "all", q: str = "") -> Response:
+    """The Calls summary's calls, with its filters, as an Excel file: every result and detail the code recorded and
+    whether the WhatsApp message went out (owner, 23 Oct 2026). Every call of the period, not only the page's 1000."""
+    try:
+        calls = db.list_calls(limit=200_000, campaign_id=campaign_id, day_from=day_from, day_to=day_to)
+    except ValueError:
+        raise HTTPException(400, "Dates must look like 2026-10-05.")
+    calls = filter_calls(calls, outcome, kind, q)
+    ids = {d["message_id"] for c in calls if isinstance(d := c.get("outcome_details"), dict) and d.get("message_id")}
+    whatsapp = {}
+    if ids:
+        with db.connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone():
+                marks = ",".join("?" for _ in ids)
+                whatsapp = {r["id"]: dict(r) for r in conn.execute(f"SELECT id, status, error FROM messages WHERE id IN ({marks})",
+                                                                     tuple(ids))}
+    span = "_".join(x for x in (day_from, day_to if day_to != day_from else "") if x) or "all"
+    return Response(
+        content=build_calls_export(calls, whatsapp),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=calls_{span}.xlsx"},
+    )
+
+
 @app.get("/api/calls/{call_id}")
 async def one_call(call_id: int) -> dict:
     """One call with its transcript, for the board (which may point at calls older than the history table shows)."""
@@ -389,16 +415,38 @@ async def live() -> list[dict]:
     return live_snapshot()
 
 
+def call_subject(contact_id: int | None) -> dict | None:
+    """What a call was about, for its side panel (owner, 22 Oct 2026): the kind of call, the order or cart with its
+    products (photo and page from the catalogue), amount and payment, or a one-off call's reason. None without a contact."""
+    c = db.get_contact(contact_id) if contact_id else None
+    if not c:
+        return None
+    ct = call_type_for(c)
+    try:
+        found = catalog.find_for_contact(c)
+    except Exception:  # noqa: BLE001
+        log.exception("call panel: no catalogue lookup for contact %s", contact_id)
+        found = []
+    products = [{"title": p.get("title") or "", "image": p.get("image") or "",
+                 "link": f"{messaging.STORE_URL}/products/{p['handle']}" if p.get("handle") else ""} for p in found]
+    return {"kind": ct.key, "kind_name": ct.name, "order_id": c.get("order_id") or "", "product": c.get("product") or "",
+            "quantity": c.get("quantity") or "", "amount": c.get("amount") or "", "payment_mode": c.get("payment_mode") or "",
+            "address": c.get("address") or "", "delivery_date": c.get("delivery_date") or "", "reason": call_reason(c),
+            "cart_link": messaging.link_for(c) if ct.key == "abandoned_cart" else "", "products": products}
+
+
 @app.get("/api/live/{call_id}")
 async def live_one(call_id: int) -> dict:
-    """One call for the side panel: the whole conversation so far while it is on, then what was saved when it ended."""
+    """One call for the side panel: the whole conversation so far while it is on, then what was saved when it ended,
+    with what the call was about."""
     on = live_call(call_id)
     if on:
-        return {**on, "live": True}
+        return {**on, "live": True, "subject": call_subject(on.get("contact_id"))}
     row = db.get_call(call_id)
     if not row:
         raise HTTPException(404, "No such call.")
     return {"live": False, "call_id": call_id, "channel": row.get("channel"), "status": "ended",
+            "subject": call_subject(row.get("contact_id")),
             "customer_name": row.get("customer_name") or "", "order_id": row.get("order_id") or "",
             "to": row.get("phone") or "", "seconds": round(row.get("duration_sec") or 0),
             "outcome": row.get("outcome"), "outcome_details": row.get("outcome_details") or {},

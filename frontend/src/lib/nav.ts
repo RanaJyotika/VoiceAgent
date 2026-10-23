@@ -15,7 +15,7 @@ export type NavGroup = { title: string; items: NavItem[] };
 export const classic = (page: string) => `/classic#${page}`;
 
 /** Pages rebuilt here, by the name the server and the original dashboard use for them. */
-const REBUILT: Record<string, string> = { history: "/calls/", callback: "/callback/", campaigns: "/campaigns/", spend: "/usage/" };
+const REBUILT: Record<string, string> = { history: "/calls/", callback: "/callback/", campaigns: "/campaigns/", spend: "/usage/", store: "/store/" };
 
 /** Where a page lives now: here once rebuilt, else on the original dashboard. */
 export const pageHref = (page: string) => REBUILT[page] ?? classic(page);
@@ -25,7 +25,7 @@ export const NAV: NavGroup[] = [
     title: "Operate",
     items: [
       { label: "Overview", href: "/", icon: LayoutGrid, keywords: "home dashboard" },
-      { label: "Store orders", href: classic("store"), icon: ShoppingBag, classic: true, keywords: "shopify orders auto" },
+      { label: "Store orders", href: "/store/", icon: ShoppingBag, keywords: "shopify orders auto automatic calling batches" },
       { label: "Campaigns", href: "/campaigns/", icon: Megaphone, keywords: "contacts upload excel new campaign" },
       { label: "Calls summary", href: "/calls/", icon: History, keywords: "calls history transcripts recordings" },
       { label: "Call back", href: "/callback/", icon: CalendarClock, keywords: "retry later no answer busy" },

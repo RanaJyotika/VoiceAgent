@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Headphones, Monitor, MessageSquare, Phone, Search, Trash2 } from "lucide-react";
+import { Download, Headphones, Monitor, MessageSquare, Phone, Search, Send, Trash2 } from "lucide-react";
 import { CallPanel } from "@/components/overview/call-panel";
 import { StatCard } from "@/components/overview/stat-card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClass } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFeedback } from "@/components/ui/feedback";
 import { Select } from "@/components/ui/select";
@@ -67,6 +67,11 @@ export function CallsSummary() {
   if (dayFrom) qs.set("day_from", dayFrom);
   if (dayTo) qs.set("day_to", dayTo);
   const calls = usePoll<CallRow[]>(`/api/calls?${qs}`, 10_000);
+  // Download: the same calls as the table (dates, campaign, result, type, search), every one of the period.
+  const exportQs = new URLSearchParams(qs);
+  if (outcome !== "all") exportQs.set("outcome", outcome);
+  if (kind !== "all") exportQs.set("kind", kind);
+  if (q.trim()) exportQs.set("q", q.trim());
   const campaigns = usePoll<CampaignRow[]>("/api/campaigns", 60_000).data ?? [];
 
   const all = calls.data ?? [];
@@ -82,6 +87,27 @@ export function CallsSummary() {
   const talk = rows.reduce((n, c) => n + (c.duration_sec || 0), 0);
   const cost = rows.reduce((n, c) => n + (c.cost_rs || 0), 0);
   const cap = dayFrom ? 1000 : 100;
+
+  /** The coupon message this call's customer gets after a yes, sent now on WhatsApp with no call (owner, 22 Oct 2026). */
+  const [sending, setSending] = useState<number | null>(null);
+  const sendCoupon = async (c: CallRow) => {
+    const ok = await confirm({
+      title: "Send the WhatsApp coupon now?",
+      body: `${c.customer_name || "This customer"}${c.phone ? ` (${fmtPhone(c.phone)})` : ""} gets the coupon message on WhatsApp now, with no call. It is a real message to that number, with the offer as it is set today. The order's payment is not changed.`,
+      confirmLabel: "Send on WhatsApp",
+    });
+    if (!ok) return;
+    setSending(c.id);
+    try {
+      const m = await send<{ status: string; error: string | null; to_phone: string }>(`/api/calls/${c.id}/send-coupon`, "POST");
+      if (m.status === "sent") toast(`WhatsApp coupon sent to ${fmtPhone(m.to_phone)}.`);
+      else toast(`Not sent: ${m.error || m.status}`, true);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setSending(null);
+    }
+  };
 
   const clearAll = async () => {
     const ok = await confirm({
@@ -107,7 +133,15 @@ export function CallsSummary() {
           <h1 className="text-[20px] font-semibold tracking-tight">Calls summary</h1>
           <p className="mt-0.5 text-[13.5px] text-muted-foreground">Every call, newest first, with its result and transcript.</p>
         </div>
-        <Button variant="outline" className="ml-auto border-bad/40 text-bad hover:bg-bad-soft" onClick={clearAll}>
+        <a
+          href={`/api/calls/export?${exportQs}`}
+          className={buttonClass("outline", "md", "ml-auto")}
+          title="An Excel file of the calls these filters show, with each result and what the customer said"
+        >
+          <Download />
+          Download
+        </a>
+        <Button variant="outline" className="border-bad/40 text-bad hover:bg-bad-soft" onClick={clearAll}>
           <Trash2 />
           Clear history
         </Button>
@@ -261,6 +295,18 @@ export function CallsSummary() {
                               <Headphones />
                               Listen
                             </a>
+                          )}
+                          {c.contact_id && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={sending === c.id}
+                              onClick={() => sendCoupon(c)}
+                              title="Send this customer's WhatsApp coupon now, without a call"
+                            >
+                              <Send />
+                              {sending === c.id ? "Sending…" : "WhatsApp"}
+                            </Button>
                           )}
                         </div>
                       </td>

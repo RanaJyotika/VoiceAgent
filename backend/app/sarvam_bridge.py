@@ -119,6 +119,32 @@ _CLIPS = _Clips(DATA_DIR / "voice_clips")
 # A sentence ends at a danda, "?" or "!", or at a full stop with a space after it ("2." may be "2.5" in the making).
 _SENTENCE_END = re.compile(r"[।?!]|\.(?=\s)")
 _MARKUP = re.compile(r"[*#`_~>\[\]]|[\U0001F300-\U0001FAFF☀-➿]")
+# Words Bulbul says badly in English letters inside a Hindi sentence, as it is given them instead (owner, 22 Oct 2026:
+# "WhatsApp" was mispronounced). Only the voice gets these; the transcript and the code's checks keep the original.
+# Owner, 22 Oct 2026 (call 521): व्हाट्सऐप still sounded wrong, and so did "coupon" and "code"; the agent's own Devanagari
+# spellings of WhatsApp are brought to the same one.
+_SAY_AS = [(re.compile(r"\bwhats\s*-?\s*app\b|व्हाट्सऐप|व्हाट्सएप|व्हाट्सअप|वाट्सऐप|वाट्सएप|वाट्सअप", re.IGNORECASE), "वॉट्सऐप"),
+           (re.compile(r"\bcoupons?\b", re.IGNORECASE), "कूपन"),
+           (re.compile(r"\bcodes?\b", re.IGNORECASE), "कोड")]
+
+
+# The payment question as the owner wants it, whatever the model writes (owner, 22 Oct 2026, call 515: "...cash on
+# delivery rakhna hai ya prepaid ho chuki hai?" -> "...ya prepaid?"). Only a sentence that offers cash on delivery.
+_COD = re.compile(r"cash on delivery|कैश ऑन डिलीवरी|\bcod\b", re.IGNORECASE)
+_PREPAID_DONE = re.compile(r"(prepaid|प्रीपेड)[\s,]*(?:हो चुकी है|हो चुका है|हो गई है|हो गया है|ho chuki hai|ho chuka hai|ho gayi hai|"
+                           r"ho gaya hai|कर दी है(?: आपने)?|कर दिया है(?: आपने)?|kar di hai(?: aapne)?|kar diya hai(?: aapne)?)\s*([?।.]|$)",
+                           re.IGNORECASE)
+
+
+def _fix_said(text: str) -> str:
+    """A sentence as the customer should hear it (and the transcript records it)."""
+    return _PREPAID_DONE.sub(r"\1?", text) if _COD.search(text) else text
+
+
+def _say_as(text: str) -> str:
+    for pattern, spoken in _SAY_AS:
+        text = pattern.sub(spoken, text)
+    return text
 
 
 def is_sarvam_model(model: str) -> bool:
@@ -593,13 +619,14 @@ class SarvamSession:
 
     async def _speak(self, text: str) -> None:
         """One sentence: its words to live_bridge (the transcript and its checks), its text to Bulbul."""
-        text = re.sub(r"\s+", " ", _MARKUP.sub("", text)).strip()
+        text = _fix_said(re.sub(r"\s+", " ", _MARKUP.sub("", text)).strip())
         if not text:
             return
         if self._said:
             text = " " + text
+        voice_text = _say_as(text.strip())
         key = _CLIPS.key(self.tts_model, self.speaker, self.language, str(SARVAM_PACE), str(OUTPUT_SAMPLE_RATE),
-                         text.strip())
+                         voice_text)
         clip = _CLIPS.get(key)
         if clip:
             await self._spoken()   # the sentences before it first: their sound may still be arriving
@@ -615,13 +642,13 @@ class SarvamSession:
         await self._q.put(_Message(server_content=_ServerContent(output_transcription=_Text(text))))
         ws = await self._ready_tts()
         async with self._tts_lock:
-            await ws.send(json.dumps({"type": "text", "data": {"text": text.strip()}}))
+            await ws.send(json.dumps({"type": "text", "data": {"text": voice_text}}))
             await ws.send(json.dumps({"type": "flush"}))   # speak it now, not when Bulbul's buffer fills
-        self._pending.append([key if _CLIPS.wanted(key) else None, bytearray(), len(text.strip())])
+        self._pending.append([key if _CLIPS.wanted(key) else None, bytearray(), len(voice_text)])
         self._flushes += 1
         self._said += text
         self._last_tts = time.monotonic()
-        self._add("tts_chars", len(text.strip()))
+        self._add("tts_chars", len(voice_text))
 
     async def _spoken(self) -> None:
         """Wait until Bulbul has sent all of this reply's sound."""

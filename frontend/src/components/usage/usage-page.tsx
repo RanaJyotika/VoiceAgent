@@ -13,8 +13,11 @@ import { send } from "@/lib/api";
 import { fmtInt, fmtRs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type Range = "month" | "last_month" | "7d" | "30d";
+/** A period the server knows, or "day:YYYY-MM-DD" for one day picked on the calendar. */
+type Range = string;
 const RANGES: { key: Range; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
   { key: "month", label: "This month" },
   { key: "last_month", label: "Last month" },
   { key: "7d", label: "7 days" },
@@ -52,11 +55,15 @@ const COLORS: Record<string, string> = {
 };
 const rs = (n: number) => fmtRs(n, n < 100 ? 2 : 0);
 const day = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+/** Today in Indian time (YYYY-MM-DD): the server counts days in Indian time. */
+const istToday = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
 
 /** Usage: what calling cost (by day, provider, campaign, agent) and the workspace budget, which really stops calling. */
 export function UsagePage() {
   const [range, setRange] = useState<Range>("month");
-  const { data: u, error, reload } = usePoll<Usage>(`/api/usage?range=${range}`, 30_000);
+  const { data: u, error, reload } = usePoll<Usage>(`/api/usage?range=${encodeURIComponent(range)}`, 30_000);
+  // One day: no trend to draw, so the agent / phone line split takes the chart's place (owner, 22 Oct 2026).
+  const oneDay = u ? u.from === u.to : false;
 
   return (
     <div className="pb-10">
@@ -64,7 +71,7 @@ export function UsagePage() {
         <div className="min-w-0">
           <h1 className="text-[20px] font-semibold tracking-tight">Usage</h1>
           <p className="mt-0.5 text-[13.5px] text-muted-foreground">
-            {u ? `${u.label[0].toUpperCase()}${u.label.slice(1)} · ${day(u.from)} – ${day(u.to)}` : "What calling costs, and your limits"}
+            {u ? `${u.label[0].toUpperCase()}${u.label.slice(1)}${oneDay ? "" : ` · ${day(u.from)} – ${day(u.to)}`}` : "What calling costs, and your limits"}
           </p>
         </div>
         <div className="ml-auto flex rounded-lg bg-muted p-0.5" role="tablist">
@@ -84,6 +91,18 @@ export function UsagePage() {
             </button>
           ))}
         </div>
+        <input
+          type="date"
+          aria-label="One day"
+          title="Pick one day"
+          className={cn(
+            "h-9 rounded-md border border-input bg-card px-2.5 text-[13px]",
+            range.startsWith("day:") ? "border-brand text-foreground" : "text-muted-foreground",
+          )}
+          max={istToday()}
+          value={range.startsWith("day:") ? range.slice(4) : ""}
+          onChange={(e) => e.target.value && setRange(`day:${e.target.value}`)}
+        />
       </div>
 
       <div className="space-y-4 px-4 pt-5 sm:px-6">
@@ -102,47 +121,56 @@ export function UsagePage() {
 
         {u && <BudgetBar b={u.budget} />}
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <Card className="flex min-w-0 flex-col overflow-hidden">
-            <div className="border-b px-4 py-3">
-              <h2 className="text-[15px] font-medium">Cost trend by provider</h2>
-            </div>
-            <div className="h-[300px] px-2 pt-4 pb-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={u?.series ?? []} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "var(--muted-foreground)", fontSize: 12 }} minTickGap={18} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fill: "var(--muted-foreground)", fontSize: 12 }} width={48} tickFormatter={(v) => `₹${v}`} />
-                  <Tooltip
-                    cursor={{ stroke: "var(--input)" }}
-                    contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13 }}
-                    labelStyle={{ color: "var(--muted-foreground)" }}
-                    formatter={(v, name) => [rs(Number(v)), u?.provider_labels[String(name)] ?? String(name)]}
-                  />
-                  <Legend formatter={(name) => <span className="text-[12px] text-muted-foreground">{u?.provider_labels[String(name)] ?? name}</span>} />
-                  {Object.keys(COLORS)
-                    .filter((k) => u?.providers.some((p) => p.key === k))
-                    .map((k) => (
-                      <Area
-                        key={k}
-                        type="monotone"
-                        dataKey={k}
-                        stackId="cost"
-                        stroke={COLORS[k]}
-                        fill={COLORS[k]}
-                        fillOpacity={0.18}
-                        strokeWidth={1.5}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
+        <div className={cn("grid gap-4", !oneDay && "xl:grid-cols-[minmax(0,1fr)_420px]")}>
+          {!oneDay && (
+            <Card className="flex min-w-0 flex-col overflow-hidden">
+              <div className="border-b px-4 py-3">
+                <h2 className="text-[15px] font-medium">Cost trend by provider</h2>
+              </div>
+              <div className="h-[300px] px-2 pt-4 pb-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={u?.series ?? []} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+                    <CartesianGrid vertical={false} stroke="var(--border)" />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "var(--muted-foreground)", fontSize: 12 }} minTickGap={18} />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+                      width={48}
+                      tickFormatter={(v) => `₹${v}`}
+                    />
+                    <Tooltip
+                      cursor={{ stroke: "var(--input)" }}
+                      contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13 }}
+                      labelStyle={{ color: "var(--muted-foreground)" }}
+                      formatter={(v, name) => [rs(Number(v)), u?.provider_labels[String(name)] ?? String(name)]}
+                    />
+                    <Legend formatter={(name) => <span className="text-[12px] text-muted-foreground">{u?.provider_labels[String(name)] ?? name}</span>} />
+                    {Object.keys(COLORS)
+                      .filter((k) => u?.providers.some((p) => p.key === k))
+                      .map((k) => (
+                        <Area
+                          key={k}
+                          type="monotone"
+                          dataKey={k}
+                          stackId="cost"
+                          stroke={COLORS[k]}
+                          fill={COLORS[k]}
+                          fillOpacity={0.18}
+                          strokeWidth={1.5}
+                          isAnimationActive={false}
+                        />
+                      ))}
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          )}
 
           <Card className="overflow-hidden">
             <div className="border-b px-4 py-3">
               <h2 className="text-[15px] font-medium">Provider breakdown</h2>
+              {oneDay && <p className="text-[12.5px] text-muted-foreground">What the agents and the phone line cost on this day.</p>}
             </div>
             <Table
               head={["Provider", "Usage", "Cost"]}

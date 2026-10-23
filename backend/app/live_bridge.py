@@ -19,15 +19,15 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import catalog, coupons, db, messaging, openai_bridge, sarvam_bridge, shopify
+from . import catalog, db, messaging, openai_bridge, sarvam_bridge, shopify
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
                      OPENAI_FALLBACK, OPENAI_PRICE_PER_M,
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
                      TRANSCRIPT_LANGUAGES, gemini_voice)
-from .call_types import (CART_NO_CLOSE, DEFAULT as DEFAULT_CALL_TYPE, ORDER_CONFIRMED_CLOSE, CallType, call_coupon,
-                         call_type_for, coupon_offer_line, coupon_yes_line, PREPAID_NO_LINE,
+from .call_types import (CART_NOT_NOW, DEFAULT as DEFAULT_CALL_TYPE, ORDER_CONFIRMED_CLOSE, CallType,
+                         call_coupon, call_type_for, cart_link_close, cart_price_close, PREPAID_NO_LINE,
                          PREPAID_PAYMENT_QUESTION, prepaid_coupon_for, prepaid_yes_line)
 from .prompts import forms
 from .tools import tools_for
@@ -368,6 +368,14 @@ _NOT_ORDERED = re.compile(_ORDERED + r"\s*(hi|ही|ਹੀ)?\s*" + _NAHI + "|" 
 _NUMBER_CHECK = re.compile(r"(number|नंबर|ਨੰਬਰ)\s*(hai|है|ਹੈ)", re.IGNORECASE)   # "kya yeh <name> ji ka number hai?"
 # The agent's own questions, sentence by sentence: did it ask about the address, did it say a mismatch back?
 _ADDRESS_WORDS = re.compile(r"address|एड्रेस|पता|delivery|डिलीवरी", re.IGNORECASE)
+# "...cash on delivery rakhna hai ya prepaid?" is the payment question, not the address one (owner, 22 Oct 2026: it now
+# comes after the address on every order and cart call with the WhatsApp coupon).
+_COD_WORDS = re.compile(r"cash\s*on\s*delivery|कैश\s*ऑन\s*डिलीवरी|\bcod\b", re.IGNORECASE)
+
+
+def _asks_address(question: str) -> bool:
+    return _ADDRESS_WORDS.search(_COD_WORDS.sub(" ", question)) is not None
+_ADDRESS_RECHECK = re.compile(r"(address|एड्रेस|पता)\W*(confirm|कन्फर्म|कंफर्म)", re.IGNORECASE)
 # The agent taking an abandoned cart's order: the payment question or the close that sends it to the team.
 _TAKING_ORDER = re.compile(r"payment|पेमेंट|cash on delivery|कैश ऑन|team ko bhej|टीम को भेज", re.IGNORECASE)
 # A refusal without a "nahi" in it ("rehne do", "chhodo").
@@ -436,15 +444,6 @@ _PROBLEM = re.compile(r"site|side|website|साइट|साइड|वेबस
 # Call 195 (ChatGPT): its answer to "koi dikkat aayi thi kya?" got a 13 s and then a 16 s speech, the order question
 # twice more and a certificate that is in no record. Sent as this one reply's own instructions, not as a message:
 # ChatGPT spoke a quoted note out loud whatever the customer said (calls 155, 157).
-CART_CLOSE_HINT = ("\n\nTHIS REPLY ONLY: the customer is answering what stopped them. That is their second no. At most two "
-                   "short sentences, ending in 'dhanyavaad ji, aapka din shubh ho.': a doubt or complaint gets the complaint "
-                   "reply from LISTEN FIRST, a question gets a one-sentence answer from CART DETAILS, anything else gets only "
-                   "'theek hai ji, dhanyavaad. aapka din shubh ho.' Never ask about the order again, never explain the store, "
-                   "say nothing that is not in CART DETAILS. Speak first, then call mark_outcome 'not_interested' and "
-                   "end_call. Only if they now clearly want it: step 3. If you could not make out their words: 'sorry ji, "
-                   "samajh nahi aaya, ek baar phir bata dijiye'.")
-
-
 # The coupon offer (owner, 19 Oct 2026): "ji, abhi hum online payment par coupon lagane se ... ki chhoot de rahe hain.
 # agar aap lena chahein, toh kya main woh coupon aapko bhej doon?": a turn that names the coupon and asks whether to
 # send it. The agents write "coupon" in English letters or in Devanagari.
@@ -456,11 +455,37 @@ _SEND_YES = re.compile(_L + r"(bhej do|bhej dijiye|bhej dijie|bhej de|bhejiye|bh
                        r"भेज दो|भेज दीजिए|भेज दीजिये|भेज दे|भेजिए|भेजिये|भेजो|सेंड कर दो|सेंड करो|शेयर कर दो)" + _R,
                        re.IGNORECASE)
 _DONT_SEND = re.compile(r"mat bhej|मत भेज|rehne do|rahne do|रहने दो", re.IGNORECASE)
+# "WhatsApp pe" to "kya main woh coupon aapko bhej doon?" says where to send it: a yes (call 521, owner 22 Oct 2026).
+_WHATSAPP_YES = re.compile(r"(whats\s*app|व्हाट्स\S*|वॉट्स\S*|वाट्स\S*)\s*(pe|par|per|pr|me|mein|पे|पर|में)(?![a-z])",
+                           re.IGNORECASE)
+# "Kya code hai?" to the coupon offer is a yes: the code goes to them on WhatsApp (owner, 22 Oct 2026).
+_CODE_ASK = re.compile(r"(kya|kaun\s*sa|kon\s*sa|क्या|कौन\s*सा)\s*(code|kod|कोड)|(code|कोड)\s*(kya|batao|bata\s*do|क्या|बताओ|बता\s*दो)",
+                       re.IGNORECASE)
+
+
+# Owner, 22 Oct 2026: the order's prepaid offer asks "aap prepaid karna chahenge?" and sending it is asked after a yes.
+_PREPAID_ASK = re.compile(r"prepaid|pre-paid|प्रीपेड", re.IGNORECASE)
+
+
+# The agent saying the link or the offer goes on WhatsApp (the cart script's lines, owner 22 Oct 2026), as the agent
+# writes it in either script.
+_WA_PROMISE = re.compile(r"(whats\s*app|व्हाट्स\S*|वॉट्स\S*|वाट्स\S*)\s*(par|pe|पर|पे)?\s*(share|bhej|शेयर|भेज)", re.IGNORECASE)
+
+
+def promised_on_whatsapp(turns: list[dict[str, str]]) -> str:
+    """The agent's line saying the link or offer goes on WhatsApp, unless the customer then said not to send it."""
+    for i in range(len(turns) - 1, -1, -1):
+        if turns[i]["role"] == "agent" and _WA_PROMISE.search(turns[i]["text"]):
+            later = [t["text"] for t in turns[i + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])]
+            return "" if any(_DONT_SEND.search(x) for x in later) else turns[i]["text"]
+    return ""
 
 
 def offers_coupon(text: str) -> bool:
-    """This agent turn makes the coupon offer: it names the coupon and asks whether to send it."""
-    return bool(_COUPON.search(text)) and any(_SEND_IT.search(q) for q in agent_questions([{"role": "agent", "text": text}]))
+    """This agent turn makes the coupon offer: it names the coupon and asks whether to send it, or whether they will
+    pay prepaid."""
+    return bool(_COUPON.search(text)) and any(_SEND_IT.search(q) or _PREPAID_ASK.search(q)
+                                              for q in agent_questions([{"role": "agent", "text": text}]))
 
 
 def coupon_offered(turns: list[dict[str, str]]) -> bool:
@@ -476,7 +501,8 @@ def yes_to_coupon(turns: list[dict[str, str]]) -> str:
             if not later or any(_DONT_SEND.search(x) or _starts_with_no(x) for x in later[1:]):
                 return ""
             answer = later[0]
-            sends = _SEND_YES.search(answer) is not None and _NO.search(answer) is None
+            sends = ((_SEND_YES.search(answer) is not None or _CODE_ASK.search(answer) is not None
+                      or _WHATSAPP_YES.search(answer) is not None) and _NO.search(answer) is None)
             return answer if sends or (said_yes(answer) and "?" not in answer) else ""
     return ""
 
@@ -484,7 +510,8 @@ def yes_to_coupon(turns: list[dict[str, str]]) -> str:
 def _yes_before_coupon(state: "CallState") -> str:
     """Order confirmation with the WhatsApp coupon (owner, 21 Oct 2026): a "nahi" to the coupon offer is not a no to the
     order. Their yes to the order before the offer, if the offer was made; "" otherwise."""
-    if state.call_type.key != "order_confirmation" or not coupon_offered(state.transcript):
+    # The abandoned cart too (owner, 22 Oct 2026): its payment step makes the same prepaid offer.
+    if state.call_type.key not in ("order_confirmation", "abandoned_cart") or not coupon_offered(state.transcript):
         return ""
     return ever_yes_to_main_question(state.transcript, state.call_type.main_question)
 
@@ -494,35 +521,10 @@ def _starts_with_no(text: str) -> bool:
     return bool(words) and words[0] in _OPENING_NO
 
 
-def _coupon_offer_hint(coupon: dict) -> str:
-    return ("\n\nTHIS REPLY ONLY: the customer is answering what stopped them. Do not say goodbye yet. A doubt or complaint: "
-            "the complaint reply from LISTEN FIRST, then 'dhanyavaad ji, aapka din shubh ho.', and no offer. Anything else: "
-            "at most one short sentence for what they said (a question: its answer from CART DETAILS), then THE OFFER, "
-            f"exactly: '{coupon_offer_line(coupon)}' Then stop and wait for their answer. Never ask about the order "
-            "again. If you could not make out their words: 'sorry ji, samajh nahi aaya, ek baar phir bata dijiye'.")
-
-
-def _coupon_answer_hint(voice: str) -> str:
-    return ("\n\nTHIS REPLY ONLY: the customer is answering your coupon offer; never make the offer again. A yes: say "
-            f"exactly '{coupon_yes_line(voice)}' Then call mark_outcome 'wants_coupon' and end_call. A question about it: "
-            "its answer in one short sentence from CART DETAILS, then 'toh kya main woh coupon aapko bhej doon?' Anything "
-            f"else: say exactly '{CART_NO_CLOSE}' Then call mark_outcome 'not_interested' and end_call. If you could not "
-            "make out their words: 'sorry ji, samajh nahi aaya, ek baar phir bata dijiye'.")
-
-
 def closing_hint(state: "CallState") -> str:
-    """Extra instructions for the reply to the customer's answer to the cart's why-question (ChatGPT; Sarvam too when
-    the call has a coupon to offer), and to their answer to the coupon offer."""
-    if state.call_type.key != "abandoned_cart" or state.outcome:
-        return ""
-    last = next((t["text"] for t in reversed(state.transcript) if t["role"] == "agent"), "")
-    asked_why = any(_ASKED_WHY.search(q) for q in agent_questions([{"role": "agent", "text": last}]))
-    if state.coupon and state.provider in ("openai", "sarvam"):
-        if offers_coupon(last):
-            return _coupon_answer_hint((ACTIVE.get(state.call_id) or {}).get("voice") or "")
-        if asked_why and not coupon_offered(state.transcript):
-            return _coupon_offer_hint(state.coupon)
-    return CART_CLOSE_HINT if state.provider == "openai" and asked_why else ""
+    """Extra instructions for one reply. The owner's short cart script (22 Oct 2026) needs none: its lines are in the
+    prompt word for word."""
+    return ""
 
 
 # Thanks in the other languages a customer may ask for (owner, 19 Oct 2026), and their closing lines (LANGUAGES).
@@ -582,12 +584,16 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
         if state.language == "en-IN" and outcome == "wants_coupon":
             return "Okay, I will send you the coupon code and the product details by message. Thank you, have a nice day."
         return LANGUAGES[state.language][2]
-    if outcome == "wants_coupon":
-        return coupon_yes_line(voice)   # owner, 19 Oct 2026
+    if state.call_type.key == "abandoned_cart" and outcome in ("wants_to_order", "wants_coupon"):
+        # Owner, 22 Oct 2026: the link (and any offer) goes on WhatsApp; these lines end the call.
+        return cart_link_close(voice) if outcome == "wants_to_order" else cart_price_close(voice)
     if outcome == "confirmed" and state.call_type.key == "order_confirmation":
-        if state.prepaid_offer and coupon_offered(state.transcript):
+        # Call 510: the answer to the offer was still being written down when the agent ended the call, so the yes
+        # ("bilkul") was not seen and it said the no-close; their words so far count too.
+        turns = _lines_so_far(state)
+        if state.prepaid_offer and coupon_offered(turns):
             # Call 507: a yes to the WhatsApp coupon got the plain close; the coupon's own close, by their answer.
-            return prepaid_yes_line() if yes_to_coupon(state.transcript) else PREPAID_NO_LINE
+            return prepaid_yes_line(voice) if yes_to_coupon(turns) else PREPAID_NO_LINE
         return ORDER_CONFIRMED_CLOSE   # owner, 19 Oct 2026: it had said only "dhanyavaad ji, aapka din shubh ho"
     if outcome == "not_interested" and _COMPLAINT.search(probe_answer(state.transcript)):
         # Call 191: "aapki site fake product bhejti hai" to "koi dikkat aayi thi?" got only "theek hai ji, dhanyavaad".
@@ -595,7 +601,7 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
         return (f"ji, aapki chinta samajh {f['sakti']} hoon. hamari poori koshish rehti hai ki original quality ka product hi "
                 f"pahunche. aapki yeh baat maine note kar li hai. dhanyavaad ji, aapka din shubh ho.")
     if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
-        return CART_NO_CLOSE   # owner, 7 Oct 2026 (call 182)
+        return CART_NOT_NOW   # owner, 22 Oct 2026
     return (f"achha ji, samajh {f['gayi']}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
 
 
@@ -777,7 +783,6 @@ class CallState:
     denial_refusals: int = 0            # mark_outcome "cancelled" / "not_ordered" sent back for want of a no
     reason_refused: bool = False        # mark_outcome "not_interested" sent back once because why was never asked
     probe_refused: bool = False         # a call type's probe_first result sent back once: nothing asked after the opening
-    help_refused: bool = False          # an abandoned cart's needs_help sent back once: the customer had said yes
     later_refused: bool = False         # call_later sent back once: the customer never asked for a call back
     last_tool_at: float = 0.0           # when the agent last called a tool (a reply is on its way after it)
     away_refused: bool = False          # not_interested sent back once: the person named is not on the line
@@ -792,9 +797,8 @@ class CallState:
     order_refusals: int = 0             # "already_ordered" sent back: no clear yes to the check, or the order was being taken
     address_refusals: int = 0           # mark_outcome sent back because the address on record was never asked about
     say_back_refusals: int = 0          # mark_outcome sent back because a mismatch was never said back
-    coupon: dict | None = None          # the coupon this cart call may offer once (coupons.py), or None
+    coupon: dict | None = None          # the campaign WhatsApp coupon this cart call may offer (coupons.offer_for), or None
     prepaid_offer: dict | None = None   # the WhatsApp coupon this COD order call may offer once (call_types), or None
-    coupon_refused: bool = False        # "not_interested" sent back once: the coupon offer was never made
     coupon_yes_refusals: int = 0        # "wants_coupon" sent back: no clear yes to the offer
     offer_wait_refused: bool = False    # a result sent back once: it came in the same breath as the coupon offer
     later_cancel_refused: bool = False  # "confirmed" sent back once: asked to cancel, then "baad mein" to keeping it
@@ -1582,20 +1586,24 @@ async def run_call(
                     log.info("call %s: prepaid coupon offered, not sent (%s)", call_id, "no clear yes" if offer else "no offer to send")
             except Exception:  # noqa: BLE001
                 log.exception("call %s: could not queue the prepaid coupon message", call_id)
-        if state.outcome == "wants_coupon" and contact:
-            # Owner, 19 Oct 2026: the coupon code and the product go to them by message (messaging.py), to the number
-            # this call rang. Never stops the call being saved.
+        if (state.call_type.key == "abandoned_cart" and contact
+                and state.outcome in ("wants_to_order", "wants_coupon")):
+            # Owner, 22 Oct 2026: the cart's link, with the campaign's WhatsApp coupon when it has one, to the number this
+            # call rang, once the agent has said it is going on WhatsApp. Never stops the call being saved.
             try:
-                code = str((state.outcome_details or {}).get("coupon_code") or "")
-                coupon = state.coupon or (coupons.get_by_code(code) if code else None)
-                message_id = messaging.queue_coupon(contact=contact, coupon=coupon, call_id=call_id,
-                                                    to=str((meta or {}).get("to") or ""), channel=channel) if coupon else None
+                promised = promised_on_whatsapp(state.transcript)
+                message_id = messaging.queue_cart_coupon(contact=contact, offer=state.coupon, call_id=call_id,
+                                                         to=str((meta or {}).get("to") or ""), channel=channel) if promised else None
                 if message_id:
-                    state.outcome_details = {**(state.outcome_details or {}), "message_id": message_id}
+                    state.outcome_details = {**(state.outcome_details or {}), "message_id": message_id,
+                                             **({"whatsapp_coupon": state.coupon["code"]} if state.coupon else {})}
+                    log.info("call %s: cart link%s for WhatsApp, message %s", call_id,
+                             f" and coupon {state.coupon['code']}" if state.coupon else "", message_id)
                 else:
-                    log.warning("call %s: the customer wants the coupon, but no message was queued", call_id)
+                    log.warning("call %s: %s, but no WhatsApp message was queued (said it would: %s)", call_id,
+                                state.outcome, bool(promised))
             except Exception:  # noqa: BLE001
-                log.exception("call %s: could not queue the coupon message", call_id)
+                log.exception("call %s: could not queue the cart coupon message", call_id)
         db.finish_call(
             call_id,
             outcome=state.outcome,
@@ -1867,7 +1875,19 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": "You have just made the coupon offer and the customer has not "
                     "answered it yet. Do not say it again and do not end the call: wait for their answer, then call "
                     "mark_outcome."}
-        if outcome == "wants_coupon":
+        if outcome == "wants_coupon" and state.call_type.key == "abandoned_cart":
+            # Owner, 22 Oct 2026: "price zyada hai" is told the offer goes on WhatsApp; the agent's own words decide it.
+            if not promised_on_whatsapp(turns + [{"role": "agent", "text": clean_agent_text(state._out_buf)}]):
+                voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
+                if not state.offer_wait_refused:
+                    state.offer_wait_refused = state.record_pending = True
+                    log.info("call %s: mark_outcome wants_coupon refused; the WhatsApp line was never said", state.call_id)
+                    return {"status": "not recorded", **({"say": cart_price_close(voice)} if state.language == "hi-IN" else {}),
+                            "reason": f"Say only this, nothing before or after it: '{cart_price_close(voice)}' Then call "
+                            "mark_outcome again and end_call."}
+            if state.coupon:
+                args = {**args, "coupon_code": state.coupon["code"]}
+        elif outcome == "wants_coupon":
             # Owner, 19 Oct 2026: the coupon message goes only to a customer who said yes to the offer itself.
             offered, yes = coupon_offered(state.transcript), yes_to_coupon(turns)
             if state.coupon and offered and yes:
@@ -1884,8 +1904,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                     reason = ("The customer has not clearly said yes to the coupon. A no is 'not_interested'. If you could "
                               "not make out their answer, ask once, in a few words: 'ji, toh kya main woh coupon aapko bhej "
                               "doon?' and go by it." if offered else
-                              "You have not made the coupon offer, so the customer has not said yes to it. Make it now, "
-                              f"exactly: '{coupon_offer_line(state.coupon)}' and wait for their answer.")
+                              "You have not made the coupon offer, so the customer has not said yes to it. Do not record "
+                              "'wants_coupon'.")
                     return {"status": "not recorded", "reason": f"{reason} Then call mark_outcome again."}
                 log.info("call %s: mark_outcome wants_coupon taken as unclear; no clear yes to a coupon offer", state.call_id)
                 outcome = "unclear"
@@ -1949,7 +1969,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             outcome = "unclear"
             args = {**args, "outcome": outcome,
                     "notes": ((args.get("notes") or "") + " (the agent took it as a no, but no no was heard)").strip()}
-        if outcome == "not_interested" and not state.reason_refused and bare_no(str(args.get("not_interested_reason") or "")):
+        if (outcome == "not_interested" and not state.reason_refused and state.call_type.key != "abandoned_cart"
+                and bare_no(str(args.get("not_interested_reason") or ""))):
             # The script asks the reason once. On call 77 the agent skipped it and closed on a bare "no",
             # because a question it had asked in a held-back (unplayed) reply was still in its own memory.
             heard = [t["text"] for t in state.transcript if t["role"] == "agent"] + [clean_agent_text(state._out_buf)]
@@ -1991,34 +2012,6 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                          "Ask once what stopped them (NOT INTERESTED): 'achha ji. koi dikkat aayi thi kya, hamari site par ya price mein?'")
                 return {"status": "not recorded", "reason": "Do not end the call yet: you have asked nothing since the opening. "
                         f"{check} Wait for their answer, then go by it and call mark_outcome again."}
-        if outcome == "not_interested" and state.coupon and not state.coupon_refused:
-            # Owner, 19 Oct 2026: a customer who says no hears the coupon offer once before the goodbye. Not after a
-            # complaint or abuse, and not once the goodbye is out (the customer has heard the call end).
-            heard = turns + [{"role": "agent", "text": clean_agent_text(state._out_buf)}]
-            their_reason = probe_answer(turns) or " ".join(t["text"] for t in turns if t["role"] == "customer")
-            if (not coupon_offered(heard) and not _COMPLAINT.search(their_reason) and not was_abusive(turns)
-                    and _GOODBYE.search(clean_agent_text(state._out_buf)) is None and not said_goodbye(state.transcript)):
-                state.coupon_refused = state.record_pending = True
-                log.info("call %s: mark_outcome not_interested refused; the coupon offer was never made", state.call_id)
-                offer = coupon_offer_line(state.coupon)
-                voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
-                # "say": Sarvam speaks it as given; the others are told to. In another language the agent says it in that.
-                return {"status": "not recorded", **({"say": offer} if state.language == "hi-IN" else {}),
-                        "reason": "Not yet: before the goodbye, make THE OFFER once "
-                        f"(NOT INTERESTED). Say only this, nothing before or after it: '{offer}' Then wait for their answer. "
-                        f"A yes: '{coupon_yes_line(voice)}', mark_outcome 'wants_coupon', end_call. Anything else: "
-                        f"'{CART_NO_CLOSE}', mark_outcome 'not_interested' with their reason, end_call."}
-        if outcome == "needs_help" and state.call_type.key == "abandoned_cart" and not state.help_refused:
-            # Call 167: "haan ji, main yeh order lena chahti hoon", then a freebie question; the agent asked again,
-            # heard "nahi haan ji", and closed as needs_help with no order taken.
-            yes = ever_yes_to_main_question(state.transcript, state.call_type.main_question)
-            if yes and _GOODBYE.search(clean_agent_text(state._out_buf)) is None:
-                state.help_refused = state.record_pending = True
-                log.info("call %s: mark_outcome needs_help refused; the customer already said yes (%r)", state.call_id, yes)
-                return {"status": "not recorded", "reason": f"The customer already said yes to the order ('{yes}'). Do not end "
-                        "the call and do not ask whether they want it again. Say 'ji, maine yeh note kar liya hai' about their "
-                        "question and carry on with the order: payment (step 3), address (step 4), then the close (step 5) "
-                        "with mark_outcome 'wants_to_order' and their question in question."}
         if outcome == "call_later":
             # Call 182: "nahi, main baad mein kharidungi, abhi nahi" was recorded as call_later, with the agent's own
             # "aap kis samay wapas call karwana chahenge?" as the time. Buying later is a no, not a call back.
@@ -2061,20 +2054,22 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
         # Owner, 12 Oct 2026: the address is confirmed on every order, paid online too (7 Oct had skipped it for online carts).
         if (state.call_type.takes_address and str(contact.get("address") or "").strip() and not state.address
                 and (outcome in state.call_type.positive or args.get("mismatch"))
-                and not any(_ADDRESS_WORDS.search(q) for q in asked)):
+                and not any(_asks_address(q) for q in asked)):
             # Call 122: the address on record was only mentioned in passing (and dropped on a repeat), never asked about.
             state.address_refusals += 1
             if state.address_refusals <= 2:
                 state.record_pending = True
                 log.info("call %s: mark_outcome refused; the address on record was never asked about", state.call_id)
                 return {"status": "not recorded", "reason": "You have not checked the delivery address. Do not close yet. "
-                        "Ask it as its own question (step 3): 'aur delivery <area>, <city> mein hi karni hai na?' and wait. "
+                        "Ask it as its own question (step 3): 'ji, aur delivery <address> mein karni hai?' and wait. "
                         "If it is wrong, take it again (TAKING AN ADDRESS). Then call mark_outcome again."}
             args = {**args, "notes": ((args.get("notes") or "") + " (address on record was not checked on the call)").strip()}
         if state.call_type.takes_address and outcome in state.call_type.positive and not state.address:
             # Call 135: "aur delivery Mohali mein hi karni hai na?" got only noise back and the order was closed on it.
+            # "ji, ek baar delivery address confirm kar dijiye." (owner, 22 Oct 2026) asks too, without a "?".
             asked_at = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "agent"
-                             and any(_ADDRESS_WORDS.search(q) for q in agent_questions([turns[i]]))), None)
+                             and (any(_asks_address(q) for q in agent_questions([turns[i]]))
+                                  or _ADDRESS_RECHECK.search(turns[i]["text"]))), None)
             answer = "" if asked_at is None else next(
                 (t["text"] for t in turns[asked_at + 1:] if t["role"] == "customer" and not heard_nothing(t["text"])), "")
             if asked_at is not None and not said_yes(answer):
@@ -2087,7 +2082,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                              state.call_id, outcome, answer)
                     return {"status": "not recorded", "reason": "The customer has not clearly said yes to the delivery address: "
                             "their answer was noise or not a yes. Do not close. Ask again, in a few words and with no lead-in "
-                            "such as 'ek baar phir check karti hoon': 'ji, delivery <area>, <city> mein hi karni hai na?' and wait. If it is wrong, take it again (TAKING AN ADDRESS). "
+                            "such as 'ek baar phir check karti hoon': 'ji, ek baar delivery address confirm kar dijiye.' and wait. If it is wrong, take it again (TAKING AN ADDRESS). "
                             "Then call mark_outcome again."}
                 args = {**args, "verify": "address not confirmed on the call",
                         "notes": ((args.get("notes") or "") + " (customer's yes to the address was not heard)").strip()}
@@ -2236,7 +2231,7 @@ def live_snapshot() -> list[dict]:
         c = a["contact"]
         out.append({
             "call_id": call_id, "channel": a["channel"], "status": status, "seconds": round(seconds),
-            "ring_left": ring_left, "campaign_id": c.get("campaign_id"),
+            "ring_left": ring_left, "campaign_id": c.get("campaign_id"), "contact_id": c.get("id"),
             "customer_name": c.get("customer_name", ""), "order_id": c.get("order_id", ""),
             "product": c.get("product", ""), "to": a["meta"].get("to") or c.get("phone", ""),
             "voice": a["voice"], "outcome": state.outcome, "lines": lines[-3:],

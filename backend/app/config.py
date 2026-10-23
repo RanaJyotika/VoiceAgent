@@ -57,6 +57,20 @@ PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_FROM_NUMBER = os.getenv("PLIVO_FROM_NUMBER", "")      # your Plivo number, e.g. +9180xxxxxxx
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")  # https://xxxx.trycloudflare.com
+PUBLIC_URL_FILE = DATA_DIR / "public_url.txt"
+
+
+def public_base_url() -> str:
+    """The phone line's address now. Started by run_phone.bat (PUBLIC_BASE_URL set), the tunnel may have been replaced
+    since (scripts/start_with_tunnel.py writes the new one to data/public_url.txt; owner, 22 Oct 2026: the tunnel died
+    and every call was refused). Started by run.bat: "" (an old file is never used)."""
+    if not PUBLIC_BASE_URL:
+        return ""
+    try:
+        url = PUBLIC_URL_FILE.read_text(encoding="utf-8").strip().rstrip("/")
+    except OSError:
+        url = ""
+    return url if url.startswith("https://") else PUBLIC_BASE_URL
 # Optional safety switch: when true, every phone call goes to PHONE_NUMBER from .env instead of
 # the number on screen. Off by default: the number comes from the Excel row or what you type.
 DIAL_ONLY_MY_NUMBER = os.getenv("DIAL_ONLY_MY_NUMBER", "false").lower() == "true" and bool(PHONE_NUMBER)
@@ -218,7 +232,9 @@ PHONE_STUCK_SECONDS = float(os.getenv("PHONE_STUCK_SECONDS", "4"))
 # Was 12 s; on call 118 the customer waited 15 s for a reply that never came. 3 s: owner, 1 Oct 2026.
 # 1.5 s: owner, 8 Oct 2026 (call 194): if the customer says nothing, ask "meri awaaz aa rahi hai?" within 1-2 s.
 # Counted from when the agent's voice has finished playing on the phone (plus 0.3 s for the line's tail).
-PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "1.5"))
+# 3 s: owner, 22 Oct 2026 (call 515): at 1.5 s the check cut in three times just as the customer began to answer
+# ("cash on delivery" 2.3 s after the payment question), the answers were lost under it and the question was asked again.
+PHONE_SILENT_SECONDS = float(os.getenv("PHONE_SILENT_SECONDS", "3"))
 # ...and after that check has gone unanswered, this long again before the goodbye (12 s until 8 Oct 2026).
 PHONE_SILENT_GOODBYE_SECONDS = float(os.getenv("PHONE_SILENT_GOODBYE_SECONDS", "4"))
 # The customer finished and no sound of the agent's reply has come after this long: the reply is stuck. Call 194:
@@ -421,6 +437,7 @@ PRONUNCIATION = {
     "Vedic Vaibhav": "वैदिक वैभव",
     "Vedic Shop": "वैदिक शॉप",
     "Gauri": "गौरी",
+    "Arjun": "अर्जुन",
     "Shri Yantra": "श्री यंत्र",
     "Sri Yantra": "श्री यंत्र",
     "Rudraksha": "रुद्राक्ष",
@@ -477,9 +494,15 @@ PINNACLE_PREPAID_BUTTON = os.getenv("PINNACLE_PREPAID_BUTTON", "").strip().lower
 # The image at the top of the prepaid coupon template (owner, 21 Oct 2026: the product's first photo). "product" = the
 # ordered product's photo from the catalogue, else PINNACLE_DEFAULT_IMAGE_URL; "" = a template without an image.
 PINNACLE_PREPAID_IMAGE = os.getenv("PINNACLE_PREPAID_IMAGE", "product").strip().lower()
-PINNACLE_DEFAULT_IMAGE_URL = os.getenv("PINNACLE_DEFAULT_IMAGE_URL", "").strip()
+# Owner, 22 Oct 2026 (call 523 failed for want of a photo): never empty. The home page's "Wear your Zodiac" banner (a PNG,
+# which Shopify serves as JPEG; the store logo is AVIF and Shopify kept serving it as webp, which WhatsApp refuses).
+PINNACLE_DEFAULT_IMAGE_URL = (os.getenv("PINNACLE_DEFAULT_IMAGE_URL", "").strip()
+                              or "https://cdn.shopify.com/s/files/1/0790/3884/1047/files/81ad90d5-9f75-44e5-b936-70f670425707.png?v=1792057975")
 PINNACLE_CART_PARAMS = [p.strip().lower() for p in os.getenv("PINNACLE_CART_PARAMS", "name,product,offer,code,link").split(",")
                         if p.strip()]
+# The abandoned-cart template's image and button, as for the prepaid one (owner, 22 Oct 2026: both use "orderstatus").
+PINNACLE_CART_IMAGE = os.getenv("PINNACLE_CART_IMAGE", "product").strip().lower()
+PINNACLE_CART_BUTTON = os.getenv("PINNACLE_CART_BUTTON", "").strip().lower()
 # Who sends them: "pinnacle" (Pinnacle's WhatsApp API; the default once its API key is in .env), "whatsapp" (Meta's
 # WhatsApp Cloud API), "plivo_sms", "webhook" (another system sends them), or "" (nobody yet).
 MESSAGE_PROVIDER = (os.getenv("MESSAGE_PROVIDER", "").strip() or ("pinnacle" if PINNACLE_API_KEY else "")).lower()

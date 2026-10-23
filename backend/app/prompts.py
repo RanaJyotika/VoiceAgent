@@ -29,7 +29,8 @@ def persona(voice: str) -> tuple[str, str]:
     # tell a customer's gender, so they always get the respectful plural, which fits a man or a woman.
     return name, (f"You are {own}: when you speak about yourself, use {other} verb endings ({endings}), whatever "
                   "the customer's gender. The customer always gets the respectful plural, man or woman: \"aap kar sakte "
-                  "hain\", \"aap chahte hain\", never \"sakti hain\" or \"sakta hai\". Say your name only in the greeting, never again.")
+                  "hain\", \"aap chahte hain\", never \"sakti hain\" or \"sakta hai\". Say your name in the greeting and "
+                  f"after that only when asked for it: then just tell it (\"ji, main {name}\"), never that you said it already.")
 
 
 STYLE = """HOW TO SOUND

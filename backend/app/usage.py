@@ -108,7 +108,18 @@ def _period(range_: str) -> tuple[datetime, datetime, str]:
     if range_ in ("7d", "30d"):
         n = int(range_[:-1])
         return today - timedelta(days=n - 1), today + timedelta(days=1), f"last {n} days"
-    raise HTTPException(400, "range must be month, last_month, 7d or 30d.")
+    # One day (owner, 22 Oct 2026: what today, or any single day, cost by agent and phone line).
+    if range_ == "today":
+        return today, today + timedelta(days=1), "today"
+    if range_ == "yesterday":
+        return today - timedelta(days=1), today, "yesterday"
+    if range_.startswith("day:"):
+        try:
+            day = datetime.strptime(range_[4:], "%Y-%m-%d").replace(tzinfo=IST)
+        except ValueError:
+            raise HTTPException(400, "A day must look like day:2026-10-22.")
+        return day, day + timedelta(days=1), day.strftime("%d %b %Y").lstrip("0")
+    raise HTTPException(400, "range must be today, yesterday, day:YYYY-MM-DD, month, last_month, 7d or 30d.")
 
 
 def _rows(start: datetime, end: datetime) -> list:

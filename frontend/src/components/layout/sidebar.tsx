@@ -2,18 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AudioLines } from "lucide-react";
+import { AudioLines, Bot, Phone } from "lucide-react";
 import { usePoll } from "@/hooks/use-poll";
-import { fmtRs } from "@/lib/format";
+import { useConfig } from "@/hooks/use-static";
+import type { PhoneLine } from "@/lib/api";
+import { fmtPhone } from "@/lib/format";
 import { NAV, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
+import { fitVoice, remembered } from "@/lib/voices";
 
 /** The page or one under it: /campaigns/ is lit on /campaigns/view/?id=3 too. */
 const isActive = (pathname: string, href: string) => (href === "/" ? pathname === "/" : pathname.replace(/\/$/, "").startsWith(href.replace(/\/$/, "")));
-
-/** /api/budget: the workspace limits set on the Usage page, and what has been spent against them. */
-type Budget = { monthly_rs: number; daily_rs: number; spent_today_rs: number; spent_month_rs: number };
-type Auto = { enabled: boolean; running: boolean };
 
 function NavLink({ item, active, onNavigate }: { item: NavItem; active: boolean; onNavigate: () => void }) {
   const cls = cn(
@@ -42,14 +41,9 @@ function NavLink({ item, active, onNavigate }: { item: NavItem; active: boolean;
 
 export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
   const pathname = usePathname();
-  const b = usePoll<Budget>("/api/budget", 30_000).data;
-  const auto = usePoll<Auto>("/api/auto", 30_000).data;
-
-  // The daily limit if one is set, else the monthly one, else just what was spent today.
-  const monthly = !b?.daily_rs && !!b?.monthly_rs;
-  const budget = (monthly ? b?.monthly_rs : b?.daily_rs) ?? 0;
-  const spent = (monthly ? b?.spent_month_rs : b?.spent_today_rs) ?? 0;
-  const used = budget ? Math.min(100, Math.round((100 * spent) / budget)) : null;
+  // Owner, 22 Oct 2026: the phone line calls go out on and the agent that speaks, in place of the spend box.
+  const line = usePoll<PhoneLine>("/api/plivo/status", 60_000).data;
+  const cfg = useConfig();
 
   return (
     <div className="flex h-full flex-col">
@@ -76,26 +70,41 @@ export function Sidebar({ onNavigate }: { onNavigate: () => void }) {
         ))}
       </nav>
 
-      <div className="space-y-3 p-2 pb-3">
-        <div className="rounded-lg border bg-card p-3">
-          <div className="flex items-baseline justify-between text-[12.5px]">
-            <Link href="/usage/" className="text-muted-foreground hover:text-foreground hover:underline" onClick={onNavigate}>
-              {monthly ? "Spent this month" : "Spent today"}
-            </Link>
-            <span className="font-medium tabular">{used == null ? "" : `${used}%`}</span>
+      <div className="p-2 pb-3">
+        <div className="space-y-2.5 rounded-lg border bg-card p-3 text-[12.5px]">
+          <div className="flex items-start gap-2.5">
+            <Phone className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                Phone line
+                {line && (
+                  <span className={cn("ml-auto inline-flex items-center gap-1 font-medium", line.ready ? "text-good" : "text-warn")}>
+                    <span className="size-1.5 rounded-full bg-current" />
+                    {line.ready ? "Ready" : "Not ready"}
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-0.5 truncate font-mono text-[13px] font-medium"
+                title={line?.missing.length ? `Missing: ${line.missing.join(", ")}` : undefined}
+              >
+                {line == null ? "…" : line.from_number ? fmtPhone(line.from_number) : "No number set"}
+              </div>
+              {line?.dial_only_my_number && <div className="mt-0.5 text-[11.5px] text-warn">Test mode: rings only your phone</div>}
+              {line && !line.ready && !line.dial_only_my_number && (
+                <div className="mt-0.5 text-[11.5px] text-muted-foreground">Start with run_phone.bat to call</div>
+              )}
+            </div>
           </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-brand transition-[width]" style={{ width: `${used ?? 0}%` }} />
+          <div className="flex items-start gap-2.5 border-t pt-2.5">
+            <Bot className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="text-muted-foreground">Agent for calls</div>
+              <div className="mt-0.5 truncate text-[13px] font-medium">
+                {cfg ? `${cfg.model_labels[cfg.model] ?? cfg.model} · ${fitVoice(cfg, cfg.model, remembered("voice") || cfg.voice)}` : "…"}
+              </div>
+            </div>
           </div>
-          <div className="mt-2 text-[12.5px] text-muted-foreground tabular">
-            {fmtRs(spent)}
-            {budget ? ` of ${fmtRs(budget)} ${monthly ? "monthly" : "daily"} limit` : " · no limit set"}
-          </div>
-        </div>
-        <div className="flex items-center gap-2.5 px-2 text-[13px]">
-          <span className={cn("size-2 rounded-full", auto?.running ? "bg-good" : "bg-subtle-foreground")} />
-          <span className="text-muted-foreground">Auto-calling</span>
-          <span className="ml-auto font-medium">{auto == null ? "…" : auto.running ? "On" : "Off"}</span>
         </div>
       </div>
     </div>

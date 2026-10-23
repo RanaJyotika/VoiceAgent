@@ -319,7 +319,9 @@ def find_for_contact(contact: dict) -> list[dict]:
             continue
         # The item's name, then the name without a trailing "(variant)", which may itself hold brackets:
         # "Kirtimukh ... Golden Glow (12 cm (height) × 11 cm (width))".
-        names = [item] + [item[:m.start()] for m in re.finditer(r"\s\(", item)]
+        # Also the name before a dash or bar (call 523: "Copper Harmony Bracelet – minimal tamba cuff" is the Copper
+        # Harmony Bracelet; the sheet carried the product page's photo captions).
+        names = [item] + [item[:m.start()] for m in re.finditer(r"\s\(|\s[–—|-]\s", item)]
         p = next((STATE["by_title"][_key(n)] for n in names if _key(n) in STATE["by_title"]), None)
         if not p:
             hits = search(item, 1)

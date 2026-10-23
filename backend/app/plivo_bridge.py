@@ -29,7 +29,7 @@ from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, F
                      PHONE_OUT_CHUNK_MS, PHONE_SEND_LEAD_MS, PHONE_END_SILENCE_MS, PHONE_LONG_ANSWER_MS, PHONE_LONG_TURN_SECONDS, PHONE_NUMBER, PHONE_RECORD, PHONE_SILENT_SECONDS,
                      PHONE_SILENT_GOODBYE_SECONDS, PHONE_STUCK_SECONDS, PHONE_REPLY_LATE_SECONDS, PHONE_UNCLEAR_SECONDS, PHONE_NOISE_ASK_SECONDS,
                      PHONE_SHORT_END_MS, PHONE_SHORT_TURN_MS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
-                     PUBLIC_BASE_URL, RECORDINGS_DIR, RING_SECONDS, VOICES, gemini_voice, plivo_missing)
+                     public_base_url, RECORDINGS_DIR, RING_SECONDS, VOICES, gemini_voice, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
 from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, SILENT_HANGUP, Nudge, run_call
 from .openai_bridge import is_openai_model, voice_for
@@ -104,11 +104,28 @@ def to_gemini_pcm(raw: bytes, media: dict, fmt: dict) -> bytes:
     return pcm
 
 
+async def line_problem() -> str:
+    """Why the phone line cannot take calls now ("" = it can): this server must answer at its public address, the way
+    Plivo will reach it. Free: a request to ourselves through the tunnel."""
+    base = public_base_url()
+    if not base:
+        return "Phone line not ready. Missing: PUBLIC_BASE_URL (start the server with run_phone.bat)."
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{base}/api/live")
+        if r.status_code == 200:
+            return ""
+    except httpx.HTTPError:
+        pass
+    return (f"Phone line not reachable: the tunnel {base} has stopped working. run_phone.bat opens a new one by itself "
+            "within about 2 minutes; if it does not, close run_phone.bat and run it again.")
+
+
 @router.get("/api/plivo/status")
 async def plivo_status() -> dict:
     missing = plivo_missing()
     return {"ready": not missing, "missing": missing, "dial_only_my_number": DIAL_ONLY_MY_NUMBER,
-            "from_number": PLIVO_FROM_NUMBER, "public_base_url": PUBLIC_BASE_URL}
+            "from_number": PLIVO_FROM_NUMBER, "public_base_url": public_base_url()}
 
 
 class PendingCall:
@@ -953,12 +970,13 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
         raise HTTPException(400, "No valid phone number. Type a 10-digit mobile number in the box.")
 
     token = uuid.uuid4().hex[:16]
+    base = public_base_url()
     payload = {
         "from": PLIVO_FROM_NUMBER.lstrip("+"),
         "to": to_number.lstrip("+"),
-        "answer_url": f"{PUBLIC_BASE_URL}/plivo/answer/{token}",
+        "answer_url": f"{base}/plivo/answer/{token}",
         "answer_method": "POST",
-        "hangup_url": f"{PUBLIC_BASE_URL}/plivo/hangup/{token}",
+        "hangup_url": f"{base}/plivo/hangup/{token}",
         "hangup_method": "POST",
         "ring_timeout": RING_SECONDS,
         "time_limit": MAX_CALL_SECONDS,
@@ -991,7 +1009,7 @@ async def answer(token: str) -> Response:
     if pc:
         pc.on_answered()
         log.info("call %s answered; greeting started", token)
-    ws_base = PUBLIC_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+    ws_base = public_base_url().replace("https://", "wss://").replace("http://", "ws://")
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">{ws_base}/ws/plivo/{token}</Stream>

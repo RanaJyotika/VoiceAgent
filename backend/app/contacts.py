@@ -187,7 +187,7 @@ DETAIL_LABELS = {
     "not_interested_reason": "Reason", "cancel_reason": "Reason", "callback_time": "Call back",
     "new_delivery_date": "New delivery date", "new_product": "Product they named", "mismatch": "Mismatch",
     "question": "Question", "notes": "Note", "payment_preference": "Payment", "order_changes": "Changes asked for",
-    "coupon_code": "Coupon", "payment_change": "Payment change",
+    "coupon_code": "Coupon", "payment_change": "Payment change", "whatsapp_coupon": "WhatsApp coupon",
 }
 # Details our own code writes into a result (not the agent), shown on the results sheet after the call type's own.
 SYSTEM_DETAILS = ("coupon_code",)   # the coupon a cart customer said yes to (owner, 19 Oct 2026)
@@ -228,6 +228,64 @@ def call_result(contact: dict, call: dict | None) -> tuple[str, str, str]:
     if outcome in VERIFY_OUTCOMES or any(str(details.get(k) or "").strip() for k in VERIFY_DETAILS):
         return "Needs human verification", response, ""
     return "Picked", response, ""
+
+
+# A call's result as one key, the way the Calls summary filters it: its outcome, else an error on our side, else
+# picked up with nothing recorded, else not answered.
+CALL_RESULTS = {**RESPONSES, "no_answer": "No answer", "busy": "Busy", "dropped": "Call dropped", "done": "Done",
+                "error": "Failed on our side", "none": "Picked up, no result recorded"}
+CELL_LIMIT = 32_000   # an Excel cell holds 32,767 characters
+
+
+def call_result_key(call: dict) -> str:
+    return call.get("outcome") or ("error" if call.get("error") else "none" if (call.get("duration_sec") or 0) > 0 else "no_answer")
+
+
+def filter_calls(calls: list[dict], outcome: str = "all", kind: str = "all", q: str = "") -> list[dict]:
+    """The Calls summary's own filters: result, phone or browser, and the search box (name, phone, order, campaign)."""
+    q = q.strip().lower()
+    return [c for c in calls
+            if (outcome in ("", "all") or call_result_key(c) == outcome)
+            and (kind in ("", "all") or (kind == "phone") == (c.get("channel") == "plivo"))
+            and (not q or q in " ".join(str(c.get(k) or "") for k in ("customer_name", "phone", "order_id", "campaign_name")).lower())]
+
+
+def build_calls_export(calls: list[dict], whatsapp: dict[int, dict]) -> bytes:
+    """One row per call, newest first: who, when, how long, the result and every detail the code recorded, whether its
+    WhatsApp message went out, the cost and the conversation. whatsapp: message id -> {status, error}."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "calls"
+    ws.append(["Call #", "Type", "Started", "Customer", "Phone", "Order ID", "Campaign", "Length", "Result", "Details",
+               "WhatsApp", "Cost (Rs)", "Error", "Conversation"])
+    for c in calls:
+        details = c.get("outcome_details") if isinstance(c.get("outcome_details"), dict) else {}
+        said = "; ".join(f"{DETAIL_LABELS.get(k, k.replace('_', ' ').capitalize())}: {v}" for k, v in details.items()
+                         if k not in ("outcome", "message_id") and str(v if v is not None else "").strip())
+        msg = whatsapp.get(details.get("message_id")) if details.get("message_id") else None
+        sent = ("" if not msg else "Sent" if msg["status"] == "sent" else
+                f"Failed: {msg.get('error') or ''}".strip() if msg["status"] == "failed" else msg["status"].capitalize())
+        try:
+            started = datetime.fromisoformat(c["started_at"]).astimezone(IST).strftime("%d %b %Y %H:%M")
+        except (KeyError, TypeError, ValueError):
+            started = str(c.get("started_at") or "")
+        seconds = int(round(c.get("duration_sec") or 0))
+        talk = "\n".join(f"{'Agent' if t.get('role') == 'agent' else 'Customer'}: {t.get('text', '')}"
+                          for t in (c.get("transcript") or []) if isinstance(t, dict))
+        ws.append([c.get("id"), "Phone" if c.get("channel") == "plivo" else "Browser", started, c.get("customer_name") or "",
+                   c.get("phone") or "", c.get("order_id") or "", c.get("campaign_name") or ("Single call" if c.get("contact_id") else ""),
+                   f"{seconds // 60}:{seconds % 60:02d}", CALL_RESULTS.get(call_result_key(c), call_result_key(c)), said, sent,
+                   c.get("cost_rs") or 0, (c.get("error") or "")[:CELL_LIMIT], talk[:CELL_LIMIT]])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for col in ws.columns:
+        widest = max(len(str(cell.value or "").split("\n")[0]) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(widest + 2, 60)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def build_results(contacts: list[dict], latest_call, call_type: CallType = DEFAULT, campaign_name: str = "") -> bytes:

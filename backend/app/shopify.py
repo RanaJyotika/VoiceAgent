@@ -31,7 +31,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from . import db
-from .config import (PUBLIC_BASE_URL, SHOPIFY_ADMIN_TOKEN, SHOPIFY_API_VERSION, SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET,
+from .config import (PUBLIC_BASE_URL, public_base_url, SHOPIFY_ADMIN_TOKEN, SHOPIFY_API_VERSION, SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET,
                      SHOPIFY_PREPAID_TAGS_ADD, SHOPIFY_PREPAID_TAGS_REMOVE, SHOPIFY_STORE, SHOPIFY_WEBHOOK_SECRET)
 from .contacts import DETAIL_LABELS, RESPONSES, is_valid_phone, normalise_phone
 
@@ -598,7 +598,7 @@ async def worker() -> None:
 # --- dashboard ----------------------------------------------------------------------------------------
 
 def webhook_url() -> str:
-    return f"{PUBLIC_BASE_URL}{WEBHOOK_PATH}" if PUBLIC_BASE_URL else ""
+    return f"{public_base_url()}{WEBHOOK_PATH}" if public_base_url() else ""
 
 
 @router.get("/api/shopify")

@@ -51,6 +51,23 @@ export type CallDetail = Partial<Omit<LiveCall, "status" | "lines">> & {
   lines: LiveCall["lines"];
   outcome_details: Record<string, unknown> | null;
   error?: string | null;
+  /** What the call was about: the order or cart and its products, or a one-off call's reason. */
+  subject?: CallSubject | null;
+};
+
+export type CallSubject = {
+  kind: string; // order_confirmation, abandoned_cart, custom...
+  kind_name: string;
+  order_id: string;
+  product: string;
+  quantity: string;
+  amount: string;
+  payment_mode: string;
+  address: string;
+  delivery_date: string;
+  reason: string;
+  cart_link: string;
+  products: { title: string; image: string; link: string }[];
 };
 
 export type Campaign = { id: number; name: string };
@@ -337,3 +354,128 @@ export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> 
   }
   return r.json() as Promise<T>;
 }
+
+// ---------------- Store orders (backend: orders_view.py, store_orders.py, autodial.py) ----------------
+
+/** A tag on an order; tone as the server names it: warning, accent, good, critical, serious, or "". */
+export type OrderTag = { label: string; tone: string };
+export type OrderItem = { title: string; variant: string; qty: number; image: string; price: string; sku: string };
+
+/** The day's limit on new orders for automatic calling (store_orders.quota). */
+export type OrderQuota = {
+  limit: number;
+  pick: "newest" | "oldest" | "random" | string;
+  picked_today: number;
+  room: number | null;
+  days: string;
+  days_label: string;
+  since: string;
+  before: string;
+};
+
+/** /api/orders: one order of the list, with where its call stands. */
+export type OrderRow = {
+  name: string;
+  created_at: string;
+  customer: string;
+  phone: string; // the last 10 digits
+  items: OrderItem[];
+  amount: string;
+  payment: string;
+  tags: OrderTag[];
+  state: string;
+  state_label: string;
+  state_tone: string;
+  contact_id: number | null;
+  attempts: number;
+  result: string;
+  next_try_at: string | null;
+  last_call: { id: number; at: string; seconds: number } | null;
+  delivery: string;
+};
+
+export type OrdersPage = {
+  counts: Record<string, number>;
+  tags: string[];
+  total: number;
+  page: number;
+  pages: number;
+  rows: OrderRow[];
+  quota: OrderQuota;
+};
+
+/** /api/order?name=: one order for the side panel. */
+export type OrderDetail = OrderRow & {
+  email: string;
+  address: string;
+  store_status: { delivery: string; courier: string; tracking: string; fulfillment: string };
+  earlier_orders: number;
+  calls: { id: number; at: string; seconds: number; outcome: string; error: string; channel: string }[];
+  notes: { text: string; created_at: string }[];
+};
+
+export type StoreSettings = {
+  orders: "cod" | "all" | "off";
+  order_wait_minutes: number;
+  order_max_hours: number;
+  order_daily_limit: number;
+  order_pick: string;
+  order_days: string;
+};
+
+/** /api/store: where orders come from and which ones get a call. */
+export type StoreStatus = {
+  enabled: boolean;
+  source: string;
+  settings: StoreSettings;
+  order_days: Record<string, string>;
+  quota: OrderQuota;
+  last_check: string;
+  since: string;
+  error: string;
+};
+
+/** /api/store/skip: the "don't call orders that are…" switches. */
+export type SkipView = { rules: { key: string; label: string; on: boolean }[]; not_calling: number; changed?: { skipped: number; back: number } };
+
+/** /api/auto: automatic calling. */
+export type AutoStatus = {
+  enabled: boolean;
+  running: boolean;
+  reason: string;
+  calls_made: number;
+  in_progress: number;
+  settings: RunSettings;
+  campaigns: { id: number; name: string; call_type_name: string; to_call: number }[];
+  within_hours: boolean;
+  now_ist: string;
+  dial_only_my_number: boolean;
+  my_number: string;
+  phone_missing: string[];
+};
+
+/** /api/store/batches: each batch of automatic calling, with its results and cost. */
+export type OrderBatch = {
+  id: number;
+  day: string;
+  started_at: string;
+  size: number;
+  orders: number;
+  calls: number;
+  answered: number;
+  confirmed: number;
+  cancelled: number;
+  not_reached: number;
+  hung_up: number;
+  call_later: number;
+  waiting: number;
+  other: number;
+  minutes: number;
+  cost_rs: number;
+  per_order_rs: number | null;
+  per_confirmed_rs: number | null;
+};
+export type BatchReport = {
+  batches: OrderBatch[];
+  current: { id: number | null; started_at: string; picked: number; limit: number; room: number | null };
+};

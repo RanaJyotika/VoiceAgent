@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { PhoneOff, X } from "lucide-react";
+import { ChevronDown, ExternalLink, PhoneOff, ShoppingBag, X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { usePoll } from "@/hooks/use-poll";
-import type { CallDetail, LiveCall } from "@/lib/api";
+import type { CallDetail, CallSubject, LiveCall } from "@/lib/api";
 import { fmtClock, fmtOrder, fmtPhone } from "@/lib/format";
 import { outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
@@ -132,6 +132,8 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
         )}
       </header>
 
+      {data?.subject && <Subject s={data.subject} />}
+
       <div
         ref={log}
         onScroll={(e) => {
@@ -191,5 +193,87 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
         </footer>
       )}
     </aside>
+  );
+}
+
+const money = (a: string) => {
+  const n = Number(String(a).replace(/[^\d.]/g, ""));
+  return a && Number.isFinite(n) && n > 0 ? `₹${n.toLocaleString("en-IN")}` : "";
+};
+
+/** What the call was about (owner, 22 Oct 2026): the order or the cart's products, or a one-off call's reason.
+ *  Open by default; folds away to give the conversation the room. */
+function Subject({ s }: { s: CallSubject }) {
+  const qty = s.quantity && s.quantity !== "1" ? `Qty ${s.quantity}` : s.quantity ? "Qty 1" : "";
+  const meta = [qty, money(s.amount), s.payment_mode].filter(Boolean).join(" · ");
+  const custom = s.kind === "custom";
+  return (
+    <details open className="group border-b bg-muted/30 px-4 py-2.5 text-[13px]">
+      <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+        <ShoppingBag className="size-4 shrink-0 text-muted-foreground" />
+        <span className="font-medium">{custom ? "Reason for the call" : s.kind === "abandoned_cart" ? "Cart" : "Order"}</span>
+        <Badge>{s.kind_name}</Badge>
+        {s.order_id && <span className="truncate font-mono text-[12px] text-muted-foreground">{fmtOrder(s.order_id)}</span>}
+        <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="mt-2.5 space-y-2">
+        {custom && <p className="leading-snug whitespace-pre-wrap">{s.reason || "No reason was written for this call."}</p>}
+        {!custom &&
+          (s.products.length ? (
+            s.products.map((p, i) => (
+              <div key={i} className="flex items-center gap-2.5">
+                {p.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- store photos by their own address, in a static export
+                  <img
+                    src={`${p.image}${p.image.includes("?") ? "&" : "?"}width=96`}
+                    alt=""
+                    className="size-10 shrink-0 rounded-md border bg-muted object-cover"
+                  />
+                ) : (
+                  <span className="size-10 shrink-0 rounded-md border bg-muted" />
+                )}
+                {p.link ? (
+                  <a href={p.link} target="_blank" rel="noreferrer" className="line-clamp-2 min-w-0 leading-snug font-medium hover:underline">
+                    {p.title}
+                    <ExternalLink className="ml-1 inline size-3 text-muted-foreground" />
+                  </a>
+                ) : (
+                  <span className="line-clamp-2 min-w-0 leading-snug font-medium">{p.title}</span>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="line-clamp-3 leading-snug font-medium">{s.product || "No product on record"}</p>
+          ))}
+        {!custom && meta && <div className="text-muted-foreground tabular">{meta}</div>}
+        {!custom && (s.address || s.delivery_date) && (
+          <dl className="space-y-0.5 text-[12.5px]">
+            {s.address && (
+              <div className="flex gap-2">
+                <dt className="w-[60px] shrink-0 text-muted-foreground">Address</dt>
+                <dd className="line-clamp-2 min-w-0">{s.address}</dd>
+              </div>
+            )}
+            {s.delivery_date && (
+              <div className="flex gap-2">
+                <dt className="w-[60px] shrink-0 text-muted-foreground">Delivery</dt>
+                <dd className="min-w-0">{s.delivery_date}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+        {s.cart_link && (
+          <a
+            href={s.cart_link}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[12.5px] font-medium text-brand hover:underline"
+          >
+            Open the cart
+            <ExternalLink className="size-3" />
+          </a>
+        )}
+      </div>
+    </details>
   );
 }

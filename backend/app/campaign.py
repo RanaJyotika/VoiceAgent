@@ -25,7 +25,7 @@ from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OF
                      STALE_PAGE, VOICES, plivo_missing)
 from .call_types import missing_facts
 from .db import IST
-from .plivo_bridge import PENDING, place_call
+from .plivo_bridge import PENDING, line_problem, place_call
 from .prompts import LANGUAGES
 
 log = logging.getLogger("campaign")
@@ -297,6 +297,8 @@ async def campaign_start(body: dict) -> dict:
     camp = db.get_campaign(int(body.get("campaign_id") or 0))
     if not camp:
         raise HTTPException(400, "Pick a campaign to start.")
+    if not plivo_missing() and not CAMPAIGN.running and (why := await line_problem()):
+        raise HTTPException(400, why)   # owner, 22 Oct 2026: a dead tunnel paused every start with Plivo's own error
     return begin(camp, clean_settings(body, camp["id"]))
 
 
