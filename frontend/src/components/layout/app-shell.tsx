@@ -49,7 +49,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
-            <main className="min-w-0 flex-1">{children}</main>
+            {/* On wide screens the page narrows beside an open side panel instead of hiding under it (useSidePanel sets the width). */}
+            <main className="min-w-0 flex-1 transition-[padding] duration-200 xl:pr-(--side-panel)">{children}</main>
           </div>
 
           <CommandMenu open={searchOpen} onClose={() => setSearchOpen(false)} />

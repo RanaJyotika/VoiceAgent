@@ -11,13 +11,23 @@ then types written from a brief on the dashboard; they all fill the same fields.
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Callable
 
 from .config import BUSINESS_NAME, PRONUNCIATION, STORE_NAME
-from .prompts import (GOODBYE, REPLY_WRONG, TAKING_AN_ADDRESS, amount_line, compose, delivery_line, forms, hindi_number,
-                      missing_block, persona)
+from .prompts import (
+    GOODBYE,
+    REPLY_WRONG,
+    TAKING_AN_ADDRESS,
+    amount_line,
+    compose,
+    delivery_line,
+    forms,
+    hindi_number,
+    missing_block,
+    persona,
+)
 
 log = logging.getLogger("call_types")
 
@@ -127,7 +137,9 @@ def address_to_say(address: str) -> str:
         parts.pop()   # the PIN and the state
     if not parts:
         return ""
-    tidy = lambda p: p.title() if p.isupper() else p   # noqa: E731  ("KHORDA" -> "Khorda")
+    def tidy(p: str) -> str:
+        return p.title() if p.isupper() else p   # "KHORDA" -> "Khorda"
+
     city = tidy(parts[-1])
     area = parts[-2] if len(parts) >= 2 else ""
     if area and (len(area.split()) > 3 or re.search(r"\d", area) or area.lower() == parts[-1].lower()):
@@ -222,14 +234,14 @@ def prepaid_coupon_for(contact: dict | None, facts: dict | None = None) -> dict 
         if not contact or paid_online(contact):
             return None
         if facts is None:
-            from . import db   # here: db is not needed by the rest of this module
+            from . import db  # here: db is not needed by the rest of this module
             facts = ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {}
         offer = whatsapp_offer(facts)
         if not offer:
             return None
-        from . import messaging   # here: messaging reads this module
+        from . import messaging  # here: messaging reads this module
         return None if messaging.already_sent(contact.get("phone") or "", offer["code"]) else offer
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("WhatsApp coupon lookup failed for contact %s; no offer on this call", (contact or {}).get("id"))
         return None
 
@@ -284,7 +296,7 @@ def _whatsapp_coupon_block(offer: dict | None, contact: dict | None = None, voic
         return ""
     cod = bool(str((contact or {}).get("payment_mode") or "").strip())
     paid = ("they say it is already paid: MISMATCH (payment), no offer." if cod else
-            f'they say it is already paid: "theek hai ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho." '
+            'they say it is already paid: "theek hai ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho." '
             'mark_outcome "confirmed" with notes "customer says already paid online", end_call. No offer.')
     return f"""PAYMENT AND WHATSAPP COUPON (owner, 21 Oct 2026; the payment is asked here and nowhere else)
 After their yes to the address, with nothing different, in place of the usual close:
@@ -327,16 +339,16 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         '- Yes ("haan", "ji", "sahi hai"): next step.',
         '- Something in the order is different (product, quantity, amount, payment): MISMATCH. A wrong address is not a mismatch: take it again at step 3.',
         # Call 282: "teeno mila ke 1300, ek ko nahi?" about a combo of three bracelets was taken as a dispute of the amount.
-        '- A question about what the order holds or what the amount covers ("teeno milenge?", "combo mein kya hai?", "ek ka hai ya sab ka?"): '
-        'not a mismatch. Answer from PRODUCT INFO in one sentence (a combo or set is one order, all of it for the amount above), then your question again.',
+        ('- A question about what the order holds or what the amount covers ("teeno milenge?", "combo mein kya hai?", "ek ka hai ya sab ka?"): '
+         'not a mismatch. Answer from PRODUCT INFO in one sentence (a combo or set is one order, all of it for the amount above), then your question again.'),
         '- They want to cancel: CANCELLATION.',
         # Calls 93, 96 and 98 handled "I did not order" three different ways.
-        f'- They did not place this order: never offer to cancel. Ask once "kya yeh <name> ji ka number hai?" Not theirs: wrong number. '
-        'Theirs: "theek hai ji, maine yeh note kar liya hai. dhanyavaad ji, aapka din shubh ho", '
-        'mark_outcome "not_ordered", end_call.',
-        f'- "{BUSINESS_NAME} kaun? Maine to {STORE_NAME} se order kiya": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store hai." Then your question again. '
-        # Call 119: "kisi aur site se kiya tha" was closed as not ordered at once.
-        f'"Maine to kisi aur site se kiya tha": the same, then "kya aapne <product> order kiya tha?"; only a no to that is "did not place this order".',
+        ('- They did not place this order: never offer to cancel. Ask once "kya yeh <name> ji ka number hai?" Not theirs: wrong number. '
+         'Theirs: "theek hai ji, maine yeh note kar liya hai. dhanyavaad ji, aapka din shubh ho", '
+         'mark_outcome "not_ordered", end_call.'),
+        (f'- "{BUSINESS_NAME} kaun? Maine to {STORE_NAME} se order kiya": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store hai." Then your question again. '
+         # Call 119: "kisi aur site se kiya tha" was closed as not ordered at once.
+         '"Maine to kisi aur site se kiya tha": the same, then "kya aapne <product> order kiya tha?"; only a no to that is "did not place this order".'),
         # Call 120 called this off topic and hung up.
         f'- "Aur kya-kya products hain?": not off topic. "ji, saare products {STORE_NAME} par dekh sakte hain." Then your question again.',
     ]
@@ -355,7 +367,7 @@ Ask for a yes at most twice in the call: once to the order (step 2), once to the
 Every other call ends with "dhanyavaad ji, aapka din shubh ho"; never with "namaste". Never end_call while a question of yours is unanswered."""
 
     # Call 102: "cancel kyun karna hai?" twice, by rote. Owner: handle it intelligently.
-    cancellation = f"""CANCELLATION (they clearly want to cancel)
+    cancellation = """CANCELLATION (they clearly want to cancel)
 Be a helpful person, not a form: never push, never argue, never ask the same thing twice.
 a. If they have not said why, ask once, naturally: "koi baat nahi ji. koi dikkat hai kya?" If they already said why, skip this.
 b. If it is something that can be looked into (price, payment, delivery time, wrong item or quantity): "achha ji, maine yeh note kar liya hai. toh kya aap order rakhna chahenge?" A yes to keeping it now: put their issue in mismatch or notes and carry on with step 3, then the mismatch close. "Baad mein", "phir kar denge" is not a yes: c.
@@ -363,7 +375,7 @@ c. Otherwise, or if they still want to cancel: "theek hai ji, maine aapki cancel
 A "nahi" to cancelling, a worry, or a request (COD, a discount) is not a cancellation: deal with it and carry on. After a cancellation, never read the order again or ask for the address. Paid online and asking about the money: "ji, maine yeh note kar liya hai", no dates."""
 
     # Call 102: "quantity sahi hai, bas price 900 hai aur prepaid" needed one reply, not one turn per difference.
-    mismatch = f"""MISMATCH (they say the product, quantity, amount or payment is different)
+    mismatch = """MISMATCH (they say the product, quantity, amount or payment is different)
 You cannot change the order on the call; you only note it, so it is checked before dispatch.
 a. Say back, in one sentence, only what they said is different, in their words, and check: "achha, toh aapke hisaab se <what they said>, sahi?" Never add anything they did not say (call 282: "payment ho chuki hai", which nobody said). If you did not catch their version, ask for it; never suggest a number or a product yourself.
 b. On their yes: "theek hai ji, maine yeh note kar liya hai." Then step 3 if the address is MISSING, then the mismatch close.
@@ -533,8 +545,8 @@ BOOKING DETAILS are the only truth; you cannot change them on the call, only not
 Never agree to change anything; never invent an offer, discount, date or policy.
 In mark_outcome: mismatch = their claim vs the record, one line per difference, outcome "unclear" (or "cancelled" if they cancelled)."""
 
-    rules = ['- You cannot cancel, refund, reschedule or edit anything yourself: "maine note kar liya hai", never "kar diya". '
-             'Unknowns: "maine aapka sawaal note kar liya hai"; put it in notes.',
+    rules = [('- You cannot cancel, refund, reschedule or edit anything yourself: "maine note kar liya hai", never "kar diya". '
+              'Unknowns: "maine aapka sawaal note kar liya hai"; put it in notes.'),
              '- Never promise what a puja will bring: no "manokamna poori hogi", no "guaranteed", no health or money claims.']
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="BOOKING DETAILS",
@@ -612,8 +624,8 @@ CUSTOMER DETAILS
         '- Interested ("haan", "achha hai", "batao", "book karna hai"): see INTERESTED.',
         '- Not interested ("nahi chahiye", "interest nahi hai", "abhi nahi"): see NOT INTERESTED.',
         '- Already booked ("maine book kar liya hai"): "bahut achha ji, dhanyavaad", goodbye, mark_outcome "already_booked", end_call.',
-        '- They want help to book, or a payment link: "theek hai ji, maine yeh note kar liya hai." Goodbye, '
-        'mark_outcome "needs_help" with their request in notes, end_call. Never promise a link, a WhatsApp or a time.',
+        ('- They want help to book, or a payment link: "theek hai ji, maine yeh note kar liya hai." Goodbye, '
+         'mark_outcome "needs_help" with their request in notes, end_call. Never promise a link, a WhatsApp or a time.'),
         REPLY_WRONG,
     ]
     replies_last = ['- A bare "nahi" to "kya aap isme interested hain?" means not interested: see NOT INTERESTED. Anywhere else: "achha ji, kya?"']
@@ -646,8 +658,8 @@ Answer only from CAMPAIGN DETAILS, in one short sentence, then ask again "kya aa
     if fx("never_say"):
         sections.append("NEVER SAY (set by the person who created this campaign)\n" + fx("never_say"))
 
-    rules = ['- You cannot book, take payment, send links or change anything yourself: "maine note kar liya hai" is the most you say. '
-             'Unknowns go in the question field.']
+    rules = [('- You cannot book, take payment, send links or change anything yourself: "maine note kar liya hai" is the most you say. '
+              'Unknowns go in the question field.')]
 
     return compose(contact=contact, voice=voice, intro=intro, details=details,
                    details_title="CAMPAIGN DETAILS or CUSTOMER DETAILS", details_noun="campaign and customer details",
@@ -708,11 +720,27 @@ def call_coupon(contact: dict) -> dict | None:
     if "_coupon" in contact:
         return contact["_coupon"]
     try:
-        from .coupons import offer_for   # here, not at the top: coupons reads the call types
+        # Here, not at the top: coupons reads the call types.
+        from .coupons import offer_for
         return offer_for(contact)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("coupon lookup failed for contact %s; no offer on this call", contact.get("id"))
         return None
+
+
+# Owner, 23 Oct 2026 (test calls): a bare "nahi" to the greeting's "koi issue tha?" means only "no problem", not a no to the
+# product; the agent hung up on it. This is asked instead (live_bridge asks it too, through probe_first, if the agent
+# still closes on that first "nahi").
+# Owner, 23 Oct 2026: this wording.
+CART_WANT_QUESTION = "aap yeh product order karne mein interested hain?"
+# "Bas dekh raha tha": the link, for later, if they want it. "link WhatsApp" is the call's main question (main_question).
+CART_LATER_QUESTION = "theek hai ji. link WhatsApp par bhej doon, agar baad mein order karna ho?"
+CART_SEND_COUPON = "coupon WhatsApp par bhej doon?"
+# Owner, 23 Oct 2026: a no gets this and nothing more (wording: owner, 23 Oct, fewer "ji").
+CART_NOT_NOW = "koi baat nahi, dhanyavaad ji."
+
+# Every line below that sends something says "WhatsApp ... bhej": live_bridge.promised_on_whatsapp queues the message by
+# it. The link opens their cart, where COD and prepaid are both offered, so it is never called a "payment link".
 
 
 def cart_help_line(voice: str) -> str:
@@ -721,13 +749,33 @@ def cart_help_line(voice: str) -> str:
 
 
 def cart_link_line(voice: str) -> str:
-    return f"ji. agar aap order complete karna chahein, main payment link WhatsApp par share kar {forms(voice)['deti']} hoon."
+    return "ji. agar aap order complete karna chahein, toh link WhatsApp par bhej doon?"
 
 
 def cart_link_close(voice: str) -> str:
-    """Their yes to the link: it goes on WhatsApp and the call ends."""
-    return (f"ji theek hai, main link WhatsApp par bhej {forms(voice)['rahi']} hoon. aap wahin se order complete kar sakte "
-            "hain. dhanyavaad ji.")
+    """Their yes to the link: it goes on WhatsApp and the call ends. Owner's wording, 23 Oct 2026 ("send": live_bridge's
+    _WA_PROMISE takes it as well as "bhej")."""
+    return f"theek hai, main link aapke WhatsApp par send kar {forms(voice)['rahi']} hoon. dhanyavaad ji."
+
+
+def cart_offer_line(coupon: dict, cod: bool = False) -> str:
+    """They want to order (cod: and asked for COD): the campaign's prepaid offer, once, with the dashboard's own
+    discount ("10%" -> "दस परसेंट")."""
+    off = _spoken_off(coupon)
+    # Owner's wording, 23 Oct 2026.
+    gain = (f"coupon code use karne se {off} off mil raha hai" if coupon.get("max_discount")
+            else f"coupon code se yeh offer mil raha hai: {off}")
+    return ("ji, COD ho sakta hai. " if cod else "ji, ") + f"prepaid order par {gain}. aap prepaid order karna chahenge?"
+
+
+def cart_coupon_close(voice: str) -> str:
+    """Their yes to getting the coupon: it goes in the same WhatsApp message as the link."""
+    return f"ji, coupon aur link WhatsApp par bhej {forms(voice)['rahi']} hoon. dhanyavaad ji."
+
+
+def cart_cod_close(voice: str) -> str:
+    """They keep cash on delivery: no second pitch, the link goes on WhatsApp and the call ends."""
+    return f"theek hai ji, link WhatsApp par bhej {forms(voice)['rahi']} hoon. COD choose kar lijiyega. dhanyavaad ji."
 
 
 def cart_price_close(voice: str) -> str:
@@ -736,7 +784,28 @@ def cart_price_close(voice: str) -> str:
             "aap check kar lijiyega. dhanyavaad ji.")
 
 
-CART_NOT_NOW = f"ji koi baat nahi. future mein zarurat ho toh {STORE_NAME} par kabhi bhi order kar sakte hain. dhanyavaad ji."
+# Words that only sell, at the start of a catalogue title, and number words said better as digits ("7 Mukhi").
+_SELLING_WORDS = re.compile(r"^((natural|certified|lab[\s-]*certified|original|genuine|authentic|premium|energi[sz]ed|"
+                            r"abhimantrit|100\s*%)\s+)+", re.IGNORECASE)
+_TITLE_TAIL = re.compile(r"\s+with\s+.*$|\s+for\s+(men|women|man|woman|boys|girls|kids|unisex|him|her|all)\b.*$|"
+                         r"\s*[(\[|].*$|\s+[-–]\s+.*$", re.IGNORECASE)
+_NUMBER_WORDS = {w: str(i) for i, w in enumerate((
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+    "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "twenty-one"))}
+
+
+def spoken_product(product: str) -> str:
+    """The cart's product as a person names it on the phone (owner, 23 Oct 2026): the first item's title without its
+    variant, selling words and audience ("Natural Certified Seven Mukhi Rudraksha Pendant with Premium Adjustable
+    Thread for Men & Women" -> "7 Mukhi Rudraksha Pendant"), plus how many more items. "" when there is none."""
+    items = [i.strip() for i in str(product or "").split(", ") if i.strip()]
+    if not items:
+        return ""
+    title = re.sub(r"\s+x\d+$", "", items[0])
+    short = _SELLING_WORDS.sub("", _TITLE_TAIL.sub("", title)).strip(" ,;:") or title
+    short = " ".join(_NUMBER_WORDS.get(w.lower(), w) for w in short.split())
+    more = len(items) - 1
+    return short + ("" if not more else " aur ek aur product" if more == 1 else " aur kuch aur products")
 
 
 def _offer_detail(coupon: dict) -> str:
@@ -753,63 +822,84 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # The cart's own link goes into the WhatsApp message only; never read out.
     other = _block("Other details from the sheet:", _other_details(contact, {"cart_url"}))
     coupon = call_coupon(contact)
+    product = str(contact.get("product") or "").strip()
+    short = spoken_product(product)
 
     intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products. The customer "
              f"looked at a product on {STORE_NAME} but did not finish the order. Find out what stopped them, help, and if they "
-             "want it, the payment link goes to them on WhatsApp. Very short turns, never a sales push.")
+             "want it, the link goes to them on WhatsApp. Never a sales push.")
 
     details = f"""CART DETAILS
 - Customer name: {contact.get('customer_name') or 'MISSING'}
-- In the cart: {contact.get('product') or 'not on record'}
+- In the cart: {(product + (f' (say it as "{short}")' if short != product else '')) if product else 'not on record'}
 - Cart value: {amount_line(contact, 'not on record (never name a price)')}
 - Notes: {contact.get('notes') or 'none'}
 - Answers to common questions: {answers or 'none'}
 {_offer_detail(coupon) if coupon else ""}{other}{_offers_block(facts or {})}"""
 
     replies_first = [
-        f'- "Nahi chahiye", "abhi nahi", "baad mein", bought it elsewhere, or any no: "{CART_NOT_NOW}" mark_outcome '
-        '"not_interested" with not_interested_reason in their words ("not given" if none), end_call. No question, no push.',
+        (f'- "Nahi chahiye", "abhi nahi", "baad mein", bought it elsewhere: "{CART_NOT_NOW}" mark_outcome "not_interested" '
+         'with not_interested_reason in their words ("not given" if none), end_call. Ask nothing else. A bare "nahi" to '
+         '"koi issue tha?" is not this: it means no problem (step 2).'),
+        '- They ask for COD or cash at any point ("COD hoga?", "COD chahiye"): ORDERING.',
         '- "Price zyada hai", "mehenga hai", or they ask for a discount: PRICE.',
-        '- Already ordered ("order kar diya", "le liya"): "achha ji, bahut badhiya. dhanyavaad ji." mark_outcome '
-        '"already_ordered", end_call.',
-        '- A question about the product (price, size, what it is, delivery): answer it in one short sentence from CART '
-        f'DETAILS or product_info, then "{cart_link_line(voice)}"',
-        f'- "{BUSINESS_NAME} se dekha tha" or "{STORE_NAME} kya hai?": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store '
-        'hai." Then go on.',
+        ('- Already ordered ("order kar diya", "le liya"): "achha ji, dhanyavaad ji, aapka din shubh ho." mark_outcome '
+         '"already_ordered", end_call.'),
+        (f'- "Kaunsa product?": "{short} ji." The greeting named it: never name it again otherwise.' if short else
+         '- "Kaunsa product?": none is on record; never name one. Ask what they were looking at.'),
+        ('- A question about the product (price, size, what it is, delivery): answer it in one short sentence from CART '
+         f'DETAILS or product_info, then "{cart_link_line(voice)}"'),
+        (f'- "{BUSINESS_NAME} se dekha tha" or "{STORE_NAME} kya hai?": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store '
+         'hai." Then go on.'),
         REPLY_WRONG,
     ]
-    replies_last = ['- A sound you could not make out, or "repeat kar dijiye": say your last line again, shorter. Never take '
-                    'it as a no.']
+    replies_last = [('- A sound you could not make out, or "repeat kar dijiye": say your last line again, shorter. Never take '
+                     'it as a no.')]
 
-    # Owner, 22 Oct 2026: these lines, word for word, and nothing more.
+    # Owner, 22 Oct 2026: the cart call in the owner's words. 23 Oct: the product in the greeting; a bare "nahi" is "no
+    # problem" (asked what they meant); just looking gets the link for later; wanting it gets the prepaid offer once.
     flow = f"""THE USUAL ORDER
-1. The greeting has been said for you ("...aapne hamari website par ek product dekha tha, lekin order complete nahi hua. bas check karna tha, koi issue aa raha tha kya?"). Wait for their answer.
-2. Their answer is a yes, "payment issue tha", "bas dekh raha tha", or anything that is not a no or PRICE: "{cart_help_line(voice)}" Then wait.
-3. What they say next, a payment problem, a doubt, or that they want it: "{cart_link_line(voice)}" Then wait. (A no or PRICE: as said above.)
-4. Their yes to the link ("haan", "bhej do", "theek hai"): "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
-Never take an order, an address or a payment on the call, and never read a link or a code out: they go on WhatsApp by themselves.
-End the call only with one of the closing lines above, word for word; never with "namaste". Never end_call while a question of yours is unanswered."""
+1. The greeting has been said for you: "{_cart_greeting(contact, voice)}" Wait for their answer.
+2. Their answer, or their answer to "{CART_WANT_QUESTION}":
+   - A bare "nahi" / "koi issue nahi" (no problem; not a no to the product): "{CART_WANT_QUESTION}" Then go by their answer, below.
+   - Just looking ("bas dekh raha tha", "aise hi dekha tha"): "{CART_LATER_QUESTION}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
+   - They want it ("haan, lena tha", "le lenge", "order karna hai"): ORDERING. "Nahi, order karna hai" is the same: the "nahi" says they were not just looking. Whatever follows a "nahi" decides, never the "nahi" alone.
+   - "Haan" (there was an issue), a vague problem, or a doubt: "{cart_help_line(voice)}" Then answer what they say in one or two short sentences, and "{cart_link_line(voice)}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
+Never take an order, an address or a payment on the call, never read a link or a code out, and never call it a "payment link".
+End the call only with one of the closing lines in this prompt, word for word; never with "namaste". Never end_call while a question of yours is unanswered."""
+
+    if coupon:
+        ordering = f"""ORDERING (they want it; the prepaid offer is made once in a call)
+a. "{cart_offer_line(coupon)}" If they asked for COD ("lena hai, but COD chahiye"): "{cart_offer_line(coupon, cod=True)}" If the offer was already made: c.
+b. A yes to prepaid ("haan", "prepaid kar lenge"), or they ask for the code: "{CART_SEND_COUPON}" A yes: "{cart_coupon_close(voice)}" mark_outcome "wants_to_order" (notes "chose prepaid" only if they said prepaid in words; asking for the code is not that), end_call.
+c. Still COD, or a no to prepaid or to the coupon: "{cart_cod_close(voice)}" mark_outcome "wants_to_order" with notes "wants COD", end_call. Never repeat the offer."""
+    else:
+        ordering = f"""ORDERING (they want it; there is no offer: never name a discount or a code)
+"{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. They asked for COD: "ji, COD ho sakta hai." then "{cart_cod_close(voice)}" mark_outcome "wants_to_order" with notes "wants COD", end_call."""
 
     price = f"""PRICE
 "Price zyada hai", "mehenga hai", or a discount asked for, at any point: "{cart_price_close(voice)}" mark_outcome "wants_coupon" with not_interested_reason in their words, end_call. Never name a discount or a code yourself."""
 
-    rules = ['- You cannot place the order or take payment yourself: the link (and any offer) goes on WhatsApp by itself '
-             'after the lines above. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.']
+    rules = [('- You cannot place the order or take payment yourself: the link (and any offer) goes on WhatsApp by itself '
+              'after the lines above. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.')]
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
                    details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
-                   sections=[price], rules=rules,
+                   sections=[ordering, price], rules=rules,
                    not_mine='not the person named, or "maine kuch cart mein nahi dala"', topic="aapke order")
 
 
 def _cart_greeting(contact: dict, voice: str) -> str:
-    """The owner's first line, word for word, in Devanagari (owner, 22 Oct 2026): who calls, why, and the question."""
+    """The first line, in Devanagari: name, who calls, the product, why, one question (owner, 23 Oct 2026: the product is
+    named in the first turn). Without a product on record it names none."""
     name = str(contact.get("customer_name") or "").strip()
     agent_name, _ = persona(voice)
-    rahi = "रही" if forms(voice)["rahi"] == "rahi" else "रहा"
+    product = spoken_product(str(contact.get("product") or ""))
+    for word, said in PRONUNCIATION.items():   # "Rudraksha" -> "रुद्राक्ष", as the agent's and the store's names
+        product = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", said, product, flags=re.IGNORECASE)
+    what = f"आपने {product} देखा था, order complete नहीं हुआ था।" if product else "आपका order complete नहीं हुआ था।"
     return (f"नमस्ते {name + ' ' if name else ''}जी, मैं {PRONUNCIATION.get(agent_name, agent_name)}, "
-            f"{PRONUNCIATION.get(STORE_NAME, STORE_NAME)} से बोल {rahi} हूँ। आपने हमारी website पर एक product देखा था, "
-            "लेकिन order complete नहीं हुआ। बस check करना था, कोई issue आ रहा था क्या?")
+            f"{PRONUNCIATION.get(STORE_NAME, STORE_NAME)} से। {what} कोई issue था?")
 
 
 ABANDONED_CART = CallType(
@@ -825,14 +915,15 @@ ABANDONED_CART = CallType(
         **COMMON_DETAILS,
     },
     build_prompt=_cart_prompt,
+    probe_first=("not_interested",),   # a "nahi" to the greeting's question is not a no to the product (CART_WANT_QUESTION)
     greeting=_cart_greeting,
     offers_coupon=True,
-    confirm_question="kya main payment link WhatsApp par share kar doon?",
-    # The link line (owner, 22 Oct 2026): "...main payment link WhatsApp par share kar deti hoon."
+    confirm_question="link WhatsApp par bhej doon?",
+    # The link questions ("...link WhatsApp par bhej doon?"); "payment link" still matched for calls made before 23 Oct 2026.
     main_question=r"payment\s*link|पेमेंट\s*लिंक|link\s+whats\s*app|लिंक",
     summary_keys=("not_interested_reason", "question", "callback_time", "notes"),
-    description="Call customers who left items in their cart: find out what stopped them, help, and send the payment link "
-                "(and the campaign's WhatsApp coupon) on WhatsApp to those who want it.",
+    description="Call customers who left items in their cart: find out what stopped them, help, and send the cart link "
+                "(and the campaign's WhatsApp coupon) on WhatsApp to those who want it. COD or prepaid is their choice.",
     columns=(
         Column("customer_name", "Customer name", True, "Ramesh Kumar"),
         Column("phone", "Phone", True, "PUT 10 DIGIT NUMBER"),
@@ -885,10 +976,10 @@ CUSTOMER DETAILS
 
     replies_first = [
         '- They agree, accept or confirm: close (step 3).',
-        '- They refuse or are not interested: accept it at once, never push; ask the reason once only if the reason for '
-        'the call asks you to. Close with mark_outcome "not_interested".',
-        '- They want something you cannot do (a refund, a link, a person to call them): "theek hai ji, maine yeh note kar liya hai." '
-        'Close with mark_outcome "needs_help" and what they want in notes. Never promise a time.',
+        ('- They refuse or are not interested: accept it at once, never push; ask the reason once only if the reason for '
+         'the call asks you to. Close with mark_outcome "not_interested".'),
+        ('- They want something you cannot do (a refund, a link, a person to call them): "theek hai ji, maine yeh note kar liya hai." '
+         'Close with mark_outcome "needs_help" and what they want in notes. Never promise a time.'),
         REPLY_WRONG,
     ]
 
@@ -946,7 +1037,7 @@ def call_type_for(contact: dict | None) -> CallType:
 
 def get_prompt(contact: dict, voice: str) -> str:
     """The system prompt for one call: the contact's call type, with its campaign's facts."""
-    from . import db   # here, not at the top: db is not needed to define the types
+    from . import db  # here, not at the top: db is not needed to define the types
     from .catalog import product_block
     campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
     return call_type_for(contact).build_prompt(contact, voice, (campaign or {}).get("facts") or {}) + product_block(contact, voice)

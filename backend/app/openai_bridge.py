@@ -36,7 +36,7 @@ from websockets.asyncio.client import connect as ws_connect
 
 from .config import (OPENAI_API_KEY, OPENAI_REALTIME_MODEL, OPENAI_TRANSCRIBE_LANGUAGE,
                      OPENAI_TRANSCRIBE_MODEL, OPENAI_VOICE_FEMALE, OPENAI_VOICE_MALE, OPENAI_VOICES, VOICES)
-from .prompts import openai_accent
+from .prompts import openai_accent, prompt_stats
 from .tools import TOOLS
 
 log = logging.getLogger("openai")
@@ -648,6 +648,7 @@ async def connect(*, model: str = "", prompt: str, voice: str, label: str = "", 
     model = model or OPENAI_REALTIME_MODEL
     oa_voice = voice_for(voice)
     prompt = prompt + openai_accent(voice)   # same script as Gemini, plus which Hindi to speak, in the agent's gender
+    log.info("%s: system prompt %s", label, prompt_stats(prompt))
     last: Exception | None = None
     session = None
     for dialect in ("ga", "beta"):

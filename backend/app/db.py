@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS calls (
     usage TEXT,                 -- JSON token usage if reported
     error TEXT
 );
+-- A contact's calls, newest last: the call back list and every "last call of this contact" look-up (was 5 s a poll).
+CREATE INDEX IF NOT EXISTS calls_contact ON calls (contact_id, id);
 CREATE TABLE IF NOT EXISTS campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
@@ -400,15 +402,16 @@ def give_up(contact_id: int, note: str = "") -> None:
                      ((note or "taken off the call-back list")[:200], contact_id))
 
 
-def callbacks() -> list[dict]:
-    """The call-back queue: everyone waiting for another call, soonest first."""
+def callbacks(campaign_id: int | None = None) -> list[dict]:
+    """The call-back queue: everyone waiting for another call, soonest first (of one campaign when campaign_id is given)."""
     marks = ",".join("?" for _ in RETRY_STATUSES)
+    scope, sargs = (" AND k.campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
     with connect() as conn:
         rows = conn.execute(
             f"SELECT k.*, c.outcome_details AS last_details, c.id AS last_call_id, g.name AS campaign_name FROM contacts k "
             "LEFT JOIN calls c ON c.id = (SELECT id FROM calls WHERE contact_id = k.id ORDER BY id DESC LIMIT 1) "
             "LEFT JOIN campaigns g ON g.id = k.campaign_id "
-            f"WHERE k.status IN ({marks}) ORDER BY (k.next_try_at IS NULL) DESC, k.next_try_at, k.id", RETRY_STATUSES)
+            f"WHERE k.status IN ({marks}){scope} ORDER BY (k.next_try_at IS NULL) DESC, k.next_try_at, k.id", (*RETRY_STATUSES, *sargs))
         out = []
         for r in rows:
             d = dict(r)
@@ -416,6 +419,31 @@ def callbacks() -> list[dict]:
                 d["last_details"] = json.loads(d["last_details"]) if d["last_details"] else {}
             except (TypeError, json.JSONDecodeError):
                 d["last_details"] = {}
+            out.append(d)
+        return out
+
+
+def callbacks_moved_on(since: str, limit: int = 500, campaign_id: int | None = None) -> list[dict]:
+    """Call-backs that left the queue by being called again (owner, 23 Oct 2026: the list showed no done ones):
+    on the line now ("calling"), or rung again since `since` (UTC ISO) and given a result ("done").
+    `was` is why the earlier call put them on the call back list."""
+    marks = ",".join("?" for _ in RETRY_STATUSES)
+    scope, sargs = (" AND k.campaign_id=?", (campaign_id,)) if campaign_id else ("", ())
+    earlier = (f"SELECT p.outcome FROM calls p WHERE p.contact_id = k.id AND p.id < c.id AND p.outcome IN ({marks}) "
+               "ORDER BY p.id DESC LIMIT 1")
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT k.*, c.outcome AS last_outcome, c.outcome_details AS last_details, c.id AS last_call_id, "
+            f"g.name AS campaign_name, ({earlier}) AS was FROM contacts k "
+            "JOIN calls c ON c.id = (SELECT id FROM calls WHERE contact_id = k.id ORDER BY id DESC LIMIT 1) "
+            "LEFT JOIN campaigns g ON g.id = k.campaign_id "
+            f"WHERE (k.status = 'calling' OR (c.outcome NOT IN ({marks}) AND k.last_call_at >= ?)) AND ({earlier}) IS NOT NULL{scope} "
+            "ORDER BY k.last_call_at DESC LIMIT ?",
+            (*RETRY_STATUSES, *RETRY_STATUSES, since, *RETRY_STATUSES, *sargs, limit)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["last_details"] = _json(d["last_details"], {}) if d["last_details"] else {}
             out.append(d)
         return out
 
@@ -593,7 +621,10 @@ def cost_parts(channel: str, seconds: float, usage=None) -> tuple[float, float]:
     """Rupees for one call, split into the voice agent and the phone line. The agent's figure is
     the real token cost when the model reported one, else a per-minute guess."""
     usage = _as_usage(usage)
-    agent = usage["cost_usd"] * USD_INR if _has_cost(usage) else (seconds or 0) / 60 * GEMINI_RS_PER_MIN
+    # An empty record ({}) is a call the agent billed nothing for: picked up and gone within seconds (all 150 such calls
+    # were under 17 s). Owner, 24 Oct 2026: the per-minute guess put Rs 135 on one campaign's 49 of them.
+    agent = (usage["cost_usd"] * USD_INR if _has_cost(usage) else 0.0 if usage == {}
+             else (seconds or 0) / 60 * GEMINI_RS_PER_MIN)
     phone = math.ceil(seconds / 30) * PLIVO_RS_PER_PULSE if channel == "plivo" and seconds else 0.0
     return agent, phone
 

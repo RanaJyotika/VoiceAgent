@@ -4,13 +4,15 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ArrowDownAZ, ArrowUpAZ, ChevronLeft, ChevronRight, Copy, Download, Pause, Pencil, Play, Search, Trash2, UserPlus } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, ChevronLeft, Copy, Download, Pause, Pencil, Play, Search, Trash2, UserPlus } from "lucide-react";
+import { CallbackBoard } from "@/components/calls/callback-list";
 import { CallPanel } from "@/components/overview/call-panel";
 import { StatCard } from "@/components/overview/stat-card";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFeedback } from "@/components/ui/feedback";
+import { PAGE_SIZE, Pager } from "@/components/ui/pager";
 import { Select } from "@/components/ui/select";
 import { usePoll } from "@/hooks/use-poll";
 import { useCallTypes, useConfig } from "@/hooks/use-static";
@@ -53,7 +55,7 @@ const STATUS: Record<CampaignStatus, { label: string; tone: Tone }> = {
   draft: { label: "Draft", tone: "neutral" },
 };
 
-const PAGE = 25;
+const PAGE = PAGE_SIZE;
 const rs = (n: number) => fmtRs(n, n < 100 ? 2 : 0);
 
 /** One campaign (?id=): Overview (numbers, funnel, calls per day, outcomes) and Contacts (who is on the list, what
@@ -64,7 +66,7 @@ export function CampaignView() {
   const { toast, confirm } = useFeedback();
   const types = useCallTypes();
   const cfg = useConfig();
-  const [tab, setTab] = useState<"overview" | "contacts">("overview");
+  const [tab, setTab] = useState<"overview" | "contacts" | "callback">("overview");
   const [busy, setBusy] = useState(false);
 
   const campPoll = usePoll<Campaign>(id ? `/api/campaigns/${id}` : null, 10_000);
@@ -76,6 +78,8 @@ export function CampaignView() {
   const s = statsPoll.data;
   const state = statePoll.data?.campaign_id === id ? statePoll.data : null;
   const type = types?.find((t) => t.key === camp?.call_type);
+  // On the Call back tab: no answer, busy, dropped and call later, still waiting for another call.
+  const waitingBack = (contactsPoll.data ?? []).filter((c) => CALLBACK_STATUSES.includes(c.status)).length;
   const refresh = () => {
     campPoll.reload();
     statsPoll.reload();
@@ -253,6 +257,7 @@ export function CampaignView() {
             [
               ["overview", "Overview"],
               ["contacts", "Contacts"],
+              ["callback", "Call back"],
             ] as const
           ).map(([k, label]) => (
             <button
@@ -267,6 +272,7 @@ export function CampaignView() {
               )}
             >
               {label}
+              {k === "callback" && waitingBack > 0 && <span className="ml-1.5 text-[12px] text-muted-foreground tabular">{fmtInt(waitingBack)}</span>}
             </button>
           ))}
         </div>
@@ -305,6 +311,7 @@ export function CampaignView() {
             onChanged={refresh}
           />
         )}
+        {tab === "callback" && <CallbackBoard campaignId={id} />}
       </div>
     </div>
   );
@@ -567,20 +574,9 @@ function ContactsTab({ campaignId, rows, valueLabel, canRequeue, onChanged }: Co
         {!rows && <p className="px-4 py-10 text-center text-muted-foreground">Loading…</p>}
       </div>
 
-      <div className="flex items-center gap-3 border-t px-4 py-2.5 text-[12.5px] text-muted-foreground">
-        <span>{plural(shown.length, "record")}</span>
-        <span className="ml-auto">
-          Page {at + 1} of {pages}
-        </span>
-        <Button variant="ghost" size="icon" className="size-8" onClick={() => setPage(at - 1)} disabled={at === 0} aria-label="Previous page">
-          <ChevronLeft />
-        </Button>
-        <Button variant="ghost" size="icon" className="size-8" onClick={() => setPage(at + 1)} disabled={at >= pages - 1} aria-label="Next page">
-          <ChevronRight />
-        </Button>
-      </div>
+      <Pager page={at + 1} pages={pages} onPage={(n) => setPage(n - 1)} total={shown.length} size={PAGE} />
 
-      {openCall != null && <CallPanel key={openCall} callId={openCall} onClose={() => setOpenCall(null)} />}
+      {openCall != null && <CallPanel key={openCall} callId={openCall} onClose={() => setOpenCall((c) => (c === openCall ? null : c))} />}
     </Card>
   );
 }

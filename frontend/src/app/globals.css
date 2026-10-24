@@ -4,6 +4,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  --side-panel: 0px; /* width kept free for an open side panel (useSidePanel) */
   --background: #fbfbfa;
   --foreground: #121212;
   --card: #ffffff;
@@ -90,4 +91,16 @@ body {
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Side panels (call conversation, order) slide in from the right. */
+@keyframes side-panel-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .side-panel {
+    animation: side-panel-in 200ms ease-out;
+  }
 }

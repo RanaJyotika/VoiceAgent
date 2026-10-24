@@ -125,7 +125,7 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
           callId={open}
           summary={(data ?? []).find((c) => c.call_id === open)}
           campaignName={campaignLabel((data ?? []).find((c) => c.call_id === open))}
-          onClose={() => setOpen(null)}
+          onClose={() => setOpen((c) => (c === open ? null : c))}
         />
       )}
     </Card>

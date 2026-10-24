@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFeedback } from "@/components/ui/feedback";
+import { PAGE_SIZE, Pager, usePaged } from "@/components/ui/pager";
 import { Select } from "@/components/ui/select";
 import { usePoll } from "@/hooks/use-poll";
 import { send, type CallRow, type CampaignRow } from "@/lib/api";
@@ -87,6 +88,7 @@ export function CallsSummary() {
   const talk = rows.reduce((n, c) => n + (c.duration_sec || 0), 0);
   const cost = rows.reduce((n, c) => n + (c.cost_rs || 0), 0);
   const cap = dayFrom ? 1000 : 100;
+  const paged = usePaged(rows, PAGE_SIZE, [qs, outcome, kind, query].join("|"));
 
   /** The coupon message this call's customer gets after a yes, sent now on WhatsApp with no call (owner, 22 Oct 2026). */
   const [sending, setSending] = useState<number | null>(null);
@@ -243,7 +245,7 @@ export function CallsSummary() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {rows.map((c) => {
+                {paged.rows.map((c) => {
                   const o = outcomeOf(outcomeKey(c));
                   const details = detailText(c);
                   const said = (c.transcript || []).length > 0 || !!c.error;
@@ -322,10 +324,11 @@ export function CallsSummary() {
               <p className="px-4 py-10 text-center text-muted-foreground">{calls.error ? `Could not load the calls: ${calls.error}` : "Loading…"}</p>
             )}
           </div>
+          <Pager page={paged.page} pages={paged.pages} onPage={paged.setPage} total={paged.total} size={paged.size} />
         </Card>
       </div>
 
-      {open != null && <CallPanel key={open} callId={open} onClose={() => setOpen(null)} />}
+      {open != null && <CallPanel key={open} callId={open} onClose={() => setOpen((c) => (c === open ? null : c))} />}
     </div>
   );
 }

@@ -35,7 +35,7 @@ from .config import (DATA_DIR, OUTPUT_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_LANGUA
                      SARVAM_V3_MALE, SARVAM_V4_OTHER, SARVAM_VOICE_FEMALE, SARVAM_VOICE_MALE, SARVAM_VOICES, VOICES)
 from .openai_bridge import (OPENING_ONLY, _FunctionCall, _Message, _ModelTurn, _Part, _Blob,
                             _ServerContent, _Text, _TokenDetail, _ToolCall, _Usage, openai_tools)
-from .prompts import about_hint, openai_accent
+from .prompts import about_hint, prompt_stats, sarvam_prompt
 from .tools import TOOLS
 
 log = logging.getLogger("sarvam")
@@ -826,7 +826,9 @@ async def connect(*, prompt: str, voice: str, label: str = "", manual_vad: bool 
     while the phone is still ringing."""
     if not SARVAM_API_KEY:
         raise RuntimeError("SARVAM_API is not set in .env")
-    session = SarvamSession(prompt=prompt + openai_accent(voice, speaks=False), voice=voice_for(voice), label=label,
+    prompt = sarvam_prompt(prompt, voice)   # ABOUT US cut to the store's line (about_hint brings the rest), + how to write
+    log.info("%s: system prompt %s", label, prompt_stats(prompt))
+    session = SarvamSession(prompt=prompt, voice=voice_for(voice), label=label,
                             manual_vad=manual_vad, tools=chat_tools(tools), greeting=greeting)
     try:
         await session.open()

@@ -1,4 +1,5 @@
-# What every agent knows about the company. Every call's prompt gets the "- " lines below as ABOUT US.
+# What every agent knows about the company. Gemini and ChatGPT calls get all the "- " lines below as ABOUT US; a Sarvam
+# call gets only the Vedic Shop line, and the line that answers a company question comes with that one reply.
 # Keep the "- Name: what to say" shape: the Sarvam agent finds the right line by its name when a customer asks.
 # Lines starting with # are left out. A change here applies from the next call; no restart needed.
 # Never put in what must not be said on a call (GST number, full office address, phone numbers).

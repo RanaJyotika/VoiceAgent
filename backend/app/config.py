@@ -382,12 +382,14 @@ SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.15"))
 # Rupees, pay-as-you-go, from sarvam.ai/api-pricing (21 Oct 2026): Sarvam 105B per million tokens, Saaras
 # Rs 29.40 an hour of audio, Bulbul v4 Flash Rs 20 per 10,000 characters (v3, still used for Malayalam and
 # Odia, is Rs 30). Held as USD per million units, like the other agents.
+# Owner, 23 Oct 2026: Sarvam's own usage page billed Bulbul v4 Flash at Rs 10 per 10,000 characters (2.5K chars,
+# Rs 2.52), so that is the default now; at Rs 20 every call's voice cost was counted twice over.
 SARVAM_PRICE_PER_M = {k: v / USD_INR for k, v in {
     "text_in": float(os.getenv("SARVAM_RS_TEXT_IN", "15")),
     "cached_text_in": float(os.getenv("SARVAM_RS_CACHED_TEXT_IN", "5")),
     "text_out": float(os.getenv("SARVAM_RS_TEXT_OUT", "60")),
     "stt_seconds": float(os.getenv("SARVAM_RS_STT_HOUR", "29.40")) / 3600 * 1_000_000,
-    "tts_chars": float(os.getenv("SARVAM_RS_TTS_10K_CHARS", "20")) * 100,
+    "tts_chars": float(os.getenv("SARVAM_RS_TTS_10K_CHARS", "10")) * 100,
 }.items()}
 
 # The agents the owner picks between on the dashboard, for a single call or a whole campaign; the

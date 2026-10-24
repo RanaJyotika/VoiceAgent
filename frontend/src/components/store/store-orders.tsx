@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Phone, Search, Settings2 } from "lucide-react";
+import { Download, Phone, Search, Settings2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFeedback } from "@/components/ui/feedback";
+import { PAGE_SIZE, Pager } from "@/components/ui/pager";
 import { Select } from "@/components/ui/select";
 import { usePoll } from "@/hooks/use-poll";
 import { useConfig } from "@/hooks/use-static";
@@ -78,7 +79,7 @@ function callLine(r: OrderRow) {
   return "";
 }
 
-const PER_PAGE = 25;
+const PER_PAGE = PAGE_SIZE;
 
 /** Store orders: every order of the chosen days, where its call stands, one side panel per order, and the settings
  *  for which orders get a call and automatic calling. */
@@ -381,13 +382,15 @@ export function StoreOrders() {
             )}
             {!d && <p className="px-4 py-10 text-center text-muted-foreground">{orders.error ? `Could not load the orders: ${orders.error}` : "Loading…"}</p>}
           </div>
-          {d && d.pages > 1 && <Pager page={d.page} pages={d.pages} onPage={setPage} />}
+          {d && <Pager page={d.page} pages={d.pages} onPage={setPage} total={d.total} size={PER_PAGE} />}
         </Card>
 
         <BatchesCard />
       </div>
 
-      {open && <OrderPanel key={open} name={open} onClose={() => setOpen(null)} onCall={() => callNow(open)} onChanged={orders.reload} />}
+      {open && (
+        <OrderPanel key={open} name={open} onClose={() => setOpen((o) => (o === open ? null : o))} onCall={() => callNow(open)} onChanged={orders.reload} />
+      )}
       <StoreSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -400,56 +403,6 @@ export function StoreOrders() {
           orders.reload();
         }}
       />
-    </div>
-  );
-}
-
-function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (n: number) => void }) {
-  const nums = [...new Set([1, page - 1, page, page + 1, pages])].filter((n) => n >= 1 && n <= pages).sort((x, y) => x - y);
-  const cell = "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[13px] tabular";
-  const out: React.ReactNode[] = [];
-  let last = 0;
-  for (const n of nums) {
-    if (n - last > 1)
-      out.push(
-        <span key={`gap${n}`} className="px-1 text-muted-foreground">
-          …
-        </span>,
-      );
-    out.push(
-      <button
-        key={n}
-        type="button"
-        aria-current={n === page ? "page" : undefined}
-        onClick={() => onPage(n)}
-        className={cn(cell, n === page ? "bg-primary text-primary-foreground" : "hover:bg-muted")}
-      >
-        {n}
-      </button>,
-    );
-    last = n;
-  }
-  return (
-    <div className="flex items-center justify-end gap-1 border-t px-4 py-2.5">
-      <button
-        type="button"
-        aria-label="Previous"
-        disabled={page === 1}
-        onClick={() => onPage(page - 1)}
-        className={cn(cell, "hover:bg-muted disabled:opacity-40")}
-      >
-        <ChevronLeft className="size-4" />
-      </button>
-      {out}
-      <button
-        type="button"
-        aria-label="Next"
-        disabled={page === pages}
-        onClick={() => onPage(page + 1)}
-        className={cn(cell, "hover:bg-muted disabled:opacity-40")}
-      >
-        <ChevronRight className="size-4" />
-      </button>
     </div>
   );
 }

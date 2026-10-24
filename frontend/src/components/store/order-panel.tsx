@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarClock, MessageSquare, Phone, X } from "lucide-react";
 import { CallPanel } from "@/components/overview/call-panel";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { inputClass } from "@/components/ui/dialog";
 import { useFeedback } from "@/components/ui/feedback";
 import { usePoll } from "@/hooks/use-poll";
+import { useSidePanel } from "@/hooks/use-side-panel";
 import { send, type OrderDetail } from "@/lib/api";
 import { fmtClock } from "@/lib/format";
 import { outcomeOf } from "@/lib/outcomes";
@@ -42,6 +43,9 @@ export function OrderPanel({ name, onClose, onCall, onChanged }: Props) {
   const [at, setAt] = useState("");
   const [note, setNote] = useState("");
   const [transcript, setTranscript] = useState<number | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  // While a call's conversation is open over it, a click outside closes that one first.
+  useSidePanel(panel, 460, onClose, transcript == null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && transcript == null && onClose();
@@ -76,8 +80,9 @@ export function OrderPanel({ name, onClose, onCall, onChanged }: Props) {
   return (
     <>
       <aside
+        ref={panel}
         aria-label={`Order ${name}`}
-        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[460px] flex-col border-l bg-card shadow-2xl sm:top-[52px] sm:shadow-xl"
+        className="side-panel fixed inset-y-0 right-0 z-40 flex w-full max-w-[460px] flex-col border-l bg-card shadow-2xl sm:top-[52px] sm:shadow-xl"
       >
         <header className="border-b px-4 pt-3.5 pb-3">
           <div className="flex items-start gap-3">
@@ -210,7 +215,7 @@ export function OrderPanel({ name, onClose, onCall, onChanged }: Props) {
           </Button>
         </footer>
       </aside>
-      {transcript != null && <CallPanel key={transcript} callId={transcript} onClose={() => setTranscript(null)} />}
+      {transcript != null && <CallPanel key={transcript} callId={transcript} onClose={() => setTranscript((t) => (t === transcript ? null : t))} />}
     </>
   );
 }

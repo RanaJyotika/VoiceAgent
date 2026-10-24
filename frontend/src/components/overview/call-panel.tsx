@@ -5,6 +5,7 @@ import { ChevronDown, ExternalLink, PhoneOff, ShoppingBag, X } from "lucide-reac
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { usePoll } from "@/hooks/use-poll";
+import { useSidePanel } from "@/hooks/use-side-panel";
 import type { CallDetail, CallSubject, LiveCall } from "@/lib/api";
 import { fmtClock, fmtOrder, fmtPhone } from "@/lib/format";
 import { outcomeOf } from "@/lib/outcomes";
@@ -42,8 +43,11 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
   const [now, setNow] = useState(() => Date.now());
   const [hangingUp, setHangingUp] = useState(false);
   const [hangupError, setHangupError] = useState("");
+  const panel = useRef<HTMLElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true); // follow new lines unless the reader scrolled up
+
+  useSidePanel(panel, 440, onClose);
 
   const call = data ?? (summary ? { ...summary, live: true, outcome_details: null } : null);
   const live = call?.live ?? true;
@@ -95,8 +99,9 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
 
   return (
     <aside
+      ref={panel}
       aria-label="Call conversation"
-      className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[440px] flex-col border-l bg-card shadow-2xl sm:top-[52px] sm:shadow-xl"
+      className="side-panel fixed inset-y-0 right-0 z-40 flex w-full max-w-[440px] flex-col border-l bg-card shadow-2xl sm:top-[52px] sm:shadow-xl"
     >
       <header className="border-b px-4 pt-3.5 pb-3">
         <div className="flex items-start gap-3">

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { CalendarCheck, Megaphone, Package, Plus, ShoppingCart, type LucideIcon } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PAGE_SIZE, Pager, usePaged } from "@/components/ui/pager";
 import { usePoll } from "@/hooks/use-poll";
 import { useCallTypes } from "@/hooks/use-static";
 import type { Board, CampaignStatus } from "@/lib/api";
@@ -49,6 +50,7 @@ export function CampaignList() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("all");
 
   const rows = (data?.campaigns ?? []).filter((c) => tab === "all" || c.status === tab);
+  const paged = usePaged(rows, PAGE_SIZE, tab);
   const k = data?.counts;
 
   return (
@@ -154,7 +156,7 @@ export function CampaignList() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {rows.map((c) => {
+                {paged.rows.map((c) => {
                   const st = STATUS[c.status];
                   return (
                     <tr
@@ -201,6 +203,7 @@ export function CampaignList() {
               </p>
             )}
           </div>
+          <Pager page={paged.page} pages={paged.pages} onPage={paged.setPage} total={paged.total} size={paged.size} />
         </Card>
       </div>
     </div>

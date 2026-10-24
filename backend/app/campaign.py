@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
@@ -411,10 +411,53 @@ async def campaign_stop() -> dict:
     return c.snapshot()
 
 
+def _ringer(campaign_id: int | None, auto_ids: set[int]) -> tuple[str, int, str]:
+    """Who rings this campaign's call-backs now: ("campaign" | "auto" | "", its tries per contact, why it is idle)."""
+    from . import autodial   # autodial imports this module
+    if CAMPAIGN.running and campaign_id == CAMPAIGN.settings.campaign_id:
+        return "campaign", CAMPAIGN.settings.max_attempts, CAMPAIGN.reason
+    if autodial.AUTO.running and campaign_id in auto_ids:
+        return "auto", autodial.AUTO.settings.max_attempts, autodial.AUTO.reason
+    saved = (db.get_campaign(campaign_id) or {}).get("settings") if campaign_id else None
+    return "", int((saved or {}).get("max_attempts") or Settings.max_attempts), ""
+
+
+def _callback_state(c: dict, now: str, ringers: dict) -> None:
+    """What happens next to one call-back, in the row itself (owner, 23 Oct 2026: the page did not say whether a
+    rescheduled call was done, still to come, or when): state, plus a line saying it in words."""
+    if c["status"] == "calling":
+        c["state"], c["state_note"] = "calling", "On the line now"
+        return
+    if c["status"] not in db.RETRY_STATUSES:
+        c["state"], c["state_note"] = "done", ""
+        return
+    by, tries, idle = ringers[c.get("campaign_id")]
+    c["max_attempts"] = tries
+    who = "automatic calling" if by == "auto" else "its campaign"
+    if c["status"] != "call_later" and (c.get("attempts") or 0) >= tries:
+        c["state"], c["state_note"] = "no_tries", f"All {tries} tries used: no campaign rings it again by itself"
+    elif c.get("next_try_at") and c["next_try_at"] > now:
+        c["state"] = "scheduled"
+        c["state_note"] = f"{who.capitalize()} rings it then" if by else "Its campaign must be running then to ring it"
+    elif by:
+        c["state"], c["state_note"] = "due", f"Next in line for {who}" + (f" ({idle})" if idle else "")
+    else:
+        c["state"], c["state_note"] = "not_rung", "Time has come, but its campaign is not running"
+
+
 @router.get("/api/callbacks")
-async def list_callbacks() -> dict:
-    """Everyone waiting for another call, with when."""
-    return {"rows": db.callbacks(), "max_attempts": CAMPAIGN.settings.max_attempts, "running": CAMPAIGN.running}
+async def list_callbacks(campaign_id: int = 0) -> dict:
+    """Everyone waiting for another call, with when and whether anything will ring them; plus the call-backs of the
+    last 30 days that were rung again (done) or are on the line now. campaign_id: only that campaign's (its Call back tab)."""
+    from . import autodial
+    waiting = db.callbacks(campaign_id or None)
+    moved = db.callbacks_moved_on((datetime.now(timezone.utc) - timedelta(days=30)).isoformat(), campaign_id=campaign_id or None)
+    auto_ids = {c["id"] for c in autodial._campaigns()} if autodial.AUTO.running else set()
+    ringers = {cid: _ringer(cid, auto_ids) for cid in {c.get("campaign_id") for c in waiting}}
+    now = db.now_iso()
+    for c in [*waiting, *moved]:
+        _callback_state(c, now, ringers)
+    return {"rows": waiting, "moved_on": moved, "max_attempts": CAMPAIGN.settings.max_attempts, "running": CAMPAIGN.running}
 
 
 @router.post("/api/contacts/{contact_id}/schedule")

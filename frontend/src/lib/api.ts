@@ -302,9 +302,23 @@ export type CallRow = {
   recording: string | null;
 };
 
-/** /api/callbacks: everyone waiting for another call. */
+/** What happens next to a call-back: rung at its time (scheduled), next in line (due), its time came but nothing is
+ *  ringing it (not_rung), out of tries (no_tries), on the line now (calling), or rung again with a result (done). */
+export type CallbackState = "scheduled" | "due" | "not_rung" | "no_tries" | "calling" | "done";
+
+export type CallbackRow = ContactRow & {
+  campaign_name: string | null;
+  state: CallbackState;
+  state_note: string;
+  max_attempts?: number; // waiting rows: the tries its campaign allows
+  was?: string | null; // done / calling rows: why the earlier call put them on the list
+  last_outcome?: string | null;
+};
+
+/** /api/callbacks: everyone waiting for another call, and the call-backs of the last 30 days that were rung again. */
 export type CallbackList = {
-  rows: (ContactRow & { campaign_name: string | null })[];
+  rows: CallbackRow[];
+  moved_on: CallbackRow[];
   max_attempts: number;
   running: boolean;
 };
