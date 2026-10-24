@@ -72,6 +72,9 @@ def init_db() -> None:
             "recording": "TEXT",        # file name under data/recordings
             "hangup_cause": "TEXT",     # Plivo's reason: USER_BUSY, NO_ANSWER, NORMAL_CLEARING...
             "mongo_synced_at": "TEXT",  # when mongo_sync.py copied this call to MongoDB
+            "drive_file_id": "TEXT",    # the recording's copy on Google Drive (drive_sync.py)
+            "drive_link": "TEXT",       # ...and its link, shown on the dashboard
+            "drive_tries": "INTEGER DEFAULT 0",
         })
         _add_columns(conn, "contacts", {
             "attempts": "INTEGER DEFAULT 0",   # phone calls placed to this contact so far
@@ -113,7 +116,7 @@ def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
 # Contact statuses. The first group means "the campaign is done with this contact"; the second
 # group is the call-back queue (rung again when next_try_at comes, up to the campaign's tries);
 # "calling" is set while a call is ringing or in progress.
-FINAL_STATUSES = ("confirmed", "changed", "cancelled", "not_ordered", "wrong_number", "do_not_call", "unclear",
+FINAL_STATUSES = ("confirmed", "changed", "cancelled", "not_ordered", "wrong_number", "do_not_call", "unclear", "complaint",
                   "interested", "not_interested", "already_booked", "needs_help", "wants_to_order", "already_ordered",
                   "wants_coupon")
 RETRY_STATUSES = ("no_answer", "busy", "dropped", "call_later")
@@ -495,8 +498,15 @@ def contact_counts(max_attempts: int, campaign_id: int | None = None) -> dict:
             f"SELECT COUNT(*) AS n FROM contacts WHERE status IN ({marks}) AND (status='call_later' OR attempts < ?) "
             f"AND (next_try_at IS NULL OR next_try_at <= ?){scope}",
             (*RETRY_STATUSES, max_attempts, now_iso(), *sargs)).fetchone()["n"]
+        # Owner, 24 Oct 2026: "Call no answer / busy again" puts called contacts back to pending, so pending alone
+        # cannot tell a never-rung customer from a call-back. new_left: still waiting for their very first call.
+        # reached: rung at least once, whatever their status says now.
+        new_left, reached = conn.execute(
+            "SELECT COALESCE(SUM(status='pending' AND NOT x), 0), COALESCE(SUM(x), 0) FROM "
+            f"(SELECT status, EXISTS (SELECT 1 FROM calls c WHERE c.contact_id = k.id) AS x FROM contacts k WHERE 1=1{scope})",
+            sargs).fetchone()
     return {"by_status": by, "total": sum(by.values()), "pending": by.get("pending", 0),
-            "retry_left": retry_left, "retry_due": retry_due,
+            "retry_left": retry_left, "retry_due": retry_due, "new_left": new_left, "reached": reached,
             "to_call": by.get("pending", 0) + retry_left}
 
 
@@ -736,7 +746,7 @@ def stats(period: str = "today") -> dict:
         "busy": by.get("busy", 0), "dropped": by.get("dropped", 0), "call_later": by.get("call_later", 0),
         "call_back": call_back,
         "needs_review": by.get("unclear", 0) + by.get("error", 0) + by.get("wrong_number", 0) + by.get("do_not_call", 0)
-        + by.get("not_ordered", 0),
+        + by.get("not_ordered", 0) + by.get("complaint", 0),
         "talk_seconds": round(talk),
         "avg_seconds": round(talk / len(answered)) if answered else None,
         "cost_rs": round(sum(call_cost(r["channel"], r["duration_sec"], r["usage"]) for r in rows), 2),

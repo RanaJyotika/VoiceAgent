@@ -191,8 +191,8 @@ def missing_block(contact: dict) -> str:
         asks.append('Product: ask "aapne kya order kiya tha ji?", say back their words, get a yes; mark_outcome new_product.')
     if not (contact.get("amount") or "").strip():
         asks.append('Amount: ask "order kitne ka tha ji?"; put the answer in notes.')
-    if not (contact.get("payment_mode") or "").strip():
-        asks.append('Payment: ask "payment ho chuki hai ya delivery par denge?"; put the answer in notes.')
+    # No payment question (owner, 24 Oct 2026, call 5346: it was glued onto the order line). The orders called are cash
+    # on delivery; a payment the record leaves out is simply not said.
     if not (contact.get("address") or "").strip():
         asks.append("Address: none on record, so never say one; take it at step 3.")
     if not asks:
@@ -285,6 +285,13 @@ def about_hint(words: str) -> str:
 
 REPLY_WRONG = '- "Galat hai" about something you said: ask what is right, say it back, get a yes. Do not move on while it is wrong.'
 
+# Owner's words, 24 Oct 2026: a complaint is apologised for in a few words and the call ends; a refund is noted and sent
+# to the team, never promised. live_bridge.closing_line says the same when the agent leaves them out.
+COMPLAINT_CLOSE = ("maaf kijiye, aapka concern note kar liya hai. hum apne customers ko authentic product dene ki poori "
+                   "koshish karte hain. umeed hai aap humein ek aur mauka denge. dhanyavaad ji.")
+REFUND_CLOSE = "aapki refund request maine note kar li hai aur team ko forward kar di hai. dhanyavaad ji."
+COMPLAINT_TYPES = ("refund", "fraud", "late", "payment", "legal", "other")
+
 
 def _common_replies(f: dict[str, str], known: str, topic: str) -> list[str]:
     """What every call type does with questions, line trouble, noise, worries, abuse and off-topic talk.
@@ -309,15 +316,18 @@ def _common_replies(f: dict[str, str], known: str, topic: str) -> list[str]:
             f'- A product or policy question ("original hai?", "certificate milega?", "return hoga?"): answer only from '
             f'{known}, in a few words, then your question. Not there: "ji, yeh sawaal maine note kar liya hai."'
         ),
+        # Owner, 24 Oct 2026: a complaint or a refund ends the call with the owner's own line and goes to the team as
+        # "complaint" (red on the dashboard); live_bridge also marks one the agent saved as something else.
         (
-            f'- A worry about {BUSINESS_NAME} or the product ("nakli bhejte ho", "site fake lagti hai") is not a '
-            f'cancellation: never argue or offer to cancel. A short "ji," and one fact from {known} that answers it '
-            '(cash on delivery: "ji, payment delivery par hi hogi."), then your question. A bad past experience: '
-            '"sorry ji, maine note kar liya hai." Never the same words twice; nothing left to ask: the goodbye, same turn.'
+            '- A complaint ("aap fraud ho", "nakli bhejte ho", "site fake hai", "order late ho gaya", "order nahi aaya", '
+            '"payment kiya tha, paise kat gaye", "police mein complaint karunga"): no argument, no question, not a '
+            f'cancellation. Say exactly "{COMPLAINT_CLOSE}" mark_outcome "complaint" with complaint_type and their words '
+            "in notes, end_call."
         ),
         (
-            f'- About {BUSINESS_NAME} but not this call (an old order, a refund): "ji, maine note kar liya hai.", note '
-            "it, then your question."
+            f'- They want a refund ("refund chahiye", "paise wapas karo"): say exactly "{REFUND_CLOSE}" mark_outcome '
+            '"complaint" with complaint_type "refund" and their reason in notes, end_call. Never promise a refund, an '
+            "amount or a date."
         ),
         (
             '- Busy: ask when to call back (vague: "aaj shaam ya kal subah?"), goodbye, mark_outcome "call_later" with '
@@ -329,8 +339,9 @@ def _common_replies(f: dict[str, str], known: str, topic: str) -> list[str]:
             '"kept going off topic"), end_call.'
         ),
         (
-            "- Rude words: stay polite, never repeat them or answer back; the first time, carry on. Again, or a threat: "
-            '"dhanyavaad ji, aapka din shubh ho", mark_outcome with notes "customer used abusive language", end_call.'
+            "- Rude words: stay polite, never repeat them or answer back; the first time, carry on. Again: "
+            '"dhanyavaad ji, aapka din shubh ho", mark_outcome with notes "customer used abusive language", end_call. '
+            "A threat (police, court): the complaint line above."
         ),
         '- "[Note from the phone line: ...]" is from the system, not the customer: do what it says, never read it out.',
     ]
@@ -371,7 +382,8 @@ def _rules(not_mine: str, own: list[str], known: str) -> list[str]:
         # Calls 93 and 99: promises the agent could not keep.
         (
             f"- You are part of {BUSINESS_NAME} yourself: never say a team or anyone else will check, call or process "
-            'anything. A change, a mistake, a request or a question you cannot answer: "ji, maine note kar liya hai." '
+            "anything (only the refund line says the team gets it). A change, a mistake, a request or a question you "
+            'cannot answer: "ji, maine note kar liya hai." '
             "Promise nothing beyond the lines here (no dates, WhatsApp or SMS, certificates, discounts, removing their "
             f"number); a detail written in {known} may be said as written."
         ),

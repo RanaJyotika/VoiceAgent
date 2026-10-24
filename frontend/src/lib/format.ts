@@ -31,3 +31,23 @@ export const fmtToday = () => new Date().toLocaleDateString("en-US", { weekday: 
 
 /** An order number as stored: store orders carry their own "#" (#75944), sheet ones are as typed (VV-1001). */
 export const fmtOrder = (id: string | null | undefined) => id ?? "";
+
+/** The email a contact's sheet gave, from its extra columns ("Email ID", "email"...), or "". Owner, 24 Oct 2026: 147 of a
+ *  cart campaign's 917 rows had no name at all (the export has none), so the table shows this, else "No name in the list". */
+export function sheetEmail(extra: unknown): string {
+  let cols: unknown = extra;
+  if (typeof cols === "string") {
+    try {
+      cols = JSON.parse(cols);
+    } catch {
+      return "";
+    }
+  }
+  if (!cols || typeof cols !== "object") return "";
+  for (const [key, v] of Object.entries(cols as Record<string, unknown>)) {
+    const label = typeof v === "object" && v ? String((v as { label?: string }).label ?? key) : key;
+    const value = typeof v === "object" && v ? String((v as { value?: string }).value ?? "") : String(v ?? "");
+    if (/e-?mail/i.test(`${key} ${label}`) && value.includes("@")) return value.trim();
+  }
+  return "";
+}

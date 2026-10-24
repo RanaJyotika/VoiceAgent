@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CalendarCheck, Megaphone, Package, Plus, ShoppingCart, type LucideIcon } from "lucide-react";
-import { Badge, type Tone } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { PAGE_SIZE, Pager, usePaged } from "@/components/ui/pager";
 import { usePoll } from "@/hooks/use-poll";
@@ -12,15 +12,7 @@ import { useCallTypes } from "@/hooks/use-static";
 import type { Board, CampaignStatus } from "@/lib/api";
 import { fmtInt, fmtRs } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { campaignHref } from "./shared";
-
-const STATUS: Record<CampaignStatus, { label: string; tone: Tone; dot?: boolean }> = {
-  running: { label: "Running", tone: "info", dot: true },
-  scheduled: { label: "Scheduled", tone: "warn" },
-  paused: { label: "Paused", tone: "warn" },
-  completed: { label: "Completed", tone: "good" },
-  draft: { label: "Draft", tone: "neutral" },
-};
+import { CAMPAIGN_STATUS as STATUS, campaignHref, leftTag } from "./shared";
 const TABS: ("all" | CampaignStatus)[] = ["all", "running", "scheduled", "paused", "completed", "draft"];
 
 /** "Start from a template": the kinds of call a campaign can be, each with its own picture. */
@@ -66,7 +58,7 @@ export function CampaignList() {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Kpi label="Running" value={k?.running} note="Calling now" />
           <Kpi label="Scheduled" value={k?.scheduled} note={k?.paused ? `Start at a set time · ${k.paused} paused` : "Start at a set time"} />
-          <Kpi label="Past campaigns" value={k?.completed} note="Finished, or past their last day" />
+          <Kpi label="Finished" value={k?.completed} note="Every customer called at least once, or past the last day" />
           <Link
             href="/campaigns/new/"
             className="group flex flex-col justify-between rounded-lg border border-dashed border-input bg-card px-4 py-3.5 transition-colors hover:border-primary hover:bg-muted/40"
@@ -135,10 +127,10 @@ export function CampaignList() {
                   <th className="px-4 py-2.5 font-normal">Campaign</th>
                   <th className="px-4 py-2.5 font-normal">Status</th>
                   <th className="px-4 py-2.5 font-normal">Agent</th>
-                  <th className="px-4 py-2.5 text-right font-normal" title="Contacts on the list: one call each">
-                    Calls
+                  <th className="px-4 py-2.5 text-right font-normal" title="Customers loaded from the uploaded sheet">
+                    Customers
                   </th>
-                  <th className="px-4 py-2.5 text-right font-normal" title="Contacts called at least once">
+                  <th className="px-4 py-2.5 text-right font-normal" title="Customers rung at least once">
                     Called
                   </th>
                   <th className="px-4 py-2.5 text-right font-normal" title="Picked up and spoke with the agent">
@@ -158,6 +150,7 @@ export function CampaignList() {
               <tbody className="divide-y">
                 {paged.rows.map((c) => {
                   const st = STATUS[c.status];
+                  const left = c.status !== "draft" ? leftTag(c.new_left, c.callbacks_left) : null;
                   return (
                     <tr
                       key={c.id}
@@ -174,9 +167,16 @@ export function CampaignList() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge tone={st.tone} dot={st.dot}>
-                          {st.label}
-                        </Badge>
+                        <span title={st.hint}>
+                          <Badge tone={st.tone} dot={c.status === "running"}>
+                            {st.label}
+                          </Badge>
+                        </span>
+                        {left && (
+                          <div className="mt-1 text-[12px] text-muted-foreground" title={left.hint}>
+                            {left.label}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {c.agent ? `${c.voice}${c.voice ? " — " : ""}${c.agent}` : <span className="text-subtle-foreground">Not recorded</span>}

@@ -35,10 +35,12 @@ log = logging.getLogger("call_types")
 # the agent recorded anything (customer hung up, line dropped).
 LINE_OUTCOMES = ("no_answer", "busy", "dropped")
 # Every call type offers these; they are about the line and the person, not the purpose.
-COMMON_OUTCOMES = ("call_later", "wrong_number", "do_not_call", "unclear")
+COMMON_OUTCOMES = ("complaint", "call_later", "wrong_number", "do_not_call", "unclear")
 
 COMMON_DETAILS = {
     "callback_time": "When to call back if the customer asked for a later call.",
+    # Owner, 24 Oct 2026: what a complaint is about, for the team's review.
+    "complaint_type": "For outcome complaint only: refund, fraud, late, payment, legal or other.",
     "notes": "Anything else the team should know, in one or two sentences.",
 }
 
@@ -273,9 +275,11 @@ def _gain(offer: dict) -> str:
 
 
 def prepaid_offer_line(offer: dict) -> str:
-    """Their answer was cash on delivery (or unsure): the offer, once, to win them over. Their yes to it is followed by
-    PREPAID_SEND_QUESTION."""
-    return f"ji. hamare yahan abhi prepaid orders par offer chal raha hai. {_gain(offer)}. aap prepaid karna chahenge?"
+    """The offer, once, after their yes to the address. Owner, 24 Oct 2026: every order these calls confirm is cash on
+    delivery, so there is no payment question first; owner's wording. live_bridge.offers_coupon knows it by "off"."""
+    off = _spoken_off(offer)
+    gain = f"{off} off hai" if offer.get("max_discount") else f"yeh offer hai: {off}"
+    return f"prepaid orders par {gain}. aap prepaid karna chahenge?"
 
 
 def prepaid_online_line(offer: dict) -> str:
@@ -284,11 +288,17 @@ def prepaid_online_line(offer: dict) -> str:
 
 
 def prepaid_yes_line(voice: str = "") -> str:
-    # Owner, 22 Oct 2026: a yes moves the order to online payment (shopify.mark_prepaid) and the code goes on WhatsApp.
-    return f"ji theek hai, main coupon aapke WhatsApp par bhej {forms(voice)['rahi']} hoon. dhanyavaad ji."
+    """The close when they chose prepaid. Owner, 22 Oct 2026: a yes moves the order to online payment (shopify.mark_prepaid)
+    and the code goes on WhatsApp. 24 Oct: the close also says the order is confirmed (the offer now comes before the
+    address, so this is the call's last line)."""
+    return f"ji, aapka order confirm ho gaya hai. coupon aapke WhatsApp par bhej {forms(voice)['rahi']} hoon. dhanyavaad ji."
 
 
-PREPAID_NO_LINE = "koi baat nahi ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho."
+# The close when they keep cash on delivery (owner's words, 24 Oct 2026).
+PREPAID_NO_LINE = "theek hai ji, aapka order COD ke saath confirm ho gaya hai. dhanyavaad ji."
+# Their answer to the offer, then the address question in the same turn.
+PREPAID_YES_ACK = "ji, coupon WhatsApp par aa jayega."
+PREPAID_NO_ACK = "theek hai ji."
 
 
 def _whatsapp_coupon_block(offer: dict | None, contact: dict | None = None, voice: str = "") -> str:
@@ -298,25 +308,26 @@ def _whatsapp_coupon_block(offer: dict | None, contact: dict | None = None, voic
     paid = ("they say it is already paid: MISMATCH (payment), no offer." if cod else
             'they say it is already paid: "theek hai ji, aapka order confirm ho gaya hai. dhanyavaad ji, aapka din shubh ho." '
             'mark_outcome "confirmed" with notes "customer says already paid online", end_call. No offer.')
-    return f"""PAYMENT AND WHATSAPP COUPON (owner, 21 Oct 2026; the payment is asked here and nowhere else)
-After their yes to the address, with nothing different, in place of the usual close:
-a. Ask exactly these words, nothing added: "{PREPAID_PAYMENT_QUESTION}" Then wait. If {paid}
-b. They choose online: "{prepaid_online_line(offer)}" Then d.
-   They want cash on delivery, or are unsure: try once to win them over, exactly: "{prepaid_offer_line(offer)}"
-   Then wait for their answer.
-c. A yes to prepaid, or they ask what the code is: "{PREPAID_SEND_QUESTION}" Never read the code out.
-   A question about the offer: its answer in one short sentence from OFFERS, then "{PREPAID_SEND_QUESTION}"
-   A no, or anything else: "{PREPAID_NO_LINE}" mark_outcome "confirmed", end_call.
-d. A yes to sending it ("haan", "bhej do", "theek hai"): "{prepaid_yes_line(voice)}" mark_outcome "confirmed", end_call. The payment change and the code on WhatsApp happen by themselves; promise nothing else.
-   A no: "{PREPAID_NO_LINE}" mark_outcome "confirmed", end_call.
-Ask about the payment once and make the offer once: after a no, never ask again or push. Never after a mismatch, a cancellation or any other result."""
+    return f"""PAYMENT AND WHATSAPP COUPON (owner, 24 Oct 2026: the order is cash on delivery; the offer comes right after their yes to the order, before the address)
+a. Straight after their yes to the order (step 2), with nothing different, say exactly these words, nothing added: "{prepaid_offer_line(offer)}" Then wait. If {paid}
+b. Their answer, then the address question (step 3) in the same turn:
+   - Yes ("haan", "kar denge", "offer chahiye", "bhej do", or they ask what the code is): "{PREPAID_YES_ACK}" Never read the code out.
+   - No, or they keep cash on delivery: "{PREPAID_NO_ACK}"
+   - A question about the offer: its answer in one short sentence from OFFERS, then "aap prepaid karna chahenge?"
+c. After their yes to the address, close with the line for their choice, word for word, then mark_outcome "confirmed", end_call:
+   - chose prepaid: "{prepaid_yes_line(voice)}"
+   - cash on delivery: "{PREPAID_NO_LINE}"
+The payment change and the code on WhatsApp happen by themselves; promise nothing else. Make the offer once and never push. Keeping cash on delivery is not a mismatch: the order is already cash on delivery. If they change their mind later, their last word on it decides. No offer after a mismatch or a cancellation."""
 
 
 def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     agent_name, _ = persona(voice)
     rahi = forms(voice)["rahi"]
-    payment = (contact.get("payment_mode") or "").upper()
-    payment_line = "cash on delivery" if payment == "COD" else "already paid online" if payment else "unknown"
+    # As the record gives it, said as is (owner, 24 Oct 2026). "Cash on Delivery", "cod", "COD" are all cash on delivery
+    # (only "COD" was, so "Cash on delivery" read as paid); none on record: the payment is not said and not asked.
+    payment = str(contact.get("payment_mode") or "").strip()
+    payment_line = ("prepaid" if paid_online(contact) else "cash on delivery") if payment else \
+        "not on record (never say or ask it)"
     answers = str((facts or {}).get("answers") or "").strip()
 
     intro = (f"You are {agent_name}, calling for {BUSINESS_NAME}, an Indian company selling devotional products, to confirm "
@@ -357,8 +368,8 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     # Every order ends at step 3 then 4, whatever happened on the way (a mismatch included): on call
     # 102 the agent never came back to the missing address after the customer disputed the amount.
     flow = f"""THE USUAL ORDER
-1. Greet, then wait: "namaste <name> ji, main {agent_name}, {STORE_NAME} se bol {rahi} hoon. bas aapke order ka ek chhota sa confirmation call hai, ek minute baat ho sakti hai?"
-2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "ji, aapne {STORE_NAME} se <product>, <quantity> piece, <amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?"
+1. Greet, then wait: "namaste <name> ji, main {STORE_NAME} se baat kar {rahi} hoon. aapka order confirm karna tha. ek minute baat ho sakti hai?"
+2. After their yes, the order in one sentence, always ending in "kya aapka order confirm hai?": "aapne <product>, <quantity> <amount> rupaye ka, <payment> mein order kiya tha. kya aapka order confirm hai?" (say the payment as Payment gives it; when it is not on record, leave it out and never ask about it)
 3. Address, every time (call 122 skipped it). On record: ask it as its own question, "ji, aur delivery <address> mein karni hai?", and get a yes. A yes in any words ("haan ji", "sahi hai", "yahi hai", "isi address par") is a yes: go on. An answer you could not make out, or a mixed one ("na haan ji"): only "ji, ek baar delivery address confirm kar dijiye." Never ask for the whole address unless it is MISSING or they say it is wrong (call 515 asked for it after "haan ji, isi address par delivery karni hai"). MISSING, or they say it is wrong: "ji, delivery address ek baar poora bata dijiye" (TAKING AN ADDRESS). This comes after a mismatch too; skip it only after a cancellation.
 4. Close in one turn, straight after their yes to the address (nothing more to ask), then mark_outcome, then end_call:
    - all correct (owner, 19 Oct 2026), exactly this and nothing after it: "{ORDER_CONFIRMED_CLOSE}" (with "delivery <date> tak aa jayegi." before "dhanyavaad ji" only if Expected delivery gives a date)
@@ -384,15 +395,15 @@ Never argue about who is right, never agree to change anything, never quote a ne
     rules = ['- You cannot cancel, refund or change anything yourself: you note it, "maine note kar liya hai", never "kar diya".']
     coupon = _whatsapp_coupon_block(prepaid_coupon_for(contact, facts or {}), contact, voice)
     if coupon:
-        # The payment is asked about after the address (PAYMENT AND WHATSAPP COUPON), so step 2 leaves it out.
-        flow = flow.replace("<amount> rupaye ka order kiya tha, <payment>. kya aapka order confirm hai?",
-                            "<amount> rupaye ka order kiya tha. kya aapka order confirm hai?\" Never mention or ask about the "
-                            "payment here (call 509 asked \"payment ho chuki hai?\"): it is asked after the address.")
-        flow = re.sub(r"(?m)^   - all correct \(owner.*$", "   - all correct: PAYMENT AND WHATSAPP COUPON (below), in place of the usual close", flow)
-        flow = flow.replace("Close in one turn, straight after their yes to the address (nothing more to ask), then mark_outcome, then end_call:",
-                            "Straight after their yes to the address:")
+        # Owner, 24 Oct 2026: the order is cash on delivery, so the prepaid offer comes straight after their yes to the
+        # order, before the address; the close then says what they chose (PAYMENT AND WHATSAPP COUPON).
+        flow = flow.replace('kya aapka order confirm hai?" (say the payment as Payment gives it; when it is not on record, leave it out and never ask about it)',
+                            'kya aapka order confirm hai?" (say the payment as Payment gives it; when it is not on record, leave it out and never ask about it) After their yes: the '
+                            "prepaid offer (PAYMENT AND WHATSAPP COUPON), then step 3.")
+        flow = re.sub(r"(?m)^   - all correct \(owner.*$", "   - all correct: the close PAYMENT AND WHATSAPP COUPON gives for "
+                      "their choice (prepaid or cash on delivery), word for word", flow)
         flow = flow.replace("Ask for a yes at most twice in the call:",
-                            "Ask for a yes at most twice in the call (the payment question and the coupon offer aside):")
+                            "Ask for a yes at most twice in the call (the prepaid offer aside):")
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="ORDER DETAILS",
                    details_noun="order details", replies_first=replies_first, replies_last=replies_last, flow=flow,
@@ -405,7 +416,7 @@ ORDER_CONFIRMATION = CallType(
     key="order_confirmation",
     name="Order confirmation",
     kind="service",
-    outcomes=("confirmed", "changed", "cancelled", "not_ordered", "call_later", "wrong_number", "do_not_call", "unclear"),
+    outcomes=("confirmed", "changed", "cancelled", "not_ordered", "complaint", "call_later", "wrong_number", "do_not_call", "unclear"),
     positive=("confirmed", "changed"),
     details={
         "mismatch": "What the customer claims versus what our record shows, raised for the team to verify. Example: 'customer says already paid online by UPI; record shows COD'.",
@@ -559,7 +570,7 @@ BOOKING_CONFIRMATION = CallType(
     key="booking_confirmation",
     name="Booking confirmation",
     kind="service",
-    outcomes=("confirmed", "cancelled", "call_later", "wrong_number", "do_not_call", "unclear"),
+    outcomes=("confirmed", "cancelled", "complaint", "call_later", "wrong_number", "do_not_call", "unclear"),
     positive=("confirmed",),
     details={
         "mismatch": "What the customer says versus what the booking record shows, raised for the team to verify.",
@@ -642,7 +653,7 @@ One short turn: "bahut achha ji. aap {how} par book kar sakte hain", adding "<da
     # Calls 73 and 74: "mere paas time nahi hai" was accepted and the call closed, though the chadhava
     # is done for them and needs only a name and gotra. A reason born of not knowing that is cleared up once.
     not_interested = f"""NOT INTERESTED
-Never push and never argue. First ask the reason, ONCE and gently: "koi baat nahi ji. agar bura na maanein toh, koi khaas wajah?" A bare no ("nahi", "interested nahi hoon", "nahi chahiye") is not a reason: always ask. Skip the question only when their no already carried a reason ("nahi, paise nahi hain"). Then:
+Never push and never argue. First ask the reason, ONCE and gently: "koi khaas wajah ji?" A bare no ("nahi", "interested nahi hoon", "nahi chahiye") is not a reason: always ask. Skip the question only when their no already carried a reason ("nahi, paise nahi hain"). Then:
 - A reason that comes from not knowing how it works, when CAMPAIGN DETAILS answer it (no time that day, cannot come to the temple, lives far away, how will they know it was done): clear it up ONCE, in one or two short sentences from CAMPAIGN DETAILS, then ask once more: "toh kya aap karwana chahenge?" For example, to "time nahi hai" when the details say the pandit does it in their name: "ji, aapko us din kuch karna nahi hai. pandit ji aapke naam aur gotra se puja karenge. toh kya aap karwana chahenge?" A yes: INTERESTED.
 - Any other reason (does not want it, money, does not believe in it, already booked elsewhere), or a no after you cleared it up: accept it: "achha ji, samajh {forms(voice)["gayi"]}. dhanyavaad ji, aapka din shubh ho." mark_outcome "not_interested" with not_interested_reason in their words ("not given" if they would not say), then end_call.
 Clear up at most one misunderstanding in a call. No offer, no discount, no pressure."""
@@ -671,7 +682,7 @@ CAMPAIGN_INVITE = CallType(
     key="campaign_invite",
     name="Campaign invite",
     kind="promotional",
-    outcomes=("interested", "not_interested", "already_booked", "needs_help", "call_later", "wrong_number",
+    outcomes=("interested", "not_interested", "already_booked", "needs_help", "complaint", "call_later", "wrong_number",
               "do_not_call", "unclear"),
     positive=("interested",),
     details={
@@ -731,10 +742,10 @@ def call_coupon(contact: dict) -> dict | None:
 # Owner, 23 Oct 2026 (test calls): a bare "nahi" to the greeting's "koi issue tha?" means only "no problem", not a no to the
 # product; the agent hung up on it. This is asked instead (live_bridge asks it too, through probe_first, if the agent
 # still closes on that first "nahi").
-# Owner, 23 Oct 2026: this wording.
-CART_WANT_QUESTION = "aap yeh product order karne mein interested hain?"
+# Owner, 24 Oct 2026: this wording.
+CART_WANT_QUESTION = "aap yeh order karna chahenge?"
 # "Bas dekh raha tha": the link, for later, if they want it. "link WhatsApp" is the call's main question (main_question).
-CART_LATER_QUESTION = "theek hai ji. link WhatsApp par bhej doon, agar baad mein order karna ho?"
+CART_LATER_QUESTION = "ji, baad ke liye link bhej doon?"   # owner's wording, 24 Oct 2026
 CART_SEND_COUPON = "coupon WhatsApp par bhej doon?"
 # Owner, 23 Oct 2026: a no gets this and nothing more (wording: owner, 23 Oct, fewer "ji").
 CART_NOT_NOW = "koi baat nahi, dhanyavaad ji."
@@ -744,8 +755,8 @@ CART_NOT_NOW = "koi baat nahi, dhanyavaad ji."
 
 
 def cart_help_line(voice: str) -> str:
-    f = forms(voice)
-    return f"ji, samajh {f['gayi']}. product ya payment ko lekar koi doubt hai toh main help kar {f['sakti']} hoon."
+    """Owner, 24 Oct 2026: there was an issue; ask what it was, in these words."""
+    return "kya issue aa raha tha?"
 
 
 def cart_link_line(voice: str) -> str:
@@ -861,9 +872,9 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     flow = f"""THE USUAL ORDER
 1. The greeting has been said for you: "{_cart_greeting(contact, voice)}" Wait for their answer.
 2. Their answer, or their answer to "{CART_WANT_QUESTION}":
-   - A bare "nahi" / "koi issue nahi" (no problem; not a no to the product): "{CART_WANT_QUESTION}" Then go by their answer, below.
+   - A bare "nahi" / "koi issue nahi" to the greeting (no problem; not a no to the product): "{CART_WANT_QUESTION}" Then go by their answer, below. A "nahi" to that question is a no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
    - Just looking ("bas dekh raha tha", "aise hi dekha tha"): "{CART_LATER_QUESTION}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
-   - They want it ("haan, lena tha", "le lenge", "order karna hai"): ORDERING. "Nahi, order karna hai" is the same: the "nahi" says they were not just looking. Whatever follows a "nahi" decides, never the "nahi" alone.
+   - They want it ("haan, lena tha", "le lenge", "order karna hai"): ORDERING. "Nahi, order karna hai" is the same: whatever follows a "nahi" decides.
    - "Haan" (there was an issue), a vague problem, or a doubt: "{cart_help_line(voice)}" Then answer what they say in one or two short sentences, and "{cart_link_line(voice)}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
 Never take an order, an address or a payment on the call, never read a link or a code out, and never call it a "payment link".
 End the call only with one of the closing lines in this prompt, word for word; never with "namaste". Never end_call while a question of yours is unanswered."""
@@ -892,22 +903,26 @@ c. Still COD, or a no to prepaid or to the coupon: "{cart_cod_close(voice)}" mar
 def _cart_greeting(contact: dict, voice: str) -> str:
     """The first line, in Devanagari: name, who calls, the product, why, one question (owner, 23 Oct 2026: the product is
     named in the first turn). Without a product on record it names none."""
-    name = str(contact.get("customer_name") or "").strip()
-    agent_name, _ = persona(voice)
+    # "Rajeshsah ." as the list had it: no stray dot or comma before "जी" (owner, 24 Oct 2026).
+    name = re.sub(r"[\s.,;:_\-]+$", "", str(contact.get("customer_name") or "")).strip()
     product = spoken_product(str(contact.get("product") or ""))
     for word, said in PRONUNCIATION.items():   # "Rudraksha" -> "रुद्राक्ष", as the agent's and the store's names
         product = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", said, product, flags=re.IGNORECASE)
     what = f"आपने {product} देखा था, order complete नहीं हुआ था।" if product else "आपका order complete नहीं हुआ था।"
-    return (f"नमस्ते {name + ' ' if name else ''}जी, मैं {PRONUNCIATION.get(agent_name, agent_name)}, "
-            f"{PRONUNCIATION.get(STORE_NAME, STORE_NAME)} से। {what} कोई issue था?")
+    # "जी।", not "जी,": the name is a sentence of its own, so the rest of the greeting is the same on every call and is
+    # replayed from a saved clip instead of paid for again (owner, 24 Oct 2026: the greeting was 69% of the voice cost).
+    # Owner's wording, 24 Oct 2026: "मैं वैदिक शॉप से बोल रही हूँ।", no agent name (as in the order call's greeting).
+    speaking = "बोल रही हूँ" if forms(voice)["rahi"] == "rahi" else "बोल रहा हूँ"
+    return (f"नमस्ते {name + ' ' if name else ''}जी। मैं {PRONUNCIATION.get(STORE_NAME, STORE_NAME)} से {speaking}। "
+            f"{what} कोई issue था?")
 
 
 ABANDONED_CART = CallType(
     key="abandoned_cart",
     name="Abandoned cart",
     kind="promotional",
-    outcomes=("wants_to_order", "wants_coupon", "not_interested", "already_ordered", "needs_help", "call_later",
-              "wrong_number", "do_not_call", "unclear"),
+    outcomes=("wants_to_order", "wants_coupon", "not_interested", "already_ordered", "needs_help", "complaint",
+              "call_later", "wrong_number", "do_not_call", "unclear"),
     positive=("wants_to_order",),   # a yes to the WhatsApp link
     details={
         "not_interested_reason": "Why they do not want it, or what stopped them, in their words; 'not given' if they would not say.",
@@ -920,7 +935,7 @@ ABANDONED_CART = CallType(
     offers_coupon=True,
     confirm_question="link WhatsApp par bhej doon?",
     # The link questions ("...link WhatsApp par bhej doon?"); "payment link" still matched for calls made before 23 Oct 2026.
-    main_question=r"payment\s*link|पेमेंट\s*लिंक|link\s+whats\s*app|लिंक",
+    main_question=r"payment\s*link|पेमेंट\s*लिंक|link\s+whats\s*app|link\s+(bhej|भेज)|लिंक",
     summary_keys=("not_interested_reason", "question", "callback_time", "notes"),
     description="Call customers who left items in their cart: find out what stopped them, help, and send the cart link "
                 "(and the campaign's WhatsApp coupon) on WhatsApp to those who want it. COD or prepaid is their choice.",
@@ -1002,7 +1017,7 @@ CUSTOM_CALL = CallType(
     key="custom",
     name="Custom reason",
     kind="service",
-    outcomes=("done", "not_interested", "needs_help", "call_later", "wrong_number", "do_not_call", "unclear"),
+    outcomes=("done", "not_interested", "needs_help", "complaint", "call_later", "wrong_number", "do_not_call", "unclear"),
     positive=(),
     details={
         "reply": "What the customer said to the reason for the call, in their words.",

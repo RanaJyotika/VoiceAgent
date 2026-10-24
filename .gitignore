@@ -15,3 +15,7 @@ data/fillers/
 =
 backend/app/models/nemo_en_titanet_small.onnx
 data/voice_clips/
+
+# Google Drive login for the recordings copy (backend/scripts/drive_login.py): secrets
+data/gdrive_client.json
+data/gdrive_token.json

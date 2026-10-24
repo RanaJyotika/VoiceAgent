@@ -17,6 +17,7 @@ dependencies = [
     "sherpa-onnx>=1.12",   # runs the caller voice fingerprint model (app/voiceprint.py)
     "sarvamai>=0.1.36",
     "pymongo>=4.10",       # reads the product catalogue from the Vedic Vaibhav MongoDB (app/catalog.py)
+    "lameenc>=1.7",        # MP3s of call recordings for the Google Drive copy (app/recordings.py, app/drive_sync.py)
 ]
 
 [tool.uv]

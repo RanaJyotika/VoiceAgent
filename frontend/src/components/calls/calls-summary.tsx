@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Headphones, Monitor, MessageSquare, Phone, Search, Send, Trash2 } from "lucide-react";
+import { Download, ExternalLink, Headphones, Monitor, MessageSquare, Phone, Search, Send, Trash2 } from "lucide-react";
 import { CallPanel } from "@/components/overview/call-panel";
 import { StatCard } from "@/components/overview/stat-card";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,7 @@ import { Select } from "@/components/ui/select";
 import { usePoll } from "@/hooks/use-poll";
 import { send, type CallRow, type CampaignRow } from "@/lib/api";
 import { fmtClock, fmtInt, fmtOrder, fmtPhone, fmtRs } from "@/lib/format";
-import { outcomeOf } from "@/lib/outcomes";
+import { complaintKind, outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
 
 type Preset = "today" | "yesterday" | "7" | "30" | "month" | "all" | "custom";
@@ -143,6 +143,15 @@ export function CallsSummary() {
           <Download />
           Download
         </a>
+        {/* Owner, 24 Oct 2026: the recordings of the calls these filters show (the day, or a custom range), in one zip. */}
+        <a
+          href={`/api/calls/recordings?${exportQs}`}
+          className={buttonClass("outline", "md")}
+          title="Every recording of the calls these filters show (both voices, one MP3 per call, a folder per day) as one zip. A full day takes about a minute the first time."
+        >
+          <Headphones />
+          Recordings
+        </a>
         <Button variant="outline" className="border-bad/40 text-bad hover:bg-bad-soft" onClick={clearAll}>
           <Trash2 />
           Clear history
@@ -268,7 +277,12 @@ export function CallsSummary() {
                       <td className="px-4 py-3 text-[12.5px] text-muted-foreground">{c.campaign_name || (c.contact_id ? "Single call" : "—")}</td>
                       <td className="px-4 py-3 text-right font-mono tabular">{fmtClock(c.duration_sec || 0)}</td>
                       <td className="max-w-[360px] px-4 py-3">
-                        {o && <Badge tone={o.tone}>{o.label}</Badge>}
+                        {o && (
+                          <Badge tone={o.tone}>
+                            {o.label}
+                            {complaintKind(c.outcome_details) && ` · ${complaintKind(c.outcome_details)}`}
+                          </Badge>
+                        )}
                         {details && <div className="mt-1 text-[12px] leading-snug text-muted-foreground">{details}</div>}
                         {c.error && !details && <div className="mt-1 text-[12px] leading-snug text-bad">{c.error.slice(0, 160)}</div>}
                       </td>
@@ -296,6 +310,18 @@ export function CallsSummary() {
                             >
                               <Headphones />
                               Listen
+                            </a>
+                          )}
+                          {c.drive_link && (
+                            <a
+                              href={c.drive_link}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="The recording on Google Drive"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13px] font-medium hover:bg-muted [&_svg]:size-4"
+                            >
+                              <ExternalLink />
+                              Drive
                             </a>
                           )}
                           {c.contact_id && (

@@ -252,6 +252,22 @@ PHONE_NOISE_ASK_SECONDS = float(os.getenv("PHONE_NOISE_ASK_SECONDS", "1.2"))
 # call can be listened to instead of guessed at from the log. Free; about 2 MB per minute.
 PHONE_RECORD = os.getenv("PHONE_RECORD", "true").lower() != "false"
 RECORDINGS_DIR = DATA_DIR / "recordings"
+# Each call's recording, both sides in one MP3, copied to this Google Drive folder (drive_sync.py; owner, 24 Oct 2026).
+# Uploads start once scripts/drive_login.py has saved the login (GDRIVE_TOKEN_FILE). GDRIVE_FROM_CALL: copy calls from
+# this call number on; 0 = only calls made after the first upload run (older ones stay on this computer only).
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "1kUs4MRdXLUvSAEJiGncmG1Ps3rEZnvcm").strip()
+GDRIVE_CLIENT_FILE = DATA_DIR / "gdrive_client.json"   # the OAuth client downloaded from Google Cloud (a secret)
+GDRIVE_TOKEN_FILE = DATA_DIR / "gdrive_token.json"     # the saved login, written by scripts/drive_login.py (a secret)
+GDRIVE_FROM_CALL = int(os.getenv("GDRIVE_FROM_CALL", "0") or 0)
+# Owner, 24 Oct 2026: no Drive API possible (the folder is someone else's). Instead, Google Drive for desktop shows the
+# folder on this computer (e.g. G:\My Drive\Call Recordings, through "Add shortcut to Drive") and syncs it by itself;
+# the recordings are simply saved into it. When set, this is used instead of the API login.
+GDRIVE_LOCAL_DIR = os.getenv("GDRIVE_LOCAL_DIR", "").strip().strip('"')
+# Owner, 24 Oct 2026: no app and no API either. A Google Apps Script web app, deployed once from the owner's own Google
+# account (backend/scripts/drive_upload_apps_script.gs), takes each recording and saves it in the day's folder. Its URL
+# and the password set in it; when set, this is the way used.
+GDRIVE_SCRIPT_URL = os.getenv("GDRIVE_SCRIPT_URL", "").strip()
+GDRIVE_SCRIPT_SECRET = os.getenv("GDRIVE_SCRIPT_SECRET", "").strip()
 
 # --- Filler sounds ---
 # A short "hmm" / "achha" / "ji" in the agent's own voice when its reply is slow (app/fillers.py). Off since

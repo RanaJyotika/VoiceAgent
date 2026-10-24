@@ -11,7 +11,7 @@ import { PAGE_SIZE, Pager, usePaged } from "@/components/ui/pager";
 import { usePoll } from "@/hooks/use-poll";
 import { useConfig } from "@/hooks/use-static";
 import { send, type CallbackList as Data, type CallbackRow, type CallbackState, type PhoneLine } from "@/lib/api";
-import { fmtOrder, fmtPhone } from "@/lib/format";
+import { fmtOrder, fmtPhone, sheetEmail } from "@/lib/format";
 import { outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
 import { fitVoice, remembered } from "@/lib/voices";
@@ -259,7 +259,9 @@ export function CallbackBoard({ campaignId }: { campaignId?: number }) {
                 const st = STATE[c.state];
                 const customer = (
                   <td className="px-4 py-3">
-                    <div className="font-medium">{c.customer_name || "—"}</div>
+                    <div className="font-medium">
+                      {c.customer_name || <span className="font-normal text-muted-foreground">{sheetEmail(c.extra) || "No name in the list"}</span>}
+                    </div>
                     <div className="font-mono text-[12px] text-muted-foreground">
                       {[c.phone ? fmtPhone(c.phone) : "no phone", fmtOrder(c.order_id)].filter(Boolean).join(" · ")}
                     </div>

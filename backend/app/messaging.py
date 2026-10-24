@@ -263,9 +263,8 @@ def _price(amount) -> str:
 
 
 def _pay_line(kind: str, words: str, link: str) -> str:
-    """The last line: the link, or, when the template has a link button (PINNACLE_*_BUTTON), a pointer to it."""
-    if MESSAGE_PROVIDER == "pinnacle" and PINNACLE_BUTTONS.get(kind):
-        return f"{words}: neeche diye button se"
+    """The last line: the link itself ("Pay here: https://vedicshop.store/products/..."). Owner, 24 Oct 2026: the link in
+    the text, not "neeche diye button se"; a template's link button (PINNACLE_*_BUTTON) still comes with it."""
     return f"{words}: {link}"
 
 
@@ -448,6 +447,20 @@ def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call
     log.info("%s %s for contact %s (call %s) queued as message %s to %s: %s%s", kind.replace("_", " "), code,
              contact.get("id"), call_id, message_id, recipient or "no number", status, " (test)" if test else "")
     return message_id
+
+
+def cart_message_for(contact: dict) -> int | None:
+    """The cart message this customer has already (a real one, waiting, going or gone), so a later call of the same
+    campaign does not send it again (owner, 24 Oct 2026: once per customer). Test messages do not count."""
+    if not contact.get("id"):
+        return None
+    with db.connect() as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone():
+            return None
+        row = conn.execute(
+            f"SELECT id FROM messages WHERE kind='cart_coupon' AND test=0 AND contact_id=? "
+            f"AND status IN ({','.join('?' for _ in HAS_IT)}) ORDER BY id LIMIT 1", (contact["id"], *HAS_IT)).fetchone()
+    return row[0] if row else None
 
 
 def already_sent(phone: str, code: str) -> bool:

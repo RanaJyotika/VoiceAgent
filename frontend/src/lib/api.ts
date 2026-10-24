@@ -51,6 +51,7 @@ export type CallDetail = Partial<Omit<LiveCall, "status" | "lines">> & {
   lines: LiveCall["lines"];
   outcome_details: Record<string, unknown> | null;
   error?: string | null;
+  drive_link?: string; // the recording, both sides in one MP3, on Google Drive (drive_sync.py)
   /** What the call was about: the order or cart and its products, or a one-off call's reason. */
   subject?: CallSubject | null;
 };
@@ -204,7 +205,7 @@ export type CampaignRow = {
 
 export type CampaignStatus = "running" | "scheduled" | "paused" | "completed" | "draft";
 
-/** /api/campaigns/board: the Campaigns page. Called = connected + not connected + hung up (+ any call in progress). */
+/** /api/campaigns/board: the Campaigns page. Called = contacts rung at least once. */
 export type BoardRow = {
   id: number;
   name: string;
@@ -219,6 +220,8 @@ export type BoardRow = {
   contacts: number;
   called: number;
   to_call: number;
+  new_left: number; // never rung yet
+  callbacks_left: number; // rung before, waiting for another try
   connected: number;
   not_connected: number;
   hung_up: number;
@@ -254,6 +257,8 @@ export type CampaignState = {
   to_call: number;
   retry_due: number;
   retry_left: number;
+  new_left: number; // never rung yet
+  reached: number; // rung at least once
   by_status: Record<string, number>;
 };
 
@@ -300,6 +305,7 @@ export type CallRow = {
   cost_rs: number;
   cost_estimated: boolean; // no token report: a per-minute guess
   recording: string | null;
+  drive_link?: string | null; // the same recording on Google Drive, once copied
 };
 
 /** What happens next to a call-back: rung at its time (scheduled), next in line (due), its time came but nothing is

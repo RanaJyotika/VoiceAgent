@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ExternalLink, PhoneOff, ShoppingBag, X } from "lucide-react";
+import { ChevronDown, ExternalLink, Headphones, PhoneOff, ShoppingBag, X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { usePoll } from "@/hooks/use-poll";
@@ -31,6 +31,7 @@ const DETAIL_LABELS: Record<string, string> = {
   order_changes: "Order changes",
   payment_change: "Payment",
   whatsapp_coupon: "WhatsApp coupon",
+  complaint_type: "Complaint about",
   message_id: "Message no.",
 };
 
@@ -133,6 +134,21 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
         {(campaignName || call?.voice) && (
           <div className="mt-1.5 truncate text-[12.5px] text-muted-foreground">
             {[campaignName, call?.voice && `${call.voice}${call.agent ? ` — ${call.agent}` : ""}`].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        {/* Owner, 24 Oct 2026: the whole conversation, both sides in one file, here and on Google Drive. */}
+        {!live && call?.channel === "plivo" && (
+          <div className="mt-2 flex flex-wrap gap-3 text-[12.5px] font-medium">
+            <a href={`/api/calls/${callId}/recording`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+              <Headphones className="size-3.5" />
+              Listen
+            </a>
+            {data?.drive_link && (
+              <a href={data.drive_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+                <ExternalLink className="size-3.5" />
+                Recording on Google Drive
+              </a>
+            )}
           </div>
         )}
       </header>

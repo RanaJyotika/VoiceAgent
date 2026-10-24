@@ -10,7 +10,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import catalog, coupons, db, messaging, mongo_sync, orders_view, shopify, store_orders
+from . import catalog, coupons, db, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, shopify, store_orders
 from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, clean_settings, router as campaign_router, schedule_worker as campaign_schedules
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
@@ -69,6 +69,7 @@ app.include_router(intake_router)
 app.include_router(messaging.router)
 app.include_router(catalog.router)
 app.include_router(mongo_sync.router)
+app.include_router(drive_sync.router)
 app.include_router(store_orders.router)
 app.include_router(orders_view.router)
 app.include_router(overview_router)
@@ -94,6 +95,7 @@ async def _start_monitor() -> None:
     asyncio.create_task(shopify.worker())
     asyncio.create_task(catalog.worker())   # the product catalogue, read from MongoDB every few minutes
     asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
+    asyncio.create_task(drive_sync.worker())   # ...and its recording, both sides as one MP3, to Google Drive
     asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
     asyncio.create_task(messaging.worker())   # coupon messages, once a message service is set up
     asyncio.create_task(campaign_schedules())   # campaigns set to start at a time start then
@@ -365,6 +367,55 @@ async def calls(campaign_id: int | None = None, day_from: str | None = None, day
         raise HTTPException(400, "Dates must look like 2026-10-05.")
 
 
+RECORDINGS_ZIP_MAX = 3000   # calls in one download: a month of a busy campaign; more is asked for in parts
+
+
+def _recordings_zip(calls: list[dict]) -> tuple[Path, int]:
+    """The calls' recordings, both sides in one MP3 each, in a zip with one folder a day ("24 Oct 2026") and the same
+    names as on Google Drive (drive_sync). MP3s are already compressed, so the zip only stores them."""
+    import tempfile
+    import zipfile
+    with tempfile.NamedTemporaryFile(prefix="recordings_", suffix=".zip", delete=False) as tmp:
+        name = tmp.name
+    added = 0
+    with zipfile.ZipFile(name, "w", zipfile.ZIP_STORED) as z:
+        for c in sorted(calls, key=lambda c: c.get("started_at") or ""):
+            path = RECORDINGS_DIR / str(c.get("recording") or "")
+            if not c.get("recording") or not path.is_file():
+                continue
+            audio = recordings.conversation_mp3(path)
+            if audio is None:   # no MP3 encoder: the wav itself
+                audio = recordings.conversation(path)
+            z.write(audio, f"{drive_sync.day_name(c)}/{drive_sync.file_name(c, audio.suffix)}")
+            added += 1
+    return Path(name), added
+
+
+@app.get("/api/calls/recordings")
+async def download_recordings(campaign_id: int | None = None, day_from: str | None = None, day_to: str | None = None,
+                              outcome: str = "all", kind: str = "all", q: str = "") -> FileResponse:
+    """Owner, 24 Oct 2026: every recording of the calls the Calls summary's filters show (the day, or a date range),
+    as one zip, with no Drive set-up at all. Both voices in one MP3 per call, in a folder per day."""
+    try:
+        calls = db.list_calls(limit=200_000, campaign_id=campaign_id, day_from=day_from, day_to=day_to)
+    except ValueError:
+        raise HTTPException(400, "Dates must look like 2026-10-05.")
+    calls = [c for c in filter_calls(calls, outcome, kind, q) if c.get("recording")]
+    if not calls:
+        raise HTTPException(404, "No recordings for these filters.")
+    if len(calls) > RECORDINGS_ZIP_MAX:
+        raise HTTPException(400, f"{len(calls)} recordings: pick fewer days (at most {RECORDINGS_ZIP_MAX} at a time).")
+    path, added = await asyncio.to_thread(_recordings_zip, calls)
+    if not added:
+        path.unlink(missing_ok=True)
+        raise HTTPException(404, "The recordings of these calls are not on this computer.")
+    span = day_from if not day_to or day_to == day_from else f"{day_from}_to_{day_to}"
+    log.info("recordings download: %d calls (%s), %d KB", added, span or "all days", path.stat().st_size // 1024)
+    from starlette.background import BackgroundTask
+    return FileResponse(path, media_type="application/zip", filename=f"recordings_{span or 'all'}.zip",
+                        background=BackgroundTask(path.unlink, missing_ok=True))
+
+
 @app.get("/api/calls/export")
 async def export_calls(campaign_id: int | None = None, day_from: str | None = None, day_to: str | None = None,
                        outcome: str = "all", kind: str = "all", q: str = "") -> Response:
@@ -401,12 +452,15 @@ async def one_call(call_id: int) -> dict:
 
 
 @app.get("/api/calls/{call_id}/recording")
-async def recording(call_id: int) -> FileResponse:
-    """The customer's side of a phone call as a wav file (see PHONE_RECORD)."""
+async def recording(call_id: int, side: str = "both") -> FileResponse:
+    """A phone call's audio as a wav file (see PHONE_RECORD): both sides mixed (owner, 24 Oct 2026), or side=customer
+    for the customer's side alone."""
     name = db.get_recording(call_id)
     path = RECORDINGS_DIR / name if name else None
     if not path or not path.is_file():
         raise HTTPException(404, "No recording for this call.")
+    if side != "customer" and (both := await asyncio.to_thread(recordings.both_sides, path)):
+        return FileResponse(both, media_type="audio/wav", filename=both.name)
     return FileResponse(path, media_type="audio/wav", filename=name)
 
 
@@ -441,7 +495,8 @@ async def live_one(call_id: int) -> dict:
     with what the call was about."""
     on = live_call(call_id)
     if on:
-        return {**on, "live": True, "subject": call_subject(on.get("contact_id"))}
+        # As the team reads it (readable.py): the call itself keeps the original words.
+        return {**on, "lines": readable.lines(on.get("lines")), "live": True, "subject": call_subject(on.get("contact_id"))}
     row = db.get_call(call_id)
     if not row:
         raise HTTPException(404, "No such call.")
@@ -450,7 +505,8 @@ async def live_one(call_id: int) -> dict:
             "customer_name": row.get("customer_name") or "", "order_id": row.get("order_id") or "",
             "to": row.get("phone") or "", "seconds": round(row.get("duration_sec") or 0),
             "outcome": row.get("outcome"), "outcome_details": row.get("outcome_details") or {},
-            "error": row.get("error"), "lines": row.get("transcript") or []}
+            "error": row.get("error"), "lines": readable.lines(row.get("transcript")),
+            "drive_link": row.get("drive_link") or ""}
 
 
 @app.get("/api/stats")

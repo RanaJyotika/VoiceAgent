@@ -55,6 +55,7 @@ def _document(r) -> dict:
         "duration_sec": d.get("duration_sec"),
         "outcome": d.get("outcome"), "outcome_details": db._json(d.get("outcome_details"), {}),
         "error": d.get("error"), "hangup_cause": d.get("hangup_cause"), "recording": d.get("recording"),
+        "recording_link": d.get("drive_link"),   # both sides in one MP3 on Google Drive (drive_sync.py)
         "transcript": db._json(d.get("transcript"), []),
         "agent": {"model": model, "provider": provider, "turns": usage.get("turns")},
         "cost_rs": {"agent": round(agent_rs, 2), "phone": round(phone_rs, 2), "total": round(agent_rs + phone_rs, 2),

@@ -7,6 +7,7 @@ from io import BytesIO
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
+from . import readable
 from .call_types import CALL_TYPES, DEFAULT, CallType, extra_of
 from .db import CONTACT_COLUMNS, IST
 
@@ -177,6 +178,7 @@ RESPONSES = {
     "already_booked": "Already booked", "needs_help": "Wants help", "call_later": "Call back later",
     "wrong_number": "Wrong number", "do_not_call": "Do not call again", "unclear": "Unclear",
     "wants_to_order": "Wants to order", "already_ordered": "Already ordered", "wants_coupon": "Wants the coupon",
+    "complaint": "Complaint (team to review)",
 }
 # How a call nobody picked up ended, by live_bridge.classify_unanswered's note (shown as the reason).
 NOT_PICKED_UP = {
@@ -188,12 +190,13 @@ DETAIL_LABELS = {
     "new_delivery_date": "New delivery date", "new_product": "Product they named", "mismatch": "Mismatch",
     "question": "Question", "notes": "Note", "payment_preference": "Payment", "order_changes": "Changes asked for",
     "coupon_code": "Coupon", "payment_change": "Payment change", "whatsapp_coupon": "WhatsApp coupon",
+    "complaint_type": "Complaint about",
 }
 # Details our own code writes into a result (not the agent), shown on the results sheet after the call type's own.
 SYSTEM_DETAILS = ("coupon_code",)   # the coupon a cart customer said yes to (owner, 19 Oct 2026)
 # A person must check these before acting: the customer changed something, disputed the record, or the
 # result is unclear. Owner, 5 Oct 2026: an address the customer dictated always needs a human to verify it.
-VERIFY_OUTCOMES = ("unclear", "changed", "not_ordered", "needs_help")
+VERIFY_OUTCOMES = ("unclear", "changed", "not_ordered", "needs_help", "complaint")
 VERIFY_DETAILS = ("new_address", "mismatch", "order_changes", "new_product", "new_delivery_date",
                   "verify")   # set by our own checks, e.g. an address the customer never said yes to (call 135)
 
@@ -271,7 +274,7 @@ def build_calls_export(calls: list[dict], whatsapp: dict[int, dict]) -> bytes:
             started = str(c.get("started_at") or "")
         seconds = int(round(c.get("duration_sec") or 0))
         talk = "\n".join(f"{'Agent' if t.get('role') == 'agent' else 'Customer'}: {t.get('text', '')}"
-                          for t in (c.get("transcript") or []) if isinstance(t, dict))
+                          for t in readable.lines(c.get("transcript")) if isinstance(t, dict))
         ws.append([c.get("id"), "Phone" if c.get("channel") == "plivo" else "Browser", started, c.get("customer_name") or "",
                    c.get("phone") or "", c.get("order_id") or "", c.get("campaign_name") or ("Single call" if c.get("contact_id") else ""),
                    f"{seconds // 60}:{seconds % 60:02d}", CALL_RESULTS.get(call_result_key(c), call_result_key(c)), said, sent,

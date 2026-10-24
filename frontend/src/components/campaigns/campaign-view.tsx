@@ -8,7 +8,7 @@ import { ArrowDownAZ, ArrowUpAZ, ChevronLeft, Copy, Download, Pause, Pencil, Pla
 import { CallbackBoard } from "@/components/calls/callback-list";
 import { CallPanel } from "@/components/overview/call-panel";
 import { StatCard } from "@/components/overview/stat-card";
-import { Badge, type Tone } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFeedback } from "@/components/ui/feedback";
@@ -17,10 +17,10 @@ import { Select } from "@/components/ui/select";
 import { usePoll } from "@/hooks/use-poll";
 import { useCallTypes, useConfig } from "@/hooks/use-static";
 import { send, type CampaignRow, type CampaignState, type CampaignStatus, type ContactRow, type RunSettings } from "@/lib/api";
-import { fmtInt, fmtOrder, fmtPct, fmtPhone, fmtRs, pct } from "@/lib/format";
-import { outcomeOf } from "@/lib/outcomes";
+import { fmtInt, fmtOrder, fmtPct, fmtPhone, fmtRs, pct, sheetEmail } from "@/lib/format";
+import { complaintKind, outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
-import { CALLBACK_STATUSES, fmtDay, plural } from "./shared";
+import { CALLBACK_STATUSES, CAMPAIGN_STATUS, fmtDay, leftTag, plural } from "./shared";
 
 /** /api/campaigns/{id}/stats: the Overview tab. Per contact, counted as on the Campaigns page. */
 type Stats = {
@@ -30,13 +30,18 @@ type Stats = {
   voice: string;
   budget_rs: number;
   audience: number;
-  called: number;
+  called: number; // rung at least once
+  new_left: number; // never rung yet
+  callbacks_left: number; // rung before, waiting for another try (no answer, busy, cut off, call later)
   connected: number;
   engaged: number;
   converted: number;
   not_connected: number;
   hung_up: number;
   to_call: number;
+  retry_waiting: number; // no answer, busy, cut off or "call later", with tries left
+  retries_done: number; // the calls they have had after their first one
+  out_of_tries: number; // no answer, busy or cut off, all tries used: not rung again by itself
   agent_rs: number;
   line_rs: number;
   cost_rs: number;
@@ -46,14 +51,6 @@ type Stats = {
 };
 
 type Campaign = CampaignRow & { settings: Partial<RunSettings> | null };
-
-const STATUS: Record<CampaignStatus, { label: string; tone: Tone }> = {
-  running: { label: "Running", tone: "info" },
-  scheduled: { label: "Scheduled", tone: "warn" },
-  paused: { label: "Paused", tone: "warn" },
-  completed: { label: "Completed", tone: "good" },
-  draft: { label: "Draft", tone: "neutral" },
-};
 
 const PAGE = PAGE_SIZE;
 const rs = (n: number) => fmtRs(n, n < 100 ? 2 : 0);
@@ -98,7 +95,8 @@ export function CampaignView() {
     );
   }
 
-  const status = s ? STATUS[s.status] : null;
+  const status = s ? CAMPAIGN_STATUS[s.status] : null;
+  const left = s && s.status !== "draft" ? leftTag(s.new_left, s.callbacks_left) : null;
   const otherRunning = !!state?.running && state.running_campaign_id !== id;
 
   const start = async () => {
@@ -217,9 +215,16 @@ export function CampaignView() {
             Campaigns
           </Link>
           {status && (
-            <Badge tone={status.tone} dot>
-              {status.label}
-            </Badge>
+            <span title={status.hint}>
+              <Badge tone={status.tone} dot>
+                {status.label}
+              </Badge>
+            </span>
+          )}
+          {left && (
+            <span title={left.hint}>
+              <Badge tone={left.tone}>{left.label}</Badge>
+            </span>
           )}
           <Link href={`/campaigns/new/?edit=${id}`} className={buttonClass("outline")}>
             <Pencil />
@@ -317,34 +322,82 @@ export function CampaignView() {
   );
 }
 
+/** One plain sentence on where the list stands: is everyone called, and what does Start do next. */
+function summary(s: Stats): string {
+  if (!s.audience) return "No customers on this list yet. Add them with Edit → Audience.";
+  if (!s.called) return `Nobody called yet. Start rings the ${plural(s.audience, "customer")} from the top of the sheet.`;
+  const backs = s.callbacks_left
+    ? `${plural(s.callbacks_left, "customer")} who did not pick up, were busy or got cut off ${s.callbacks_left === 1 ? "is" : "are"} waiting for another try.`
+    : "Nobody is waiting for another try.";
+  if (!s.new_left)
+    return `All ${fmtInt(s.audience)} customers on the list have been called at least once. ${backs}${s.callbacks_left ? " Start rings only them." : ""}`;
+  return `${fmtInt(s.called)} of ${fmtInt(s.audience)} customers called so far; ${fmtInt(s.new_left)} not called yet. Start rings those first, in sheet order. ${backs}`;
+}
+
 function OverviewTab({ s }: { s: Stats | null }) {
   const steps = s
     ? [
-        ["Audience", s.audience],
-        ["Called", s.called],
-        ["Connected", s.connected],
+        ["Customers in the list", s.audience],
+        ["Called at least once", s.called],
+        ["Picked up", s.connected],
         ["Engaged", s.engaged],
         ["Converted", s.converted],
       ]
     : [];
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Audience" value={s ? fmtInt(s.audience) : "—"} note={s?.to_call ? `${fmtInt(s.to_call)} still to call` : ""} />
-        <StatCard label="Called" value={s ? fmtInt(s.called) : "—"} note={s?.audience ? `${fmtPct(pct(s.called, s.audience), 0)} complete` : ""} />
-        <StatCard label="Connected" value={s ? fmtInt(s.connected) : "—"} note={s?.called ? `${fmtPct(pct(s.connected, s.called))} of called` : ""} />
-        <StatCard
-          label="Conversions"
-          value={s ? fmtInt(s.converted) : "—"}
-          note={s?.connected ? `${fmtPct(pct(s.converted, s.connected))} of connected` : ""}
-        />
-        <StatCard
-          label="Spend"
-          value={s ? rs(s.cost_rs) : "—"}
-          note={s ? `Agent ${rs(s.agent_rs)} · line ${rs(s.line_rs)}${s.budget_rs ? ` · daily cap ${fmtRs(s.budget_rs)}` : ""}` : ""}
-        />
-        <StatCard label="Cost / conversion" value={s?.converted ? rs(s.cost_rs / s.converted) : "—"} note={s ? `${plural(s.calls, "call")} placed` : ""} />
-      </div>
+      {s && <p className="rounded-md bg-muted px-3 py-2.5 text-[13.5px]">{summary(s)}</p>}
+
+      {/* Owner, 24 Oct 2026: it was not clear whether the sheet's customers had all been called. First the list, then
+          what came of it. */}
+      <section className="space-y-2">
+        <h2 className="text-[13px] font-medium text-muted-foreground">Calling progress</h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Customers in the list" value={s ? fmtInt(s.audience) : "—"} note="Loaded from the uploaded sheet" />
+          <StatCard
+            label="Called at least once"
+            value={s ? fmtInt(s.called) : "—"}
+            note={s?.audience ? `${fmtPct(pct(s.called, s.audience), 0)} of the list · ${plural(s.calls, "call")} placed in all` : ""}
+          />
+          <StatCard
+            label="Not called yet"
+            value={s ? fmtInt(s.new_left) : "—"}
+            note={s ? (s.new_left ? "Never rung: Start calls them first, in sheet order" : "Everyone has had a first call") : ""}
+          />
+          <StatCard
+            label="Call-backs waiting"
+            value={s ? fmtInt(s.callbacks_left) : "—"}
+            note={
+              s
+                ? [
+                    s.callbacks_left ? "No answer, busy or cut off: rung again on Start" : "Nobody waiting for another try",
+                    s.out_of_tries ? `${fmtInt(s.out_of_tries)} out of tries` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : ""
+            }
+          />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[13px] font-medium text-muted-foreground">Results</h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Picked up" value={s ? fmtInt(s.connected) : "—"} note={s?.called ? `${fmtPct(pct(s.connected, s.called))} of customers called` : ""} />
+          <StatCard
+            label="Conversions"
+            value={s ? fmtInt(s.converted) : "—"}
+            note={s?.connected ? `${fmtPct(pct(s.converted, s.connected))} of those who picked up` : ""}
+          />
+          <StatCard
+            label="Spend"
+            value={s ? rs(s.cost_rs) : "—"}
+            note={s ? `Agent ${rs(s.agent_rs)} · line ${rs(s.line_rs)}${s.budget_rs ? ` · daily cap ${fmtRs(s.budget_rs)}` : ""}` : ""}
+          />
+          <StatCard label="Cost per conversion" value={s?.converted ? rs(s.cost_rs / s.converted) : "—"} note="Spend ÷ conversions" />
+        </div>
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="overflow-hidden">
@@ -542,7 +595,9 @@ function ContactsTab({ campaignId, rows, valueLabel, canRequeue, onChanged }: Co
                   title={opens ? "Open the conversation" : undefined}
                 >
                   <td className="px-4 py-2.5">
-                    <div className="font-medium">{c.customer_name || "—"}</div>
+                    <div className="font-medium">
+                      {c.customer_name || <span className="font-normal text-muted-foreground">{sheetEmail(c.extra) || "No name in the list"}</span>}
+                    </div>
                     {(c.order_id || c.product) && (
                       <div className="max-w-[260px] truncate text-[12px] text-muted-foreground">
                         {[fmtOrder(c.order_id), c.product].filter(Boolean).join(" · ")}
@@ -554,6 +609,7 @@ function ContactsTab({ campaignId, rows, valueLabel, canRequeue, onChanged }: Co
                     {st && (
                       <Badge tone={st.tone} dot>
                         {st.label}
+                        {c.status === "complaint" && complaintKind(c.last_details) && ` · ${complaintKind(c.last_details)}`}
                       </Badge>
                     )}
                     {due && (

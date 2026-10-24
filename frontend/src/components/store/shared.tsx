@@ -56,6 +56,7 @@ const toneText: Record<Tone, string> = {
   warn: "border-warn/25 bg-warn-soft text-warn",
   info: "border-info/25 bg-info-soft text-info",
   neutral: "border-border bg-muted text-muted-foreground",
+  alert: "border-bad bg-bad text-white",
 };
 
 export function TagChip({ tag }: { tag: OrderTag }) {

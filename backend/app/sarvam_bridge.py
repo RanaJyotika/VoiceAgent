@@ -518,7 +518,12 @@ class SarvamSession:
             calls: list[_FunctionCall] = []
             raw_calls: list[dict] = []
             if fixed:
-                await self._speak(fixed)
+                # A sentence at a time, as replies are said, so the sentences that recur are kept and replayed free
+                # (_Clips). Owner, 24 Oct 2026: the cart greeting said whole was 69% of the voice cost; its name is the
+                # only part that changes on every call.
+                # "." too: the code's own lines are in English letters ("...confirm ho gaya hai. dhanyavaad ji, ...").
+                for sentence in re.split(r"(?<=[।?!.])\s+", fixed.strip()):
+                    await self._speak(sentence)
             else:
                 for attempt in range(2):
                     calls, raw_calls = await self._chat(extra, started)

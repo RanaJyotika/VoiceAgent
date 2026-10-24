@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 
-export type Tone = "good" | "bad" | "warn" | "info" | "neutral";
+// alert: solid red, for what the team must look at first (complaints, owner 24 Oct 2026).
+export type Tone = "good" | "bad" | "warn" | "info" | "neutral" | "alert";
 
 const tones: Record<Tone, string> = {
   good: "bg-good-soft text-good",
@@ -8,6 +9,7 @@ const tones: Record<Tone, string> = {
   warn: "bg-warn-soft text-warn",
   info: "bg-info-soft text-info",
   neutral: "bg-muted text-muted-foreground",
+  alert: "bg-bad text-white",
 };
 
 export function Badge({ tone = "neutral", dot, className, children }: { tone?: Tone; dot?: boolean; className?: string; children: React.ReactNode }) {

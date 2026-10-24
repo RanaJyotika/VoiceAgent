@@ -133,7 +133,7 @@ def _attention(rows: list, auto: dict, spend_today: float) -> list[dict]:
 # --- the Overview's "Today" cards (owner, 21 Oct 2026) ---------------------------------------------------------
 # Per customer, by the result of their latest call today: a customer rung twice (no answer, then confirmed) is one
 # customer, convinced. Phone calls only: browser tests are not customers. Costs count every call, tests included.
-REVIEW_OUTCOMES = ("unclear", "wrong_number", "do_not_call", "not_ordered")   # as db.stats' "needs review"
+REVIEW_OUTCOMES = ("unclear", "wrong_number", "do_not_call", "not_ordered", "complaint")   # as db.stats' "needs review"
 
 
 @router.get("/api/overview/today")
@@ -173,19 +173,22 @@ HUNG_UP_STATUSES = ("dropped",)   # the call ended before any result: the custom
 NOT_CALLED_STATUSES = ("pending",)
 
 
-def _status(c: dict, to_call: int, running: bool) -> str:
-    """running · scheduled (set to start at a time) · completed (nobody left, or past its last day) · paused (started,
-    some left) · draft (never started: no contacts yet, or not launched)."""
+def _status(c: dict, counts: dict, running: bool) -> str:
+    """running · scheduled (set to start at a time) · completed (every customer has had a first call, or past its last
+    day; call-backs may still be waiting, shown beside it) · paused (started, some never called yet) · draft (never
+    started: no contacts yet, or not launched). Owner, 24 Oct 2026: a list rung end to end showed "Paused" because
+    its no-answers had been put back on the list."""
     if running:
         return "running"
     if c.get("start_at"):
         return "scheduled"
-    if not c["total"]:
+    if not counts["total"]:
         return "draft"
-    if to_call == 0 or campaign.past_last_date(c):
+    if campaign.past_last_date(c) or counts["to_call"] == 0:
         return "completed"
-    called = c["total"] - sum(c["by_status"].get(s, 0) for s in NOT_CALLED_STATUSES)
-    return "paused" if called else "draft"
+    if not counts["reached"]:
+        return "draft"
+    return "paused" if counts["new_left"] else "completed"
 
 
 ENGAGED_LESS = ("unclear", "wrong_number")   # picked up, but no real conversation to an answer
@@ -204,12 +207,27 @@ async def campaign_stats(campaign_id: int) -> dict:
     by, total = counts["by_status"], counts["total"]
     run = campaign.CAMPAIGN
     running = (run.running and run.settings.campaign_id == campaign_id) or (bool(c.get("auto")) and autodial.AUTO.running)
-    called = total - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES)
+    # Contacts whose status a call has set (a call-back put back on the list is pending again); "called" itself counts
+    # everyone rung at least once.
+    settled, called = total - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES), counts["reached"]
     not_connected = sum(by.get(k, 0) for k in NOT_CONNECTED_STATUSES)
     hung_up = sum(by.get(k, 0) for k in HUNG_UP_STATUSES)
-    connected = max(0, called - not_connected - hung_up - by.get("calling", 0))
+    connected = max(0, settled - not_connected - hung_up - by.get("calling", 0))
     converted = sum(n for k, n in by.items() if k in CONVERSIONS)
     engaged = max(converted, connected - sum(by.get(k, 0) for k in ENGAGED_LESS))
+    # Owner, 24 Oct 2026: the contacts still to be rung again (no answer, busy, cut off or "call later", tries left, as
+    # db.next_to_call picks them), and the repeat calls they have had so far (every call after their first).
+    max_attempts = int(s.get("max_attempts") or 3)
+    marks = ",".join("?" for _ in db.RETRY_STATUSES)
+    with db.connect() as conn:
+        retry = conn.execute(
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(MAX(COALESCE(attempts, 0) - 1, 0)), 0) AS done FROM contacts "
+            f"WHERE campaign_id=? AND status IN ({marks}) AND (status='call_later' OR COALESCE(attempts, 0) < ?)",
+            (campaign_id, *db.RETRY_STATUSES, max_attempts)).fetchone()
+        # The rest of the Call back tab: all tries used, so no campaign rings them again by itself.
+        out_of_tries = conn.execute(
+            f"SELECT COUNT(*) FROM contacts WHERE campaign_id=? AND status IN ({marks}) AND status != 'call_later' "
+            "AND COALESCE(attempts, 0) >= ?", (campaign_id, *db.RETRY_STATUSES, max_attempts)).fetchone()[0]
 
     with db.connect() as conn:
         calls = conn.execute("SELECT c.started_at, c.channel, c.duration_sec, c.outcome, c.usage FROM calls c "
@@ -237,11 +255,14 @@ async def campaign_stats(campaign_id: int) -> dict:
     ct = CALL_TYPES.get(c["call_type"])
     keys = [*(ct.outcomes if ct else ()), "no_answer", "busy", "dropped"]
     return {
-        "id": campaign_id, "status": _status({**c, "total": total, "by_status": by}, counts["to_call"], running),
+        "id": campaign_id, "status": _status(c, counts, running),
+        # Owner, 24 Oct 2026: whether the sheet's customers have all had their first call, apart from call-backs.
+        "reached": counts["reached"], "new_left": counts["new_left"], "callbacks_left": counts["to_call"] - counts["new_left"],
         "running": running, "agent": AGENT_LABELS.get(s.get("model") or "", s.get("model") or ""), "voice": s.get("voice") or "",
         "budget_rs": int(s.get("budget_rs") or 0),
         "audience": total, "called": called, "connected": connected, "engaged": engaged, "converted": converted,
         "not_connected": not_connected, "hung_up": hung_up, "to_call": counts["to_call"],
+        "retry_waiting": retry["n"], "retries_done": retry["done"], "out_of_tries": out_of_tries,
         "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2), "cost_rs": round(agent_rs + line_rs, 2),
         "calls": len(calls), "series": series,
         "outcomes": [{"key": k, "n": by.get(k, 0)} for k in dict.fromkeys(keys)],
@@ -264,22 +285,25 @@ async def campaigns_board() -> dict:
     rows = []
     for c in camps:
         s = c.get("settings") or {}
-        to_call = db.contact_counts(int(s.get("max_attempts") or 3), c["id"])["to_call"] if c["total"] else 0
+        counts = (db.contact_counts(int(s.get("max_attempts") or 3), c["id"]) if c["total"]
+                  else {"total": 0, "to_call": 0, "new_left": 0, "reached": 0})
+        to_call = counts["to_call"]
         running = (run.running and run.settings.campaign_id == c["id"]) or (bool(c.get("auto")) and autodial.AUTO.running)
         by = c["by_status"]
-        called = c["total"] - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES)
+        settled, called = c["total"] - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES), counts["reached"]
         not_connected = sum(by.get(k, 0) for k in NOT_CONNECTED_STATUSES)
         hung_up = sum(by.get(k, 0) for k in HUNG_UP_STATUSES)
         agent_rs, line_rs = costs.get(c["id"], [0.0, 0.0])
         rows.append({
             "id": c["id"], "name": c["name"], "call_type": c["call_type"], "auto": bool(c.get("auto")),
             "created_at": c["created_at"], "last_call_at": c.get("last_call_at"),
-            "status": _status(c, to_call, running),
+            "status": _status(c, counts, running),
+            "new_left": counts["new_left"], "callbacks_left": to_call - counts["new_left"],
             "model": s.get("model") or "", "agent": AGENT_LABELS.get(s.get("model") or "", s.get("model") or ""),
             "voice": s.get("voice") or "",
             "contacts": c["total"], "called": called, "to_call": to_call,
             # A call in progress is called but has no result yet: it is in none of these three.
-            "connected": max(0, called - not_connected - hung_up - by.get("calling", 0)),
+            "connected": max(0, settled - not_connected - hung_up - by.get("calling", 0)),
             "not_connected": not_connected, "hung_up": hung_up,
             "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2), "cost_rs": round(agent_rs + line_rs, 2),
             "start_at": c.get("start_at"), "start_note": c.get("start_note"),
