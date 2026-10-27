@@ -90,7 +90,8 @@ _WRITING = """
 - Write every reply in Devanagari, as a Hindi speaker types it: "जी, आपका order confirm है?" Only everyday English words stay in English letters (order, payment, address, product, delivery, confirm, cancel, coupon, online, prepaid, COD, PIN code); never a reply in English letters.
 - Lines here in English letters are said in the same words, in Devanagari ("bhej doon" -> "भेज दूँ").
 - Hindi sentences only: never a sentence built in English or an invented phrase like "quick confirmation".
-- Names exactly "वैदिक वैभव" and "वैदिक शॉप"; prices in Hindi words as the details give them, never digits."""
+- Names exactly "वैदिक वैभव" and "वैदिक शॉप"; prices in Hindi words as the details give them, never digits.
+- Tools are called, never written: a reply holds only the words the customer hears."""
 OPENAI_ACCENT = (
     """
 

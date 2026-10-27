@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from . import autodial, campaign, db, usage
+from . import autodial, campaign, db, sales, usage
 from .call_types import CALL_TYPES
 from .config import AGENT_LABELS, DIAL_ONLY_MY_NUMBER
 from .live_bridge import live_snapshot
@@ -163,6 +163,7 @@ async def overview_today() -> dict:
         "call_later": sum(1 for r in last if outcome(r) == "call_later"),
         "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2),
         "calls": sum(1 for r in rows if r["channel"] == "plivo"),   # phone calls placed today
+        "week_sales": sales.week_sales(),   # store orders after a talk with the agent, last 7 days
     }
 
 
@@ -266,6 +267,10 @@ async def campaign_stats(campaign_id: int) -> dict:
         "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2), "cost_rs": round(agent_rs + line_rs, 2),
         "calls": len(calls), "series": series,
         "outcomes": [{"key": k, "n": by.get(k, 0)} for k in dict.fromkeys(keys)],
+        # Owner, 26 Oct 2026: what the calls really sold (sales.py). A selling campaign: the store orders after its
+        # calls; an order confirmation campaign: what became of the orders it called about.
+        "sales": sales.campaign_sales(campaign_id, agent_rs + line_rs) if c["call_type"] != "order_confirmation" else None,
+        "order_outcomes": sales.confirmation_outcomes(campaign_id) if c["call_type"] == "order_confirmation" else None,
     }
 
 

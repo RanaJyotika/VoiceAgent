@@ -968,6 +968,10 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
         to_number = normalise_phone(PHONE_NUMBER)
     if not is_valid_phone(to_number):
         raise HTTPException(400, "No valid phone number. Type a 10-digit mobile number in the box.")
+    # The Plivo account calls India only. Owner, 26 Oct 2026: a "+81..." row (Japan) was refused as "barred" and paused
+    # the whole campaign; a 400 is that row's problem, so the campaign skips it and goes on.
+    if not (to_number.startswith("+91") and len(to_number) == 13):
+        raise HTTPException(400, f"Not an Indian mobile number ({to_number}): only +91 numbers with 10 digits can be called.")
 
     token = uuid.uuid4().hex[:16]
     base = public_base_url()
@@ -985,6 +989,8 @@ async def place_call(contact: dict, voice: str = GEMINI_VOICE, model: str = "", 
         r = await client.post(f"{PLIVO_API}/{PLIVO_AUTH_ID}/Call/", json=payload, auth=_auth())
     if r.status_code >= 300:
         log.error("plivo dial failed %s %s", r.status_code, r.text[:500])
+        if "barred" in r.text.lower():   # this number's region, not the account: skip the row, not the campaign
+            raise HTTPException(400, f"Plivo does not call this number's region ({to_number}).")
         raise HTTPException(502, f"Plivo refused the call: {r.text[:300]}")
 
     db.mark_calling(contact["id"])

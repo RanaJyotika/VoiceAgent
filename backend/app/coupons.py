@@ -217,11 +217,17 @@ def offer_for(contact: dict | None) -> dict | None:
     coupon), and never to a customer who already has this code. Shape: {title, code, max_discount, valid_until, details}."""
     if not contact:
         return None
-    from .call_types import call_type_for, whatsapp_offer   # here, not at the top: the call types read this module
+    from .call_types import call_type_for, offers_of, whatsapp_offer   # here, not at the top: the call types read this module
     if not getattr(call_type_for(contact), "offers_coupon", False):
         return None
     campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
-    coupon = whatsapp_offer((campaign or {}).get("facts") or {})
+    facts = (campaign or {}).get("facts") or {}
+    coupon = whatsapp_offer(facts)
+    if not coupon and not offers_of(facts):
+        # Owner, 26 Oct 2026: a campaign with no offer of its own (the 26 Oct cart lists) still shares the live coupon
+        # marked for calls on the Coupons page, with every customer who picked up, "not interested" too. A campaign
+        # that has offers but its WhatsApp switch off stays off.
+        coupon = _as_offer(call_coupon())
     if not coupon:
         return None
     from . import messaging   # here: messaging reads this module
@@ -230,15 +236,46 @@ def offer_for(contact: dict | None) -> dict | None:
     return coupon
 
 
+def _as_offer(c: dict | None) -> dict | None:
+    """A Coupons page coupon in a campaign offer's shape (call_types.offers_of), as the cart call and its message read it."""
+    if not c:
+        return None
+    return {"title": c["description"] or c["offer_text"], "code": c["code"].upper(), "max_discount": c["discount"],
+            "valid_until": c["valid_until"], "details": c["offer_text"]}
+
+
+def offer_by_code(contact: dict, code: str) -> dict | None:
+    """The offer a code stands for, in offer_for's shape: the campaign's own offer with that code, else the Coupons
+    page coupon. For a cart message already sent: the call names the discount it carried."""
+    from .call_types import offers_of   # here: the call types read this module
+    code = str(code or "").strip().upper()
+    if not code:
+        return None
+    campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
+    for o in offers_of((campaign or {}).get("facts") or {}):
+        if o["code"].upper() == code:
+            return {**o, "code": code}
+    return _as_offer(get_by_code(code))
+
+
 def attach(contact: dict) -> dict:
-    """The contact with "_coupon": the coupon its call may offer, or None. Fixed when the call is placed, so the prompt
-    and the call's checks agree on it. Never raises: a call never fails for a coupon."""
+    """The contact with "_coupon": the coupon its call may offer, or None; and, on a cart call, "_cart_sent": the cart
+    message this customer already has ({"id", "code"}), or None. Fixed when the call is placed, so the prompt and the
+    call's checks agree on it. Never raises: a call never fails for a coupon."""
     try:
         coupon = offer_for(contact)
     except Exception:  # noqa: BLE001
         log.exception("coupon lookup failed for contact %s; no offer on this call", (contact or {}).get("id"))
         coupon = None
-    return {**(contact or {}), "_coupon": coupon}
+    sent = None
+    try:
+        from .call_types import call_type_for   # here: the call types read this module
+        if contact and call_type_for(contact).key == "abandoned_cart":
+            from . import messaging   # here: messaging reads this module
+            sent = messaging.sent_cart_message(contact)
+    except Exception:  # noqa: BLE001
+        log.exception("cart message lookup failed for contact %s", (contact or {}).get("id"))
+    return {**(contact or {}), "_coupon": coupon, "_cart_sent": sent}
 
 
 # --- checking and saving ----------------------------------------------------------------------------

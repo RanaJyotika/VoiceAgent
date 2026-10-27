@@ -54,6 +54,19 @@ export type CallDetail = Partial<Omit<LiveCall, "status" | "lines">> & {
   drive_link?: string; // the recording, both sides in one MP3, on Google Drive (drive_sync.py)
   /** What the call was about: the order or cart and its products, or a one-off call's reason. */
   subject?: CallSubject | null;
+  /** Store orders placed within a week of this call by the same phone number (sales.py). */
+  orders?: CallOrder[];
+};
+
+export type CallOrder = {
+  order_name: string;
+  placed_at: string;
+  amount: number | null;
+  payment: string;
+  product: string;
+  talked: number; // 1: the customer talked with the agent before ordering
+  hours_after: number;
+  bucket: string | null; // the store's outcome: New, In Transit, Delivered, Cancellation, NDR & RTO...
 };
 
 export type CallSubject = {
@@ -453,6 +466,7 @@ export type StoreStatus = {
   last_check: string;
   since: string;
   error: string;
+  campaign_id: number | null; // the Store orders campaign the confirmation calls go into
 };
 
 /** /api/store/skip: the "don't call orders that are…" switches. */

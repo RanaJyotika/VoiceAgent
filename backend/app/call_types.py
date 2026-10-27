@@ -759,13 +759,25 @@ def cart_help_line(voice: str) -> str:
     return "kya issue aa raha tha?"
 
 
-def cart_link_line(voice: str) -> str:
-    return "ji. agar aap order complete karna chahein, toh link WhatsApp par bhej doon?"
+def cart_link_line(voice: str, sent: dict | None = None) -> str:
+    """After helping: the link, if they want it. sent: the message is on their WhatsApp already, so ask if they want it."""
+    return f"ji. {CART_WANT_QUESTION}" if sent else "ji. agar aap order complete karna chahein, toh link WhatsApp par bhej doon?"
 
 
-def cart_link_close(voice: str) -> str:
+def cart_sent_close(sent: dict | None, cod: bool = False) -> str:
+    """Owner, 26 Oct 2026: every cart customer gets the message once, after their first call. From the second call on
+    they are reminded of it in these words, never told it goes now. "WhatsApp par bhej" keeps live_bridge's
+    promised_on_whatsapp seeing the WhatsApp line (nothing new is sent: the customer has it)."""
+    what = "link aur coupon" if (sent or {}).get("code") else "link"
+    tail = "wahan se order kar lijiye, COD choose kar lijiyega" if cod else "wahan se order kar lijiye"
+    return f"ji, maine {what} aapke WhatsApp par bhej diya hai, {tail}. dhanyavaad ji."
+
+
+def cart_link_close(voice: str, sent: dict | None = None) -> str:
     """Their yes to the link: it goes on WhatsApp and the call ends. Owner's wording, 23 Oct 2026 ("send": live_bridge's
     _WA_PROMISE takes it as well as "bhej")."""
+    if sent:
+        return cart_sent_close(sent)
     return f"theek hai, main link aapke WhatsApp par send kar {forms(voice)['rahi']} hoon. dhanyavaad ji."
 
 
@@ -779,20 +791,40 @@ def cart_offer_line(coupon: dict, cod: bool = False) -> str:
     return ("ji, COD ho sakta hai. " if cod else "ji, ") + f"prepaid order par {gain}. aap prepaid order karna chahenge?"
 
 
-def cart_coupon_close(voice: str) -> str:
+def cart_coupon_close(voice: str, sent: dict | None = None) -> str:
     """Their yes to getting the coupon: it goes in the same WhatsApp message as the link."""
+    if sent:
+        return cart_sent_close(sent)
     return f"ji, coupon aur link WhatsApp par bhej {forms(voice)['rahi']} hoon. dhanyavaad ji."
 
 
-def cart_cod_close(voice: str) -> str:
+def cart_cod_close(voice: str, sent: dict | None = None) -> str:
     """They keep cash on delivery: no second pitch, the link goes on WhatsApp and the call ends."""
+    if sent:
+        return cart_sent_close(sent, cod=True)
     return f"theek hai ji, link WhatsApp par bhej {forms(voice)['rahi']} hoon. COD choose kar lijiyega. dhanyavaad ji."
 
 
-def cart_price_close(voice: str) -> str:
+def cart_price_close(voice: str, sent: dict | None = None) -> str:
     """"Price zyada hai": the offer (the campaign's coupon, when it has one) and the link go on WhatsApp; the call ends."""
+    if sent:
+        return cart_sent_close(sent)
     return (f"ji, abhi agar koi applicable offer hua toh main WhatsApp par share kar {forms(voice)['deti']} hoon. "
             "aap check kar lijiyega. dhanyavaad ji.")
+
+
+def cart_sent(contact: dict | None) -> dict | None:
+    """The cart message this customer already has ({"id", "code"}), as attached when the call was placed
+    (coupons.attach), else looked up now. None on any trouble: the call then speaks as on a first call."""
+    contact = contact or {}
+    if "_cart_sent" in contact:
+        return contact["_cart_sent"]
+    try:
+        from .messaging import sent_cart_message   # here, not at the top: messaging reads the call types
+        return sent_cart_message(contact)
+    except Exception:
+        log.exception("cart message lookup failed for contact %s", contact.get("id"))
+        return None
 
 
 # Words that only sell, at the start of a catalogue title, and number words said better as digits ("7 Mukhi").
@@ -832,7 +864,14 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     answers = str((facts or {}).get("answers") or "").strip()
     # The cart's own link goes into the WhatsApp message only; never read out.
     other = _block("Other details from the sheet:", _other_details(contact, {"cart_url"}))
-    coupon = call_coupon(contact)
+    # Owner, 26 Oct 2026: from the second call on, the cart message (sent after the first call, picked up or not) is on
+    # their WhatsApp already: the lines remind them of it, and the offer is the coupon that message carried.
+    sent = cart_sent(contact)
+    if sent:
+        from .coupons import offer_by_code   # here, not at the top: coupons reads this module
+        coupon = offer_by_code(contact, sent["code"]) if sent["code"] else None
+    else:
+        coupon = call_coupon(contact)
     product = str(contact.get("product") or "").strip()
     short = spoken_product(product)
 
@@ -846,7 +885,7 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 - Cart value: {amount_line(contact, 'not on record (never name a price)')}
 - Notes: {contact.get('notes') or 'none'}
 - Answers to common questions: {answers or 'none'}
-{_offer_detail(coupon) if coupon else ""}{other}{_offers_block(facts or {})}"""
+{_offer_detail(coupon) if coupon else ""}{_sent_detail(sent) if sent else ""}{other}{_offers_block(facts or {})}"""
 
     replies_first = [
         (f'- "Nahi chahiye", "abhi nahi", "baad mein", bought it elsewhere: "{CART_NOT_NOW}" mark_outcome "not_interested" '
@@ -859,7 +898,9 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
         (f'- "Kaunsa product?": "{short} ji." The greeting named it: never name it again otherwise.' if short else
          '- "Kaunsa product?": none is on record; never name one. Ask what they were looking at.'),
         ('- A question about the product (price, size, what it is, delivery): answer it in one short sentence from CART '
-         f'DETAILS or product_info, then "{cart_link_line(voice)}"'),
+         f'DETAILS or product_info, then "{cart_link_line(voice, sent)}"'),
+        *([(f'- The WhatsApp message did not come ("nahi aaya", "nahi mila"): "ji, main abhi dobara bhej '
+            f'{forms(voice)["deti"]} hoon." Then carry on.')] if sent else []),
         (f'- "{BUSINESS_NAME} se dekha tha" or "{STORE_NAME} kya hai?": "ji, {STORE_NAME} {BUSINESS_NAME} ka hi online store '
          'hai." Then go on.'),
         REPLY_WRONG,
@@ -869,35 +910,50 @@ def _cart_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 
     # Owner, 22 Oct 2026: the cart call in the owner's words. 23 Oct: the product in the greeting; a bare "nahi" is "no
     # problem" (asked what they meant); just looking gets the link for later; wanting it gets the prepaid offer once.
+    # 26 Oct: once the link is on their WhatsApp (a later call), just looking is asked whether they want it instead.
+    just_looking = (f'"{CART_WANT_QUESTION}" A yes: ORDERING. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.'
+                    if sent else
+                    f'"{CART_LATER_QUESTION}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. '
+                    f'A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.')
     flow = f"""THE USUAL ORDER
 1. The greeting has been said for you: "{_cart_greeting(contact, voice)}" Wait for their answer.
 2. Their answer, or their answer to "{CART_WANT_QUESTION}":
    - A bare "nahi" / "koi issue nahi" to the greeting (no problem; not a no to the product): "{CART_WANT_QUESTION}" Then go by their answer, below. A "nahi" to that question is a no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
-   - Just looking ("bas dekh raha tha", "aise hi dekha tha"): "{CART_LATER_QUESTION}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
+   - Just looking ("bas dekh raha tha", "aise hi dekha tha"): {just_looking}
    - They want it ("haan, lena tha", "le lenge", "order karna hai"): ORDERING. "Nahi, order karna hai" is the same: whatever follows a "nahi" decides.
-   - "Haan" (there was an issue), a vague problem, or a doubt: "{cart_help_line(voice)}" Then answer what they say in one or two short sentences, and "{cart_link_line(voice)}" A yes: "{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
+   - "Haan" (there was an issue), a vague problem, or a doubt: "{cart_help_line(voice)}" Then answer what they say in one or two short sentences, and "{cart_link_line(voice, sent)}" A yes: {"ORDERING" if sent else f'"{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call'}. A no: "{CART_NOT_NOW}" mark_outcome "not_interested", end_call.
 Never take an order, an address or a payment on the call, never read a link or a code out, and never call it a "payment link".
 End the call only with one of the closing lines in this prompt, word for word; never with "namaste". Never end_call while a question of yours is unanswered."""
 
     if coupon:
         ordering = f"""ORDERING (they want it; the prepaid offer is made once in a call)
 a. "{cart_offer_line(coupon)}" If they asked for COD ("lena hai, but COD chahiye"): "{cart_offer_line(coupon, cod=True)}" If the offer was already made: c.
-b. A yes to prepaid ("haan", "prepaid kar lenge"), or they ask for the code: "{CART_SEND_COUPON}" A yes: "{cart_coupon_close(voice)}" mark_outcome "wants_to_order" (notes "chose prepaid" only if they said prepaid in words; asking for the code is not that), end_call.
-c. Still COD, or a no to prepaid or to the coupon: "{cart_cod_close(voice)}" mark_outcome "wants_to_order" with notes "wants COD", end_call. Never repeat the offer."""
+b. A yes to prepaid ("haan", "prepaid kar lenge"), or they ask for the code: {f'"{cart_coupon_close(voice, sent)}"' if sent else f'"{CART_SEND_COUPON}" A yes: "{cart_coupon_close(voice)}"'} mark_outcome "wants_to_order" (notes "chose prepaid" only if they said prepaid in words; asking for the code is not that), end_call.
+c. Still COD, or a no to prepaid or to the coupon: "{cart_cod_close(voice, sent)}" mark_outcome "wants_to_order" with notes "wants COD", end_call. Never repeat the offer."""
     else:
         ordering = f"""ORDERING (they want it; there is no offer: never name a discount or a code)
-"{cart_link_close(voice)}" mark_outcome "wants_to_order", end_call. They asked for COD: "ji, COD ho sakta hai." then "{cart_cod_close(voice)}" mark_outcome "wants_to_order" with notes "wants COD", end_call."""
+"{cart_link_close(voice, sent)}" mark_outcome "wants_to_order", end_call. They asked for COD: "ji, COD ho sakta hai." then "{cart_cod_close(voice, sent)}" mark_outcome "wants_to_order" with notes "wants COD", end_call."""
 
     price = f"""PRICE
-"Price zyada hai", "mehenga hai", or a discount asked for, at any point: "{cart_price_close(voice)}" mark_outcome "wants_coupon" with not_interested_reason in their words, end_call. Never name a discount or a code yourself."""
+"Price zyada hai", "mehenga hai", or a discount asked for, at any point: "{cart_price_close(voice, sent)}" mark_outcome "wants_coupon" with not_interested_reason in their words, end_call. Never name a discount or a code yourself."""
 
     rules = [('- You cannot place the order or take payment yourself: the link (and any offer) goes on WhatsApp by itself '
-              'after the lines above. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.')]
+              'after the lines above. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.')
+             if not sent else
+             ('- You cannot place the order or take payment yourself: the link is on their WhatsApp already. Never say it '
+              'goes now. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.')]
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
                    details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
                    sections=[ordering, price], rules=rules,
                    not_mine='not the person named, or "maine kuch cart mein nahi dala"', topic="aapke order")
+
+
+def _sent_detail(sent: dict) -> str:
+    """The CART DETAILS line of a later call: the message they already have."""
+    what = "the cart link and the coupon" if sent.get("code") else "the cart link"
+    return (f"- WhatsApp: {what} went to them on WhatsApp after an earlier call. Remind them with the lines here; never "
+            "offer to send it.\n")
 
 
 def _cart_greeting(contact: dict, voice: str) -> str:

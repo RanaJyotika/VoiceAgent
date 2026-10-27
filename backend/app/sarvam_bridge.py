@@ -119,6 +119,14 @@ _CLIPS = _Clips(DATA_DIR / "voice_clips")
 # A sentence ends at a danda, "?" or "!", or at a full stop with a space after it ("2." may be "2.5" in the making).
 _SENTENCE_END = re.compile(r"[।?!]|\.(?=\s)")
 _MARKUP = re.compile(r"[*#`_~>\[\]]|[\U0001F300-\U0001FAFF☀-➿]")
+# Owner, 26 Oct 2026 (calls 532, 3630, 5467, 5589, 5704): after its goodbye the model sometimes wrote the prompt's steps
+# as words ('markoutcome "notinterested" with notinterestedreason ..., endcall. Wait, I need to call the tools
+# properly.</think') and Bulbul said them. From the first such word, the rest of that reply is neither said nor written
+# down; the tools themselves still run. Checked before _MARKUP takes the underscores out.
+_TOOL_TALK = re.compile(
+    r"\b(?:mark[\s_]?outcome|end[\s_]?call|record[\s_]?address|product[\s_]?info)\b|\b[a-z]+_[a-z_]+\b"
+    r"|\b(?:not_?interested|wants_?to_?order|already_?ordered|wants_?coupon|needs_?help)\b|</?think|think>"
+    r"|\b(?:call|use) the (?:tools?|functions?)\b|\b(?:tool|function) calls?\b", re.IGNORECASE)
 # Words Bulbul says badly in English letters inside a Hindi sentence, as it is given them instead (owner, 22 Oct 2026:
 # "WhatsApp" was mispronounced). Only the voice gets these; the transcript and the code's checks keep the original.
 # Owner, 22 Oct 2026 (call 521): व्हाट्सऐप still sounded wrong, and so did "coupon" and "code"; the agent's own Devanagari
@@ -485,7 +493,21 @@ class SarvamSession:
         hint, self.next_hint = self.next_hint, ""
         if (about := about_hint(words)):
             log.info("%s: company question likely; the matching ABOUT US lines go with this reply", self.label)
-        self._start_reply(extra=hint + about)
+        self._start_reply(extra=hint + about + self._offer_made_note(words))
+
+    def _offer_made_note(self, words: str) -> str:
+        """Owner, 26 Oct 2026 (call 5974): the prepaid offer was made three times, twice after "I need cash on delivery",
+        though the prompt says it is made once. Once the code sees it was said, every reply is told so."""
+        from .live_bridge import _CHOSE_COD, offers_coupon   # here: live_bridge imports this module
+        said = [m.get("content") or "" for m in self.history if m.get("role") == "assistant"]
+        if not any(offers_coupon(t) for t in said):
+            return ""
+        cod = bool(_CHOSE_COD.search(words or ""))
+        log.info("%s: the prepaid offer was made already%s; the reply is told not to make it again", self.label,
+                 " and the customer chose cash on delivery" if cod else "")
+        return ("\n\nNOTE FROM THE CODE: the prepaid offer was already made in this call: never make it again, in any words."
+                + (" The customer chose cash on delivery: COD is fine; reply as the prompt says for keeping cash on delivery."
+                   if cod else " Anything but a clear yes to prepaid means they keep cash on delivery, as the prompt says."))
 
     # ---- the reply ----
 
@@ -560,6 +582,19 @@ class SarvamSession:
         if self.tools:
             payload["tools"], payload["tool_choice"] = self.tools, "auto"
         buf, parts, usage, first = "", {}, None, 0.0
+        muted = False   # the reply began writing its tool steps as words (_TOOL_TALK): nothing more of it is said
+
+        async def say(piece: str) -> None:
+            nonlocal muted
+            if muted:
+                return
+            if (m := _TOOL_TALK.search(piece)):
+                muted = True
+                log.warning("%s: the reply wrote its tool steps as words; not said from: %s", self.label, piece[m.start():][:200])
+                piece = piece[:m.start()]
+            if piece.strip():
+                await self._speak(piece)
+
         async with self._http.stream("POST", CHAT_URL, json=payload, headers=self._headers) as r:
             if r.status_code != 200:
                 body = (await r.aread()).decode(errors="replace")[:300]
@@ -582,7 +617,7 @@ class SarvamSession:
                         while (m := _SENTENCE_END.search(buf)):
                             if not first:
                                 first = time.monotonic()
-                            await self._speak(buf[:m.end()])
+                            await say(buf[:m.end()])
                             buf = buf[m.end():]
                     for tc in delta.get("tool_calls") or []:
                         slot = parts.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
@@ -597,7 +632,7 @@ class SarvamSession:
                             await self._speak(random.choice(_HELPER[self._gender]))
         if buf.strip():
             first = first or time.monotonic()
-            await self._speak(buf)
+            await say(buf)
         if first:
             log.info("%s: first sentence written %.0f ms after the chat call began", self.label, (first - started) * 1000)
         if usage:

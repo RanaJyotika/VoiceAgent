@@ -10,12 +10,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import catalog, coupons, db, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, shopify, store_orders
+from . import catalog, coupons, db, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, sales, shopify, store_orders
 from .autodial import resume_after_restart, router as autodial_router
 from .campaign import CAMPAIGN, clean_settings, router as campaign_router, schedule_worker as campaign_schedules
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
                      ROOT, SARVAM_VOICES, STALE_PAGE, VOICES)
-from .contacts import (build_calls_export, build_results, filter_calls, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
+from .contacts import (SHEET_TYPES, build_calls_export, build_results, filter_calls, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
 from .live_bridge import live_call, live_snapshot, run_call
 from .intake import router as intake_router
@@ -59,6 +59,7 @@ orders_view.init_tables()
 store_orders.init_tables()  # batches of automatic calling: what each one reached and cost
 coupons.init_tables()       # coupon codes; DIWALIDILSE10 is added the first time
 messaging.init_tables()     # the outbox for coupon messages
+sales.init_tables()         # store orders matched back to the calls before them
 app.include_router(plivo_router)
 app.include_router(campaign_router)
 app.include_router(autodial_router)
@@ -71,6 +72,7 @@ app.include_router(catalog.router)
 app.include_router(mongo_sync.router)
 app.include_router(drive_sync.router)
 app.include_router(store_orders.router)
+app.include_router(sales.router)
 app.include_router(orders_view.router)
 app.include_router(overview_router)
 app.include_router(store_import_router)
@@ -97,6 +99,7 @@ async def _start_monitor() -> None:
     asyncio.create_task(mongo_sync.worker())   # every finished call, copied to MongoDB
     asyncio.create_task(drive_sync.worker())   # ...and its recording, both sides as one MP3, to Google Drive
     asyncio.create_task(store_orders.worker())   # new store orders from the main database become confirmation calls
+    asyncio.create_task(sales.worker())   # ...and are matched back to the selling calls before them
     asyncio.create_task(messaging.worker())   # coupon messages, once a message service is set up
     asyncio.create_task(campaign_schedules())   # campaigns set to start at a time start then
     resume_after_restart()   # automatic calling always starts off; only the Switch on button starts it
@@ -241,12 +244,13 @@ async def contacts_single(body: dict) -> dict:
 
 
 def _read_sheet(file: UploadFile, content: bytes, camp: dict) -> dict:
-    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, "Upload an .xlsx file")
+    if not file.filename or not file.filename.lower().endswith(SHEET_TYPES):
+        raise HTTPException(400, "Upload an Excel (.xlsx) or CSV (.csv) file")
     try:
-        sheet = inspect_excel(content)
+        sheet = inspect_excel(content, file.filename)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"Could not read that file as Excel: {exc}")
+        kind = "CSV" if file.filename.lower().endswith(".csv") else "Excel"
+        raise HTTPException(400, f"Could not read that file as {kind}: {exc}")
     if not sheet["rows"]:
         raise HTTPException(400, "No rows found. Check the first row holds the column names, as in the template.")
     # Duplicates are judged within this campaign: the same customer may well be in two campaigns.
@@ -506,7 +510,8 @@ async def live_one(call_id: int) -> dict:
             "to": row.get("phone") or "", "seconds": round(row.get("duration_sec") or 0),
             "outcome": row.get("outcome"), "outcome_details": row.get("outcome_details") or {},
             "error": row.get("error"), "lines": readable.lines(row.get("transcript")),
-            "drive_link": row.get("drive_link") or ""}
+            "drive_link": row.get("drive_link") or "",
+            "orders": sales.call_orders(call_id)}   # store orders put down to this call (sales.py)
 
 
 @app.get("/api/stats")

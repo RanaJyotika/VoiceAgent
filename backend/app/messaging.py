@@ -375,13 +375,15 @@ def cart_values(contact: dict, offer: dict | None) -> dict[str, str]:
     return v
 
 
-def queue_cart_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo") -> int | None:
+def queue_cart_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo",
+                      again: bool = False) -> int | None:
     """Write the cart message (its link, and the coupon when there is one) for a customer told on the call it goes on
-    WhatsApp. offer: the campaign's WhatsApp coupon, or None."""
+    WhatsApp. offer: the campaign's WhatsApp coupon, or None. again: the customer said the first one never came, so
+    the same code goes once more (live_bridge allows it once)."""
     values = _with_path(cart_values(contact, offer), contact)
     body = "Hi " + "\n\n".join(values[k] for k in ("cart_line", "offer_line", "pay_line"))
     return _queue("cart_coupon", contact=contact, code=values["code"], body=body, values=values, call_id=call_id, to=to,
-                  channel=channel)
+                  channel=channel, again=again)
 
 
 def _with_path(values: dict, contact: dict | None = None) -> dict:
@@ -406,7 +408,7 @@ def queue_prepaid_coupon(*, contact: dict, offer: dict, call_id: int | None, to:
 
 
 def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call_id: int | None, to: str,
-           channel: str) -> int | None:
+           channel: str, again: bool = False) -> int | None:
     """The message written for the number the call rang (the owner's own in test mode), once per number and code."""
     test = channel != "plivo" or DIAL_ONLY_MY_NUMBER
     status, error = "queued", None
@@ -428,7 +430,7 @@ def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call
     if recipient and recipient in db.do_not_call_phones():
         log.info("coupon %s for contact %s not queued: %s asked not to be called", code, contact.get("id"), recipient)
         return None
-    if not test and code and is_valid_phone(recipient):   # a link with no coupon may go again
+    if not test and code and is_valid_phone(recipient) and not again:   # a link with no coupon may go again
         with db.connect() as conn:
             row = conn.execute(
                 f"SELECT id FROM messages WHERE test=0 AND to_phone=? AND coupon_code=? COLLATE NOCASE "
@@ -461,6 +463,26 @@ def cart_message_for(contact: dict) -> int | None:
             f"SELECT id FROM messages WHERE kind='cart_coupon' AND test=0 AND contact_id=? "
             f"AND status IN ({','.join('?' for _ in HAS_IT)}) ORDER BY id LIMIT 1", (contact["id"], *HAS_IT)).fetchone()
     return row[0] if row else None
+
+
+def sent_cart_message(contact: dict) -> dict | None:
+    """The cart message this customer already has, as {"id", "code"} ("" when it carried no coupon), or None. Owner, 26
+    Oct 2026: every cart customer gets it once, after their first call; a later call reminds them instead of sending."""
+    message_id = cart_message_for(contact)
+    if not message_id:
+        return None
+    with db.connect() as conn:
+        row = conn.execute("SELECT coupon_code FROM messages WHERE id=?", (message_id,)).fetchone()
+    return {"id": message_id, "code": str((row["coupon_code"] if row else "") or "").upper()}
+
+
+def cart_messages_sent(contact: dict) -> int:
+    """How many real cart messages this customer has had (the first one, and a resend if it never came)."""
+    if not contact.get("id"):
+        return 0
+    with db.connect() as conn:
+        return conn.execute(f"SELECT COUNT(*) FROM messages WHERE kind='cart_coupon' AND test=0 AND contact_id=? "
+                            f"AND status IN ({','.join('?' for _ in HAS_IT)})", (contact["id"], *HAS_IT)).fetchone()[0]
 
 
 def already_sent(phone: str, code: str) -> bool:

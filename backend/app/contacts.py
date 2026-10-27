@@ -1,8 +1,9 @@
-"""Excel import for contacts. Headers are matched to CONTACT_COLUMNS (case-insensitive, with
+"""Excel and CSV import for contacts. Headers are matched to CONTACT_COLUMNS (case-insensitive, with
 aliases); every other column is kept as an extra detail of the contact, never dropped."""
+import csv
 import re
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
@@ -110,12 +111,38 @@ def _cell_text(v) -> str:
     return str(v).strip()
 
 
-def inspect_excel(content: bytes) -> dict:
-    """Read the sheet and say what is in it: the rows as contacts, which headers went to the fixed
-    columns, which were kept as extra details, and the sheet's own row number for each contact."""
+SHEET_TYPES = (".xlsx", ".xlsm", ".csv")
+
+
+def _csv_text(content: bytes) -> str:
+    """A CSV file's text: UTF-8 (with or without Excel's BOM), else Windows' own encoding, as Excel saves "CSV"."""
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("latin-1")
+
+
+def _sheet_rows(content: bytes, filename: str):
+    """The sheet's rows as tuples of cell values, header first: the first sheet of a workbook, or a CSV file
+    (owner, 26 Oct 2026: the customer lists usually come as CSV). A CSV's separator is found from the file itself:
+    comma, semicolon, tab or bar."""
+    if filename.lower().endswith(".csv"):
+        text = _csv_text(content)
+        try:
+            dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+        return (tuple(r) for r in csv.reader(StringIO(text), dialect))
     wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
+    return wb.active.iter_rows(values_only=True)
+
+
+def inspect_excel(content: bytes, filename: str = "") -> dict:
+    """Read the sheet (.xlsx or .csv) and say what is in it: the rows as contacts, which headers went to the fixed
+    columns, which were kept as extra details, and the sheet's own row number for each contact."""
+    rows_iter = _sheet_rows(content, filename)
     header = next(rows_iter, None)
     if not header:
         return {"rows": [], "columns": [], "extras": []}

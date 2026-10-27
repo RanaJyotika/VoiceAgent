@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { usePoll } from "@/hooks/use-poll";
 import { useSidePanel } from "@/hooks/use-side-panel";
 import type { CallDetail, CallSubject, LiveCall } from "@/lib/api";
-import { fmtClock, fmtOrder, fmtPhone } from "@/lib/format";
+import { fmtClock, fmtOrder, fmtPhone, fmtRs } from "@/lib/format";
 import { outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
 
@@ -151,6 +151,17 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
             )}
           </div>
         )}
+        {/* Owner, 26 Oct 2026: what the customer bought after this call, not only what they said on it. */}
+        {(data?.orders ?? []).map((o) => (
+          <div key={o.order_name} className="mt-2 flex items-start gap-1.5 rounded-md bg-good-soft px-2.5 py-1.5 text-[12.5px]">
+            <ShoppingBag className="mt-0.5 size-3.5 shrink-0 text-good" />
+            <span>
+              Ordered {fmtOrder(o.order_name)} {fmtAfter(o.hours_after)} after this call
+              {o.amount != null ? ` · ${fmtRs(o.amount)}` : ""} · {o.payment}
+              {o.bucket ? ` · ${o.bucket}` : ""}
+            </span>
+          </div>
+        ))}
       </header>
 
       {data?.subject && <Subject s={data.subject} />}
@@ -298,3 +309,6 @@ function Subject({ s }: { s: CallSubject }) {
     </details>
   );
 }
+
+/** 5 hours, 2 days: how long after the call an order came. */
+const fmtAfter = (hours: number) => (hours < 24 ? `${Math.max(1, Math.round(hours))} h` : `${Math.round(hours / 24)} d`);

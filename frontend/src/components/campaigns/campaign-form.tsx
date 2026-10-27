@@ -310,7 +310,7 @@ export function CampaignForm() {
   const tries = (n: number) => `${n} ${n === 1 ? "try" : "tries"}`;
 
   const audienceOptions: { key: Audience; icon: LucideIcon; title: string; text: string; off?: string }[] = [
-    { key: "upload", icon: FileSpreadsheet, title: "Upload the Excel sheet", text: "One row per customer" },
+    { key: "upload", icon: FileSpreadsheet, title: "Upload the customer sheet", text: "Excel or CSV, one row per customer" },
     {
       key: "store",
       icon: ShoppingBag,

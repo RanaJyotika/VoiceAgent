@@ -20,6 +20,7 @@ import { send, type CampaignRow, type CampaignState, type CampaignStatus, type C
 import { fmtInt, fmtOrder, fmtPct, fmtPhone, fmtRs, pct, sheetEmail } from "@/lib/format";
 import { complaintKind, outcomeOf } from "@/lib/outcomes";
 import { cn } from "@/lib/utils";
+import { OrderOutcomesCard, type OrderOutcomes } from "./order-outcomes";
 import { CALLBACK_STATUSES, CAMPAIGN_STATUS, fmtDay, leftTag, plural } from "./shared";
 
 /** /api/campaigns/{id}/stats: the Overview tab. Per contact, counted as on the Campaigns page. */
@@ -48,6 +49,28 @@ type Stats = {
   calls: number;
   series: { day: string; label: string; calls: number; connected: number }[];
   outcomes: { key: string; n: number }[];
+  /** A selling campaign: store orders placed within window_days of its calls (sales.py). */
+  sales: Sales | null;
+  /** An order confirmation campaign: what became of the orders it called about. */
+  order_outcomes: OrderOutcomes | null;
+};
+
+type Sales = {
+  window_days: number;
+  orders: number;
+  sales_rs: number;
+  talked_orders: number; // after a talk with the agent
+  talked_sales_rs: number;
+  cod: number;
+  cost_per_order_rs: number | null; // spend ÷ orders after a talk
+  talked: { customers: number; bought: number };
+  not_talked: { customers: number; bought: number }; // called, never talked: no answer, busy, hung up at once
+  delivered: number; // of the orders after a talk
+  cancelled: number;
+  returned: number;
+  open: number;
+  last_check: string;
+  error: string;
 };
 
 type Campaign = CampaignRow & { settings: Partial<RunSettings> | null };
@@ -399,6 +422,9 @@ function OverviewTab({ s }: { s: Stats | null }) {
         </div>
       </section>
 
+      {s?.sales && <SalesSection v={s.sales} />}
+      {s?.order_outcomes && <OrderOutcomesCard data={s.order_outcomes} />}
+
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="overflow-hidden">
           <div className="border-b px-4 py-3">
@@ -472,6 +498,52 @@ function OverviewTab({ s }: { s: Stats | null }) {
         </div>
       </Card>
     </div>
+  );
+}
+
+/** Owner, 26 Oct 2026: "Conversions" is what customers said on the call; this is what they bought. Orders are matched by
+ *  phone number. Some customers buy on their own, so the two groups are side by side: the difference is what the
+ *  calls added. */
+function SalesSection({ v }: { v: Sales }) {
+  const talkedRate = pct(v.talked.bought, v.talked.customers);
+  const quietRate = pct(v.not_talked.bought, v.not_talked.customers);
+  const quietOrders = v.orders - v.talked_orders;
+  const finished = [v.delivered && `${fmtInt(v.delivered)} delivered`, v.cancelled && `${fmtInt(v.cancelled)} cancelled`,
+    v.returned && `${fmtInt(v.returned)} returned`, v.open && `${fmtInt(v.open)} on the way`].filter(Boolean).join(" · ");
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[13px] font-medium text-muted-foreground">Real sales: store orders within {v.window_days} days of a call</h2>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Orders after a talk"
+          value={fmtInt(v.talked_orders)}
+          note={v.talked_orders ? `${fmtRs(v.talked_sales_rs)} · ${finished || "no outcome yet"}` : "Customers who talked with the agent, then ordered"}
+        />
+        <StatCard label="Real cost per order" value={v.cost_per_order_rs != null ? rs(v.cost_per_order_rs) : "—"} note="Spend ÷ orders after a talk" />
+        <StatCard
+          label="Bought after talking"
+          value={fmtPct(talkedRate)}
+          note={`${fmtInt(v.talked.bought)} of ${plural(v.talked.customers, "customer")} who talked with the agent`}
+        />
+        <StatCard
+          label="Bought without talking"
+          value={fmtPct(quietRate)}
+          note={`${fmtInt(v.not_talked.bought)} of ${plural(v.not_talked.customers, "customer")} called who never talked: what happens anyway`}
+        />
+      </div>
+      <p className="rounded-md bg-muted px-3 py-2.5 text-[13.5px]">
+        {talkedRate == null || quietRate == null
+          ? "Not enough calls yet to compare the two groups."
+          : talkedRate > quietRate
+            ? `Customers who talked with the agent bought more often: ${fmtPct(talkedRate)} against ${fmtPct(quietRate)} for those who never talked.`
+            : `Customers who talked with the agent did not buy more often: ${fmtPct(talkedRate)} against ${fmtPct(quietRate)} for those who never talked.`}{" "}
+        {quietOrders > 0 && `${plural(quietOrders, "order")} came from customers who were called but never talked; they are not counted as sales of the calls.`}{" "}
+        <span className="text-muted-foreground">
+          Matched by phone number: an order placed from another number is missed.
+          {v.error && ` The store's database could not be read: ${v.error}`}
+        </span>
+      </p>
+    </section>
   );
 }
 

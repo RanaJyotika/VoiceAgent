@@ -40,7 +40,7 @@ type Props = {
   onChanged: () => void;
   /** all: upload and add by hand (the campaign page); upload / manual: one of them (the wizard's Audience step). */
   show?: "all" | "upload" | "manual";
-  /** Said under "Upload the Excel sheet" in place of the column list. */
+  /** Said under "Upload the customer sheet" in place of the column list. */
   uploadNote?: React.ReactNode;
 };
 
@@ -181,16 +181,16 @@ export function ContactsCard({ camp, type, count, onChanged, show = "all", uploa
           )}
         >
           {reading ? <FileSpreadsheet className="size-6 animate-pulse text-brand" /> : <Upload className="size-6 text-muted-foreground" />}
-          <span className="font-medium">{reading ? `Reading ${file?.name}…` : "Upload the Excel sheet"}</span>
+          <span className="font-medium">{reading ? `Reading ${file?.name}…` : "Upload the customer sheet"}</span>
           <span className="max-w-[560px] text-[12.5px] text-muted-foreground">
-            .xlsx, or drop it here · you will see what is in it before anything is added
+            Excel (.xlsx) or CSV (.csv), or drop it here · you will see what is in it before anything is added
             {uploadNote
               ? null
               : type
                 ? ` · Columns: ${type.columns.map((col) => col.label + (col.required ? " *" : "")).join(", ")}. Any other column is kept too.`
                 : ""}
           </span>
-          <input ref={fileInput} type="file" accept=".xlsx,.xlsm" className="sr-only" onChange={(e) => e.target.files?.[0] && read(e.target.files[0])} />
+          <input ref={fileInput} type="file" accept=".xlsx,.xlsm,.csv,text/csv" className="sr-only" onChange={(e) => e.target.files?.[0] && read(e.target.files[0])} />
         </label>
       )}
       {show !== "manual" && !preview && uploadNote}

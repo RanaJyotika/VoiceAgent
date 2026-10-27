@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import math
 from datetime import datetime, timedelta, timezone
 
-from .config import DATA_DIR, DB_PATH, RECORDINGS_DIR, UPLOAD_DIR, USD_INR
+from .config import DATA_DIR, DB_PATH, DIAL_ONLY_MY_NUMBER, RECORDINGS_DIR, UPLOAD_DIR, USD_INR
 
 CONTACT_COLUMNS = [
     "order_id", "customer_name", "phone", "product", "quantity", "amount",
@@ -75,6 +75,7 @@ def init_db() -> None:
             "drive_file_id": "TEXT",    # the recording's copy on Google Drive (drive_sync.py)
             "drive_link": "TEXT",       # ...and its link, shown on the dashboard
             "drive_tries": "INTEGER DEFAULT 0",
+            "test_mode": "INTEGER DEFAULT 0",   # 1: placed in test mode, so it rang PHONE_NUMBER, not the customer
         })
         _add_columns(conn, "contacts", {
             "attempts": "INTEGER DEFAULT 0",   # phone calls placed to this contact so far
@@ -534,8 +535,8 @@ def latest_call_for_contact(contact_id: int) -> dict | None:
 def start_call(contact_id: int | None, channel: str) -> int:
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO calls (contact_id, channel, started_at) VALUES (?, ?, ?)",
-            (contact_id, channel, now_iso()),
+            "INSERT INTO calls (contact_id, channel, started_at, test_mode) VALUES (?, ?, ?, ?)",
+            (contact_id, channel, now_iso(), int(channel == "plivo" and DIAL_ONLY_MY_NUMBER)),
         )
         return cur.lastrowid
 

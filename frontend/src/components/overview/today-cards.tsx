@@ -16,6 +16,8 @@ type Today = {
   agent_rs: number;
   line_rs: number;
   calls: number;
+  /** Store orders placed within a week of a talk with the agent (sales.py), over the last 7 days. */
+  week_sales?: { orders: number; sales_rs: number; window_days: number }; // missing from a server not restarted yet
 };
 
 /** The Overview's last row: today only, whatever period the filters above show. */
@@ -50,6 +52,15 @@ export function TodayCards() {
           note={d ? `+ ${rs(d.line_rs)} phone line · ${rs(d.agent_rs + d.line_rs)} in all` : ""}
         />
       </div>
+      {d?.week_sales && (
+        <p className="mt-3 rounded-md bg-muted px-3 py-2.5 text-[13.5px]">
+          <span className="font-medium">Sales after calls, last 7 days:</span>{" "}
+          {d.week_sales.orders
+            ? `${plural(d.week_sales.orders, "store order")} worth ${fmtRs(d.week_sales.sales_rs)}, placed within ${d.week_sales.window_days} days of talking with the agent.`
+            : `no store order yet within ${d.week_sales.window_days} days of a talk with the agent.`}{" "}
+          <span className="text-muted-foreground">Matched by phone number; each campaign shows how this compares with customers who never talked.</span>
+        </p>
+      )}
     </section>
   );
 }

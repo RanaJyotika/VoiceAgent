@@ -355,8 +355,9 @@ _BULBUL_MALE = {
     "ratan": "ratan_hi_customer_expressive", "aryaman": "aryaman_hi_ads", "sunny": "sunny_hi_ads",
     "mukul": "mukul_hi_ads", "vaibhav": "vaibhav_hi_social", "rehan": "rehan_hi_social", "chirag": "chirag_hi_social",
 }
-# Gauri's (female) and Arjun's (male) voice: a name above, or any full persona id. Owner picked Priya (13 Oct 2026).
-SARVAM_VOICE_FEMALE = os.getenv("SARVAM_VOICE_FEMALE", "priya").strip().lower()
+# Gauri's (female) and Arjun's (male) voice: a name above, or any full persona id. Owner picked Priya (13 Oct 2026),
+# then Aparna (26 Oct 2026): Priya's only v4 style is "recovery", and it sounded harsh and pushy on sales calls.
+SARVAM_VOICE_FEMALE = os.getenv("SARVAM_VOICE_FEMALE", "aparna").strip().lower()
 SARVAM_VOICE_MALE = os.getenv("SARVAM_VOICE_MALE", "shubh").strip().lower()
 for _own, _table in ((SARVAM_VOICE_FEMALE, _BULBUL_FEMALE), (SARVAM_VOICE_MALE, _BULBUL_MALE)):
     if "_" in _own:   # a persona id: offered under its name
@@ -393,8 +394,9 @@ def gemini_voice(voice: str) -> str:
     return next(n for n, g in VOICES.items() if g == gender and n not in SARVAM_VOICES)
 
 
-# 0.5 to 2.0. At 1.0 Priya and Varun sounded slow, as if reading a script (owner, 13 Oct 2026).
-SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.15"))
+# 0.5 to 2.0. At 1.0 Priya and Varun sounded slow, as if reading a script (owner, 13 Oct 2026, Bulbul v3); on v4 the
+# 1.15 that fixed it sounded rushed, as if pushing the customer to buy (owner, 26 Oct 2026), so back to Bulbul's own speed.
+SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 # Rupees, pay-as-you-go, from sarvam.ai/api-pricing (21 Oct 2026): Sarvam 105B per million tokens, Saaras
 # Rs 29.40 an hour of audio, Bulbul v4 Flash Rs 20 per 10,000 characters (v3, still used for Malayalam and
 # Odia, is Rs 30). Held as USD per million units, like the other agents.

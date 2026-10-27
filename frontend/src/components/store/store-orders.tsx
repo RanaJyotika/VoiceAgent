@@ -14,6 +14,7 @@ import { getJson, send, type AutoStatus, type OrdersPage, type OrderQuota, type 
 import { fmtClock, fmtInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { fitVoice } from "@/lib/voices";
+import { OrderOutcomesCard, type OrderOutcomes } from "@/components/campaigns/order-outcomes";
 import { BatchesCard } from "./batches-card";
 import { OrderPanel } from "./order-panel";
 import { Items, TagChip, quotaText, rupees, toneOf, topTags, when } from "./shared";
@@ -102,6 +103,8 @@ export function StoreOrders() {
   const orders = usePoll<OrdersPage>(`/api/orders?${qs}`, 10_000);
   const auto = usePoll<AutoStatus>("/api/auto", 5_000);
   const store = usePoll<StoreStatus>("/api/store", 30_000);
+  const cid = store.data?.campaign_id;
+  const outcomes = usePoll<OrderOutcomes>(cid ? `/api/sales/confirmations?campaign_id=${cid}` : null, 300_000);
   const d = orders.data;
   const c = d?.counts ?? {};
 
@@ -386,6 +389,7 @@ export function StoreOrders() {
         </Card>
 
         <BatchesCard />
+        {cid && <OrderOutcomesCard data={outcomes.data} />}
       </div>
 
       {open && (
