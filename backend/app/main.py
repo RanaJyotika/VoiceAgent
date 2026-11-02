@@ -12,8 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import catalog, coupons, db, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, sales, shopify, store_orders
 from .autodial import resume_after_restart, router as autodial_router
-from .campaign import CAMPAIGN, clean_settings, router as campaign_router, schedule_worker as campaign_schedules
-from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
+from .campaign import clean_settings, is_running, running_ids, router as campaign_router, schedule_worker as campaign_schedules
+from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
                      ROOT, SARVAM_VOICES, STALE_PAGE, VOICES)
 from .contacts import (SHEET_TYPES, build_calls_export, build_results, filter_calls, build_template, call_type_named, check_rows, inspect_excel, is_valid_phone,
                        missing_columns, normalise_phone)
@@ -23,7 +23,7 @@ from .overview import router as overview_router
 from .store_import import router as store_import_router
 from .usage import router as usage_router
 from .plivo_bridge import router as plivo_router
-from .call_types import CALL_TYPES, CUSTOM_CALL, call_reason, call_type_for, get_prompt, with_reason
+from .call_types import CALL_TYPES, CUSTOM_CALL, GOAL_KEY, call_reason, call_type_for, get_prompt, with_reason
 from .prompts import LANGUAGES, with_language
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -119,7 +119,9 @@ async def get_config() -> dict:
     # Only OFFERED_MODELS (config.py). A browser that remembered another model falls back to the first.
     return {"model": OFFERED_MODELS[0], "voice": GEMINI_VOICE, "voices": VOICES, "sarvam_voices": SARVAM_VOICES,
             "languages": LANGUAGES,
-            "models": OFFERED_MODELS, "model_labels": AGENT_LABELS, "build": PAGE_BUILD}
+            "models": OFFERED_MODELS, "model_labels": AGENT_LABELS, "build": PAGE_BUILD,
+            # The most calls at once a campaign may run (.env MAX_CONCURRENT_CALLS): the forms' "Calls at once" limit.
+            "max_concurrent_allowed": MAX_CONCURRENT_CALLS}
 
 
 # --- call types and campaigns ----------------------------------------------------------------------
@@ -149,6 +151,8 @@ def _clean_campaign(body: dict, call_type_key: str) -> dict:
     given = body.get("facts") or {}
     # The offers list (JSON) may run longer than one written detail.
     facts = {f.key: str(given.get(f.key) or "").strip()[:8000 if f.key == "offers" else 2000] for f in ct.facts}
+    if goal := str(given.get(GOAL_KEY) or "").strip()[:1000]:
+        facts[GOAL_KEY] = goal
     missing = [f.label for f in ct.facts if f.required and not facts[f.key]]
     if missing and not body.get("draft"):
         raise HTTPException(400, "Missing: " + ", ".join(missing))
@@ -162,7 +166,7 @@ def _save_settings(campaign_id: int, body: dict) -> None:
     raw = body.get("settings")
     if not isinstance(raw, dict):
         return
-    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+    if is_running(campaign_id):
         raise HTTPException(400, "Stop this campaign before changing how it calls.")
     s = clean_settings(raw, campaign_id)
     db.update_campaign(campaign_id, settings={k: v for k, v in asdict(s).items() if k != "campaign_id"})
@@ -170,10 +174,10 @@ def _save_settings(campaign_id: int, body: dict) -> None:
 
 @app.get("/api/campaigns")
 async def campaigns() -> list[dict]:
-    running = CAMPAIGN.settings.campaign_id if CAMPAIGN.running else None
+    running = set(running_ids())
     out = db.list_campaigns()
     for c in out:
-        c["running"] = c["id"] == running
+        c["running"] = c["id"] in running
         ct = CALL_TYPES.get(c["call_type"])
         c["call_type_name"] = ct.name if ct else c["call_type"]
     return out
@@ -207,7 +211,7 @@ async def edit_campaign(campaign_id: int, body: dict) -> dict:
 @app.delete("/api/campaigns/{campaign_id}")
 async def remove_campaign(campaign_id: int) -> dict:
     _campaign_or_404(campaign_id)
-    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+    if is_running(campaign_id):
         raise HTTPException(400, "Stop this campaign before deleting it.")
     db.delete_campaign(campaign_id)
     return {"ok": True}
@@ -322,7 +326,7 @@ async def add_contact(campaign_id: int, row: dict) -> dict:
 @app.delete("/api/campaigns/{campaign_id}/contacts")
 async def delete_contacts(campaign_id: int) -> dict:
     _campaign_or_404(campaign_id)
-    if CAMPAIGN.running and CAMPAIGN.settings.campaign_id == campaign_id:
+    if is_running(campaign_id):
         raise HTTPException(400, "Stop this campaign before clearing its list.")
     db.clear_contacts(campaign_id)
     return {"ok": True}
@@ -498,13 +502,15 @@ async def live_one(call_id: int) -> dict:
     """One call for the side panel: the whole conversation so far while it is on, then what was saved when it ended,
     with what the call was about."""
     on = live_call(call_id)
+    tries = db.call_tries([call_id]).get(call_id, {"try": None, "max_tries": None})   # which try this was for the customer
     if on:
         # As the team reads it (readable.py): the call itself keeps the original words.
-        return {**on, "lines": readable.lines(on.get("lines")), "live": True, "subject": call_subject(on.get("contact_id"))}
+        return {**on, **tries, "lines": readable.lines(on.get("lines")), "live": True,
+                "subject": call_subject(on.get("contact_id"))}
     row = db.get_call(call_id)
     if not row:
         raise HTTPException(404, "No such call.")
-    return {"live": False, "call_id": call_id, "channel": row.get("channel"), "status": "ended",
+    return {**tries, "live": False, "call_id": call_id, "channel": row.get("channel"), "status": "ended",
             "subject": call_subject(row.get("contact_id")),
             "customer_name": row.get("customer_name") or "", "order_id": row.get("order_id") or "",
             "to": row.get("phone") or "", "seconds": round(row.get("duration_sec") or 0),

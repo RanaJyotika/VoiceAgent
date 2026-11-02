@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Download, ExternalLink, Headphones, Monitor, MessageSquare, Phone, Search, Send, Trash2 } from "lucide-react";
+import { TryBadge } from "@/components/calls/try-badge";
 import { CallPanel } from "@/components/overview/call-panel";
 import { StatCard } from "@/components/overview/stat-card";
 import { Badge } from "@/components/ui/badge";
@@ -269,7 +270,10 @@ export function CallsSummary() {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">{when(c.started_at)}</td>
                       <td className="px-4 py-3">
-                        <div className="font-medium">{c.customer_name || "—"}</div>
+                        <div className="flex items-center gap-2 font-medium">
+                          {c.customer_name || "—"}
+                          <TryBadge n={c.try} max={c.max_tries} />
+                        </div>
                         <div className="font-mono text-[12px] text-muted-foreground">
                           {[c.phone ? fmtPhone(c.phone) : "", fmtOrder(c.order_id)].filter(Boolean).join(" · ")}
                         </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ExternalLink, Headphones, PhoneOff, ShoppingBag, X } from "lucide-react";
+import { TryBadge } from "@/components/calls/try-badge";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { usePoll } from "@/hooks/use-poll";
@@ -127,6 +128,7 @@ export function CallPanel({ callId, summary, campaignName, onClose }: Props) {
           )}
           {stage && !ringing && <Badge tone={stage.tone}>{stage.label}</Badge>}
           {result && <Badge tone={result.tone}>{result.label}</Badge>}
+          <TryBadge n={call?.try} max={call?.max_tries} />
           <span className="font-mono tabular">
             {ringing && call?.ring_left != null ? `${Math.max(0, Math.round(call.ring_left - drift))}s left to answer` : fmtClock(secs)}
           </span>

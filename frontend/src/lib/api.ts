@@ -41,6 +41,8 @@ export type LiveCall = {
   agent: string;
   outcome: string | null;
   lines: { role: string; text: string }[];
+  try?: number | null; // which call this is to the customer in the campaign: 1 = first time dialled
+  max_tries?: number | null; // the tries the campaign allows; null for a single call
 };
 
 /** /api/live/{id}: one call for the side panel. live: still on (all lines so far); false: as saved when it ended. */
@@ -131,6 +133,7 @@ export type AppConfig = {
   models: string[];
   model_labels: Record<string, string>;
   build: string; // sent with every call; a restarted server refuses an older page
+  max_concurrent_allowed?: number; // .env MAX_CONCURRENT_CALLS: the most "Calls at once" a form may ask for
 };
 
 /** /api/plivo/status: whether real phone calls can be placed. */
@@ -319,6 +322,8 @@ export type CallRow = {
   cost_estimated: boolean; // no token report: a per-minute guess
   recording: string | null;
   drive_link?: string | null; // the same recording on Google Drive, once copied
+  try?: number | null; // which call this was to the customer in the campaign: 1 = first time dialled
+  max_tries?: number | null; // the tries the campaign allows; null for a single call
 };
 
 /** What happens next to a call-back: rung at its time (scheduled), next in line (due), its time came but nothing is

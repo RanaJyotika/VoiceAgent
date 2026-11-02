@@ -84,6 +84,9 @@ RING_SECONDS = int(os.getenv("RING_SECONDS", "25"))
 # session and ~0.7 Mbps each way through the tunnel; Gemini and Plivo also cap concurrent
 # calls per account, and the campaign pauses itself when calls start failing.
 MAX_CONCURRENT_CALLS = max(1, int(os.getenv("MAX_CONCURRENT_CALLS", "10")))
+# Seconds between placing one call and the next. Owner, 27 Oct 2026: 45-50 lines at once. A call lasts ~43 s with its
+# ringing (27 Oct), so the 4 s this used to be kept only ~10 lines busy whatever the limit; 1 s fills ~45.
+DIAL_GAP_SECONDS = max(0.2, float(os.getenv("DIAL_GAP_SECONDS", "1")))
 
 
 # --- Shopify (app/shopify.py). Everything stays idle until these are filled in. ---

@@ -21,6 +21,7 @@ import { formFrom, type Form } from "./calling-card";
 import { ContactsCard } from "./contacts-card";
 import { OffersEditor, offersJson, parseOffers } from "./offers-editor";
 import { WhatsappCoupon } from "./whatsapp-coupon";
+import { CampaignMessage, parseMessage } from "./campaign-message";
 import { FINAL, campaignHref, plural } from "./shared";
 import { StoreFetch } from "./store-fetch";
 
@@ -182,7 +183,7 @@ export function CampaignForm() {
       name: name.trim(),
       call_type: type,
       last_call_date: stopWhen === "date" ? last : "",
-      facts: Object.fromEntries((t?.facts ?? []).map((f) => [f.key, factValue(f.key, facts)])),
+      facts: { ...Object.fromEntries((t?.facts ?? []).map((f) => [f.key, factValue(f.key, facts)])), goal: (facts.goal ?? "").trim() },
       settings: form ? { ...form, limit: stopWhen === "calls" ? form.limit : 0 } : undefined,
       draft,
     };
@@ -388,17 +389,19 @@ export function CampaignForm() {
                     </Select>
                   </Field>
                   <div className="sm:col-span-2">
-                    <Field label="Goal / success definition" hint="Set by the type: a call counts as a success only with a clear yes from the customer.">
-                      <div className="min-h-15 rounded-md border border-input bg-muted/40 px-3 py-2 text-[14px] leading-snug">
-                        {t ? (
-                          <>
-                            {t.description}
-                            {success.length > 0 && <span className="text-muted-foreground"> Success: {success.join(", ")}.</span>}
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground">Pick a type to see what its calls do.</span>
-                        )}
-                      </div>
+                    <Field
+                      label="Goal / success definition"
+                      hint={`The agent steers every call toward what you write here. Left empty, the type's own goal is used.${
+                        success.length > 0 ? ` A call is counted as a success only with a clear yes: ${success.join(", ")}.` : ""
+                      }`}
+                    >
+                      <textarea
+                        className={cn(inputClass, "h-auto min-h-15 resize-y py-2 leading-snug")}
+                        maxLength={1000}
+                        placeholder={t ? t.description : "Pick a type first."}
+                        value={facts.goal ?? ""}
+                        onChange={(e) => setFacts({ ...facts, goal: e.target.value })}
+                      />
                     </Field>
                   </div>
                   <div>
@@ -575,6 +578,14 @@ export function CampaignForm() {
                           <div key={f.key} className="sm:col-span-2">
                             <OffersEditor value={facts.offers} onChange={(json) => setFacts({ ...facts, offers: json })} />
                           </div>
+                        ) : f.key === "whatsapp_message" ? (
+                          <div key={f.key} className="sm:col-span-2">
+                            <CampaignMessage
+                              value={facts.whatsapp_message}
+                              offers={facts.offers}
+                              onChange={(json) => setFacts({ ...facts, whatsapp_message: json })}
+                            />
+                          </div>
                         ) : f.key === "whatsapp_coupon" ? (
                           <div key={f.key} className="sm:col-span-2">
                             <WhatsappCoupon
@@ -623,8 +634,15 @@ export function CampaignForm() {
                   <Field label="Retry after (minutes)">
                     <input className={inputClass} type="number" min={1} max={1440} value={form.retry_minutes} onChange={num("retry_minutes")} />
                   </Field>
-                  <Field label="Calls at once">
-                    <input className={inputClass} type="number" min={1} max={10} value={form.max_concurrent} onChange={num("max_concurrent")} />
+                  <Field label="Calls at once" hint={`Up to ${cfg?.max_concurrent_allowed ?? 10}`}>
+                    <input
+                      className={inputClass}
+                      type="number"
+                      min={1}
+                      max={cfg?.max_concurrent_allowed ?? 10}
+                      value={form.max_concurrent}
+                      onChange={num("max_concurrent")}
+                    />
                   </Field>
                 </div>
               )}
@@ -754,13 +772,16 @@ export function CampaignForm() {
                             ? "None needed"
                             : [
                                 ...t.facts
-                                  .filter((f) => f.key !== "offers" && f.key !== "whatsapp_coupon")
+                                  .filter((f) => f.key !== "offers" && f.key !== "whatsapp_coupon" && f.key !== "whatsapp_message")
                                   .map((f) => `${f.label.replace(" (optional)", "")}: ${(facts[f.key] ?? "").trim() ? "written" : "none"}`),
                                 ...(t.facts.some((f) => f.key === "offers")
                                   ? [plural(parseOffers(facts.offers).filter((o) => o.title.trim() || o.details.trim()).length, "offer")]
                                   : []),
                                 ...(t.facts.some((f) => f.key === "whatsapp_coupon")
                                   ? [(facts.whatsapp_coupon ?? "").trim() ? `WhatsApp coupon ${facts.whatsapp_coupon}` : "WhatsApp coupon off"]
+                                  : []),
+                                ...(t.facts.some((f) => f.key === "whatsapp_message")
+                                  ? [parseMessage(facts.whatsapp_message).on ? "WhatsApp message on" : "WhatsApp message off"]
                                   : []),
                               ].join(" · "),
                         ],

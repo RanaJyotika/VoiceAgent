@@ -27,9 +27,9 @@ from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, 
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
                      TRANSCRIPT_LANGUAGES, gemini_voice)
 from .call_types import (CART_LATER_QUESTION, CART_NOT_NOW, CART_WANT_QUESTION, DEFAULT as DEFAULT_CALL_TYPE,
-                         ORDER_CONFIRMED_CLOSE, CallType, call_coupon, call_type_for, cart_cod_close, cart_coupon_close,
+                         ORDER_CONFIRMED_CLOSE, CallType, call_coupon, call_type_for, campaign_message, cart_cod_close, cart_coupon_close,
                          cart_link_close, cart_price_close, cart_sent, PREPAID_NO_LINE,
-                         prepaid_coupon_for, prepaid_offer_line, prepaid_yes_line)
+                         message_offer, prepaid_coupon_for, prepaid_offer_line, prepaid_yes_line)
 from .prompts import COMPLAINT_CLOSE, REFUND_CLOSE, forms
 from .tools import tools_for
 
@@ -522,18 +522,6 @@ _OFF = re.compile(_L + r"(off|ऑफ|discount|डिस्काउंट)" + _R
 _WA_PROMISE = re.compile(r"(whats\s*app|व्हाट्स\S*|वॉट्स\S*|वाट्स\S*)\s*(par|pe|पर|पे)?\s*(share|bhej|send|शेयर|भेज|सेंड)", re.IGNORECASE)
 
 
-# The customer says the cart message never reached them (owner, 26 Oct 2026: then it goes once more). It must name the
-# message, the link or WhatsApp: "order nahi aaya" is a complaint about the order, not this.
-_NOT_RECEIVED = re.compile(r"(whats\s*app|व्हाट्स\S*|वॉट्स\S*|वाट्स\S*|message|मैसेज|msg|link|लिंक)\W*(\S+\W+){0,3}?"
-                           r"(nahi|nahin|nhi|नहीं|नही|not|no)\s*(aaya|aayi|aaye|aya|mila|mili|आया|आई|आए|मिला|मिली|"
-                           r"received|come|came)|(didn'?t|did not|haven'?t|have not|not)\s+(get|got|receive|received)\s+"
-                           r"(any\s+|the\s+|your\s+)?(whats\s*app|message|link)", re.IGNORECASE)
-
-
-def not_received(turns: list[dict[str, str]]) -> bool:
-    return any(t["role"] == "customer" and _NOT_RECEIVED.search(t["text"]) for t in turns)
-
-
 def promised_on_whatsapp(turns: list[dict[str, str]]) -> str:
     """The agent's line saying the link or offer goes on WhatsApp, unless the customer then said not to send it."""
     for i in range(len(turns) - 1, -1, -1):
@@ -666,6 +654,28 @@ def never_got_through(transcript: list[dict[str, str]]) -> bool:
     return all(_ONLY_HELLO.match(t["text"]) for t in transcript if t["role"] == "customer")
 
 
+# The call results after which the cart or campaign WhatsApp message goes (owner, 28 Oct 2026): a yes, or a call that
+# went on without a no (call back later, needs help, unclear). Not interested, already ordered or booked: no message.
+# Owner, 28 Oct 2026 (later): a customer who picked up and hung up without answering ("dropped") gets it too.
+MESSAGE_RESULTS = ("wants_to_order", "wants_coupon", "interested", "needs_help", "call_later", "unclear", "dropped")
+
+
+def invite_link_close(voice: str) -> str:
+    """Owner's wording, 28 Oct 2026."""
+    return f"ji, main aapko WhatsApp par link bhej {forms(voice)['rahi']} hoon, aap wahan se order kar sakte hain. dhanyavaad ji."
+
+
+def _sends_campaign_message(state: "CallState") -> bool:
+    """The call's campaign has its own WhatsApp message switched on (it goes after the call)."""
+    contact = (ACTIVE.get(state.call_id) or {}).get("contact") or {}
+    try:
+        camp = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
+        return bool(campaign_message((camp or {}).get("facts") or {}))
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not read the campaign's WhatsApp message", state.call_id)
+        return False
+
+
 def closing_line(state: "CallState", outcome: str | None) -> str:
     """The goodbye the agent is told to say when it recorded a result without saying one (calls 178, 183)."""
     voice = (ACTIVE.get(state.call_id) or {}).get("voice") or ""
@@ -708,6 +718,9 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
         return COMPLAINT_CLOSE
     if outcome == "not_interested" and state.call_type.key == "abandoned_cart":
         return CART_NOT_NOW   # owner, 22 Oct 2026
+    if outcome == "interested" and _sends_campaign_message(state):
+        # Call 32118: a "haan ji" got only "dhanyavaad ji, aapka din shubh ho", with the link on its way unsaid.
+        return invite_link_close(voice)
     return (f"achha ji, samajh {f['gayi']}. " if outcome == "not_interested" else "") + "dhanyavaad ji, aapka din shubh ho."
 
 
@@ -1197,7 +1210,8 @@ async def run_call(
                 session = await stack.enter_async_context(sarvam_bridge.connect(
                     prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad,
                     tools=tools_for(state.call_type),
-                    greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else ""))
+                    greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else "",
+                    gate=start_gate))
                 attempts = []
             for n, (fast, hints) in enumerate(attempts):
                 try:
@@ -1715,43 +1729,56 @@ async def run_call(
                     log.info("call %s: prepaid coupon offered, not sent (%s)", call_id, "no clear yes" if offer else "no offer to send")
             except Exception:  # noqa: BLE001
                 log.exception("call %s: could not queue the prepaid coupon message", call_id)
-        rang_out = not picked_up and not state.error and state.outcome in ("no_answer", "busy")
-        if state.call_type.key == "abandoned_cart" and contact and (picked_up or rang_out):
+        # Owner, 28 Oct 2026 (5,723 cart messages in a day, 90% to people the agent never spoke to): a WhatsApp message
+        # only after a call the customer picked up and did not turn down: no no-answer or busy call, no "not interested",
+        # "already ordered" or "already booked". A call that failed on our side (state.error) never.
+        wants_message = picked_up and not state.error and state.outcome in MESSAGE_RESULTS
+        # Never a WhatsApp message to a do-not-call, a wrong number, a complaint or abuse (blocks and reports would put the
+        # WhatsApp number at risk).
+        skip = ("customer asked not to be called" if state.outcome == "do_not_call" else
+                "wrong number" if state.outcome == "wrong_number" else
+                "a complaint" if state.outcome == "complaint" else
+                "abusive language" if was_abusive(state.transcript) else "")
+        if state.call_type.key == "abandoned_cart" and contact and wants_message:
             # Owner, 26 Oct 2026: every customer called gets the cart message (the cart's link, with the WhatsApp coupon
-            # when there is one) once, after their first call, picked up or not: a no-answer or a busy too, never a number
-            # that does not exist or a call that failed on our side. Later calls remind them of it instead
-            # (call_types.cart_sent_close); it goes again only if they said on a call that the first never came.
-            # Never to a do-not-call, a wrong number, a complaint or abuse (blocks and reports would put the WhatsApp
-            # number at risk). Never stops the call being saved. (24 Oct 2026: every customer who picked up.)
+            # when there is one) after their call, picked up or not: a no-answer or a busy too, never a number that does
+            # not exist or a call that failed on our side. Owner, 27 Oct 2026: after every call, not only the first; a
+            # later call still reminds them of the one they have (call_types.cart_sent_close), with its coupon.
+            # Never stops the call being saved. (24 Oct 2026: every customer who picked up.)
             try:
-                skip = ("customer asked not to be called" if state.outcome == "do_not_call" else
-                        "wrong number" if state.outcome == "wrong_number" else
-                        "a complaint" if state.outcome == "complaint" else
-                        "abusive language" if was_abusive(state.transcript) else "")
-                sent = "" if skip else messaging.cart_message_for(contact)
-                again = bool(sent and picked_up and state.cart_sent and not_received(state.transcript)
-                             and messaging.cart_messages_sent(contact) < 2)
                 offer = state.coupon
-                if again and state.cart_sent.get("code"):
+                if (state.cart_sent or {}).get("code"):   # the coupon the call reminded them of, as the prompt has it
                     from .coupons import offer_by_code   # here: coupons reads the call types this module imports
                     offer = offer_by_code(contact, state.cart_sent["code"])
-                message_id = None if (skip or (sent and not again)) else messaging.queue_cart_coupon(
-                    contact=contact, offer=offer, call_id=call_id, to=str((meta or {}).get("to") or ""),
-                    channel=channel, again=again)
+                message_id = None if skip else messaging.queue_cart_coupon(
+                    contact=contact, offer=offer, call_id=call_id, to=str((meta or {}).get("to") or ""), channel=channel)
                 if message_id:
                     state.outcome_details = {**(state.outcome_details or {}), "message_id": message_id,
                                              **({"whatsapp_coupon": offer["code"]} if offer else {})}
-                    log.info("call %s: cart link%s for WhatsApp, message %s (%s)%s", call_id,
-                             f" and coupon {offer['code']}" if offer else "", message_id, state.outcome,
-                             "; again: the customer said the first one never came" if again else "")
+                    log.info("call %s: cart link%s for WhatsApp, message %s (%s)", call_id,
+                             f" and coupon {offer['code']}" if offer else "", message_id, state.outcome)
                 elif skip:
                     log.info("call %s: no cart message: %s", call_id, skip)
-                elif sent:
-                    log.info("call %s: no cart message: this customer already has one (message %s)", call_id, sent)
                 else:
                     log.warning("call %s: %s, but no WhatsApp message was queued", call_id, state.outcome)
             except Exception:  # noqa: BLE001
                 log.exception("call %s: could not queue the cart coupon message", call_id)
+        elif contact and contact.get("campaign_id") and wants_message:
+            # Owner, 27 Oct 2026: a campaign with its own WhatsApp message switched on (Facts & offers) sends it after
+            # every call, picked up or not, as the cart message goes. Never stops the call being saved.
+            try:
+                facts = (db.get_campaign(contact["campaign_id"]) or {}).get("facts") or {}
+                msg = campaign_message(facts)
+                message_id = None if skip or not msg else messaging.queue_campaign_message(
+                    contact=contact, msg=msg, offer=message_offer(facts), call_id=call_id,
+                    to=str((meta or {}).get("to") or ""), channel=channel)
+                if message_id:
+                    state.outcome_details = {**(state.outcome_details or {}), "message_id": message_id}
+                    log.info("call %s: campaign WhatsApp message %s (%s)", call_id, message_id, state.outcome)
+                elif msg:
+                    log.info("call %s: no campaign WhatsApp message: %s", call_id, skip or "not queued")
+            except Exception:  # noqa: BLE001
+                log.exception("call %s: could not queue the campaign WhatsApp message", call_id)
         db.finish_call(
             call_id,
             outcome=state.outcome,
@@ -2419,4 +2446,5 @@ def live_snapshot() -> list[dict]:
             "voice": a["voice"], "outcome": state.outcome, "lines": lines[-3:],
             "agent": AGENT_LABELS.get(state.model, state.model),
         })
-    return out
+    tries = db.call_tries(r["call_id"] for r in out)   # which try this is for the customer (1 = first time dialled)
+    return [{**r, **tries.get(r["call_id"], {"try": None, "max_tries": None})} for r in out]

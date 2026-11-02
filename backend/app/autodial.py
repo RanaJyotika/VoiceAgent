@@ -8,7 +8,7 @@ come, inside the calling hours, most urgent kind of call first.
 It is off until the owner switches it on, and stays as switched: on survives a server restart, so
 orders that come in overnight are called in the morning. Same safety as a campaign: it switches
 itself off after calls fail on our side, and waits for the next day once today's budget is spent.
-Both dialers can run at once; they share the phone lines through campaign.DIALING.
+It runs alongside the campaign runs; they share the phone lines through campaign.DIALING.
 """
 import asyncio
 import logging
@@ -19,8 +19,8 @@ from fastapi import APIRouter, HTTPException
 
 from . import db, store_orders, usage
 from .call_types import CALL_TYPES, missing_facts
-from .campaign import (DIALING, GAP_SECONDS, STOP_ON_ERRORS, Campaign, Settings, _after_call, dial, lines_in_use,
-                       past_last_date, within_hours)
+from .campaign import (DIALING, GAP_SECONDS, STOP_ON_ERRORS, Campaign, Settings, _after_call, dial, is_running,
+                       lines_full, past_last_date, within_hours)
 from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
                      STALE_PAGE, VOICES, plivo_missing)
 from .db import IST
@@ -47,8 +47,10 @@ def _settings_from(saved: dict) -> Settings:
 
 
 def _campaigns() -> list[dict]:
-    """Automatic campaigns still inside their calling days, most urgent first."""
-    camps = [c for c in db.auto_campaigns() if not past_last_date(c) and not missing_facts(c)]   # a draft is never rung
+    """Automatic campaigns still inside their calling days, most urgent first. One its Start button is calling is left
+    to that run."""
+    camps = [c for c in db.auto_campaigns()
+             if not past_last_date(c) and not missing_facts(c) and not is_running(c["id"])]   # a draft is never rung
     return sorted(camps, key=lambda c: (PRIORITY.get(c["call_type"], 9), c["id"]))
 
 
@@ -96,7 +98,7 @@ async def _run() -> None:
                 _set_reason(f"waiting: {over}")
                 await asyncio.sleep(60)
                 continue
-            if lines_in_use() >= s.max_concurrent:
+            if lines_full(c):
                 await asyncio.sleep(1)
                 continue
             contact = _next_contact(s.max_attempts)

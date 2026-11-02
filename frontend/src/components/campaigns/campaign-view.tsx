@@ -7,6 +7,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { ArrowDownAZ, ArrowUpAZ, ChevronLeft, Copy, Download, Pause, Pencil, Play, Search, Trash2, UserPlus } from "lucide-react";
 import { CallbackBoard } from "@/components/calls/callback-list";
 import { CallPanel } from "@/components/overview/call-panel";
+import { ReachCards, type Reach } from "@/components/overview/reach-cards";
 import { StatCard } from "@/components/overview/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonClass } from "@/components/ui/button";
@@ -53,6 +54,24 @@ type Stats = {
   sales: Sales | null;
   /** An order confirmation campaign: what became of the orders it called about. */
   order_outcomes: OrderOutcomes | null;
+  /** Orders placed from the WhatsApp link we sent, found by its UTMs (sales.py link_sales). */
+  link_sales?: LinkSales; // missing from a server not restarted yet
+  reach?: Reach; // called or messaged, both, ordered, not bought yet
+};
+
+type Money = { orders: number; sales_rs: number };
+
+type LinkSales = Money & {
+  cod: Money; // part-paid COD included: the rest is paid at the door
+  part_paid: Money; // GoKwik part-paid COD, of the COD orders
+  prepaid: Money;
+  cost_per_order_rs: number | null; // spend ÷ orders from the button
+  delivered: number;
+  cancelled: number;
+  returned: number;
+  open: number;
+  last_check: string;
+  error: string;
 };
 
 type Sales = {
@@ -61,6 +80,8 @@ type Sales = {
   sales_rs: number;
   talked_orders: number; // after a talk with the agent
   talked_sales_rs: number;
+  talked_cod?: Money; // of the orders after a talk; missing from a server not restarted yet
+  talked_prepaid?: Money;
   cod: number;
   cost_per_order_rs: number | null; // spend ÷ orders after a talk
   talked: { customers: number; bought: number };
@@ -120,7 +141,6 @@ export function CampaignView() {
 
   const status = s ? CAMPAIGN_STATUS[s.status] : null;
   const left = s && s.status !== "draft" ? leftTag(s.new_left, s.callbacks_left) : null;
-  const otherRunning = !!state?.running && state.running_campaign_id !== id;
 
   const start = async () => {
     if (!state || !cfg || !camp) return;
@@ -160,7 +180,7 @@ export function CampaignView() {
   const pause = async () => {
     setBusy(true);
     try {
-      await send("/api/campaign/stop", "POST");
+      await send("/api/campaign/stop", "POST", { campaign_id: id });
       toast("Paused after the call in progress.");
     } catch (e) {
       toast((e as Error).message, true);
@@ -266,8 +286,8 @@ export function CampaignView() {
             <Button
               variant="primary"
               onClick={start}
-              disabled={busy || !state?.to_call || otherRunning || !!state?.past_last_date || !cfg}
-              title={otherRunning ? "Another campaign is calling right now" : !state?.to_call ? "Nobody left to call" : "Places real, paid phone calls"}
+              disabled={busy || !state?.to_call || !!state?.past_last_date || !cfg}
+              title={!state?.to_call ? "Nobody left to call" : "Places real, paid phone calls"}
             >
               <Play />
               Start
@@ -422,6 +442,13 @@ function OverviewTab({ s }: { s: Stats | null }) {
         </div>
       </section>
 
+      {s?.reach && (
+        <section className="space-y-2">
+          <h2 className="text-[13px] font-medium text-muted-foreground">Customers reached: called or messaged at least once</h2>
+          <ReachCards r={s.reach} />
+        </section>
+      )}
+      {s?.link_sales && <LinkSalesSection v={s.link_sales} />}
       {s?.sales && <SalesSection v={s.sales} />}
       {s?.order_outcomes && <OrderOutcomesCard data={s.order_outcomes} />}
 
@@ -504,6 +531,38 @@ function OverviewTab({ s }: { s: Stats | null }) {
 /** Owner, 26 Oct 2026: "Conversions" is what customers said on the call; this is what they bought. Orders are matched by
  *  phone number. Some customers buy on their own, so the two groups are side by side: the difference is what the
  *  calls added. */
+function LinkSalesSection({ v }: { v: LinkSales }) {
+  const worth = (m: Money) => (m.orders ? fmtRs(m.sales_rs) : "None yet");
+  const share = (m: Money) => (v.orders ? ` · ${fmtPct(pct(m.orders, v.orders))} of button orders` : "");
+  const finished = [v.delivered && `${fmtInt(v.delivered)} delivered`, v.cancelled && `${fmtInt(v.cancelled)} cancelled`,
+    v.returned && `${fmtInt(v.returned)} returned`, v.open && `${fmtInt(v.open)} on the way`].filter(Boolean).join(" · ");
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[13px] font-medium text-muted-foreground">Orders from the WhatsApp button (tracked by UTM)</h2>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Orders from WhatsApp button"
+          value={fmtInt(v.orders)}
+          note={v.orders ? `${fmtRs(v.sales_rs)} · ${finished || "no outcome yet"}` : "Customers who tapped Details and ordered"}
+        />
+        <StatCard
+          label="COD orders"
+          value={fmtInt(v.cod.orders)}
+          note={`${worth(v.cod)} · cash on delivery${share(v.cod)}${v.part_paid.orders ? ` · ${fmtInt(v.part_paid.orders)} part-paid` : ""}`}
+        />
+        <StatCard label="Prepaid orders" value={fmtInt(v.prepaid.orders)} note={`${worth(v.prepaid)} · paid online${share(v.prepaid)}`} />
+        <StatCard label="Cost per button order" value={v.cost_per_order_rs != null ? rs(v.cost_per_order_rs) : "—"} note="Spend ÷ orders from the button" />
+      </div>
+      <p className="rounded-md bg-muted px-3 py-2.5 text-[13.5px] text-muted-foreground">
+        Read from the order itself (the checkout keeps the button link&apos;s UTMs), so it counts COD and prepaid alike, and
+        orders placed from another number. A customer who tapped the text link or came back another way (an ad, the address
+        typed in) is counted only below, by phone.
+        {v.error && ` Shopify could not be read: ${v.error}`}
+      </p>
+    </section>
+  );
+}
+
 function SalesSection({ v }: { v: Sales }) {
   const talkedRate = pct(v.talked.bought, v.talked.customers);
   const quietRate = pct(v.not_talked.bought, v.not_talked.customers);
@@ -517,7 +576,11 @@ function SalesSection({ v }: { v: Sales }) {
         <StatCard
           label="Orders after a talk"
           value={fmtInt(v.talked_orders)}
-          note={v.talked_orders ? `${fmtRs(v.talked_sales_rs)} · ${finished || "no outcome yet"}` : "Customers who talked with the agent, then ordered"}
+          note={
+            v.talked_orders
+              ? `${fmtRs(v.talked_sales_rs)}${v.talked_cod && v.talked_prepaid ? ` · COD ${fmtInt(v.talked_cod.orders)} · Prepaid ${fmtInt(v.talked_prepaid.orders)}` : ""} · ${finished || "no outcome yet"}`
+              : "Customers who talked with the agent, then ordered"
+          }
         />
         <StatCard label="Real cost per order" value={v.cost_per_order_rs != null ? rs(v.cost_per_order_rs) : "—"} note="Spend ÷ orders after a talk" />
         <StatCard

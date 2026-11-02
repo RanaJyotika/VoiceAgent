@@ -371,15 +371,13 @@
   };
   window.renderCampaign = (s) => {
     camp = s;
-    // "running" below means THIS campaign is the one calling; another one may be running instead.
-    const running = s.running && s.running_campaign_id === s.campaign_id;
-    const otherRunning = s.running && !running;
+    // Several campaigns can call at once; "running" is this one's run.
+    const running = s.running;
     if (!running) fillSettings(s);
     let state, reason = s.reason || '';
     if (running && s.in_progress) state = `Calling… ${s.in_progress} call${s.in_progress > 1 ? 's' : ''} in progress`;
     else if (running && !s.within_hours) state = `Waiting for calling hours (${s.settings.start_hour}:00 to ${s.settings.end_hour}:00, now ${s.now_ist})`;
     else if (running) state = 'Running · picking the next contact';
-    else if (otherRunning) state = 'Another campaign is calling right now · one campaign calls at a time';
     else if (s.past_last_date) state = `Finished · the last calling day (${s.last_call_date}) has passed`;
     else if (!s.total) state = 'No contacts yet · upload the sheet in step 1';
     else if (s.to_call) state = `Ready · ${s.to_call} to call`;
@@ -402,7 +400,7 @@
     el('camp-concurrent').title = `Calls running at the same time (up to ${s.max_concurrent_allowed || 10}). Each needs its own Gemini session and Plivo call.`;
     el('camp-start-btn').hidden = running;
     el('camp-stop-btn').hidden = !running;
-    el('camp-start-btn').disabled = !s.to_call || otherRunning || s.past_last_date;
+    el('camp-start-btn').disabled = !s.to_call || s.past_last_date;
     for (const id of ['camp-model', 'camp-voice', 'camp-lang', 'camp-attempts', 'camp-retry', 'camp-start', 'camp-end', 'camp-concurrent', 'camp-limit', 'camp-budget']) el(id).disabled = running;
     el('camp-requeue').disabled = running || !((s.by_status.no_answer || 0) + (s.by_status.busy || 0) + (s.by_status.dropped || 0));
   };
@@ -443,7 +441,7 @@
     window.renderCampaign(j);
   };
   el('camp-stop-btn').onclick = async () => {
-    await fetch('/api/campaign/stop', { method: 'POST' });
+    await fetch('/api/campaign/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaign_id: camp && camp.campaign_id }) });
     window.toast('Stopping after the current call.');
     window.loadCampaign();
   };

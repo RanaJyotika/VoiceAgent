@@ -390,12 +390,12 @@ export function StoreSettingsDialog({ open, onClose, auto, store, cfg, onChanged
                   onChange={(e) => setF("retry_minutes", num(e.target.value))}
                 />
               </Field>
-              <Field label="Calls at once">
+              <Field label="Calls at once" hint={`Up to ${cfg?.max_concurrent_allowed ?? 10}`}>
                 <input
                   className={inputClass}
                   type="number"
                   min={1}
-                  max={10}
+                  max={cfg?.max_concurrent_allowed ?? 10}
                   value={form.max_concurrent}
                   onChange={(e) => setF("max_concurrent", num(e.target.value))}
                 />

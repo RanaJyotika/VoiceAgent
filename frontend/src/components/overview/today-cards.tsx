@@ -2,6 +2,7 @@
 
 import { usePoll } from "@/hooks/use-poll";
 import { fmtInt, fmtPct, fmtRs, pct } from "@/lib/format";
+import { ReachCards, type Reach } from "./reach-cards";
 import { StatCard } from "./stat-card";
 
 /** /api/overview/today: each customer phoned today, counted once, by the result of their latest call. */
@@ -16,9 +17,15 @@ type Today = {
   agent_rs: number;
   line_rs: number;
   calls: number;
-  /** Store orders placed within a week of a talk with the agent (sales.py), over the last 7 days. */
-  week_sales?: { orders: number; sales_rs: number; window_days: number }; // missing from a server not restarted yet
+  /** Store orders of the last 7 days (sales.py): after a talk with the agent (matched by phone), and from our WhatsApp
+   * button (its UTMs). */
+  week_sales?: Orders & { window_days: number; link?: Orders }; // missing from a server not restarted yet
+  week_reach?: Reach; // customers called or messaged in the last 7 days
 };
+
+type Money = { orders: number; sales_rs: number };
+/** COD counts part-paid COD too: the rest is paid at the door. */
+type Orders = Money & { cod?: Money; prepaid?: Money };
 
 /** The Overview's last row: today only, whatever period the filters above show. */
 export function TodayCards() {
@@ -52,16 +59,52 @@ export function TodayCards() {
           note={d ? `+ ${rs(d.line_rs)} phone line · ${rs(d.agent_rs + d.line_rs)} in all` : ""}
         />
       </div>
-      {d?.week_sales && (
-        <p className="mt-3 rounded-md bg-muted px-3 py-2.5 text-[13.5px]">
-          <span className="font-medium">Sales after calls, last 7 days:</span>{" "}
-          {d.week_sales.orders
-            ? `${plural(d.week_sales.orders, "store order")} worth ${fmtRs(d.week_sales.sales_rs)}, placed within ${d.week_sales.window_days} days of talking with the agent.`
-            : `no store order yet within ${d.week_sales.window_days} days of a talk with the agent.`}{" "}
-          <span className="text-muted-foreground">Matched by phone number; each campaign shows how this compares with customers who never talked.</span>
-        </p>
+      {d?.week_reach && (
+        <div className="mt-5">
+          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h3 className="text-[15px] font-medium">Customers reached · last 7 days</h3>
+            <p className="text-[12.5px] text-muted-foreground">
+              Each customer counted once: called, or sent a WhatsApp message, at least once. Ordered: by phone after a call, or
+              from the WhatsApp button.
+            </p>
+          </div>
+          <ReachCards r={d.week_reach} />
+        </div>
       )}
+      {d?.week_sales && <WeekSales w={d.week_sales} />}
     </section>
+  );
+}
+
+/** Sales of the last 7 days: from the WhatsApp button (certain, by its UTMs), COD and prepaid apart, and after a talk. */
+function WeekSales({ w }: { w: NonNullable<Today["week_sales"]> }) {
+  const link = w.link ?? { orders: 0, sales_rs: 0 };
+  const worth = (m?: Money) => (m?.orders ? fmtRs(m.sales_rs) : "None yet");
+  const split = (o: Orders) => (o.cod && o.prepaid ? `COD ${fmtInt(o.cod.orders)} · Prepaid ${fmtInt(o.prepaid.orders)}` : "");
+  return (
+    <div className="mt-5">
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-[15px] font-medium">Sales from calls · last 7 days</h3>
+        <p className="text-[12.5px] text-muted-foreground">
+          Button orders are read from the order itself (the link&apos;s UTMs). Orders after a talk are matched by phone, within{" "}
+          {w.window_days} days of the call.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatCard
+          label="Orders from WhatsApp button"
+          value={fmtInt(link.orders)}
+          note={link.orders ? `${fmtRs(link.sales_rs)} · ${split(link)}` : "Customers who tapped Details and ordered"}
+        />
+        <StatCard label="COD orders (button)" value={fmtInt(link.cod?.orders ?? 0)} note={`${worth(link.cod)} · cash on delivery`} />
+        <StatCard label="Prepaid orders (button)" value={fmtInt(link.prepaid?.orders ?? 0)} note={`${worth(link.prepaid)} · paid online`} />
+        <StatCard
+          label="Orders after a talk"
+          value={fmtInt(w.orders)}
+          note={w.orders ? `${fmtRs(w.sales_rs)} · ${split(w)} · by phone` : "Talked with the agent, then ordered"}
+        />
+      </div>
+    </div>
   );
 }
 

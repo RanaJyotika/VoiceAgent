@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS messages_status ON messages (status, next_try_at);
 """
 
 STATUSES = ("queued", "sending", "sent", "failed", "held", "cancelled")
-HAS_IT = ("queued", "sending", "sent", "held")   # the customer has the coupon, or is getting it: never queued again
+HAS_IT = ("queued", "sending", "sent", "held")   # the customer has the message, or is getting it
 TICK_SECONDS = 30
 BATCH = 20                                       # messages one round of the worker sends at most
 PLIVO_API = "https://api.plivo.com/v1/Account"
@@ -215,6 +215,43 @@ def link_for(contact: dict) -> str:
     return _ascii_url(f"{STORE_URL}/products/{product['handle']}") if product.get("handle") else STORE_URL
 
 
+# Owner, 27 Oct 2026: the message's link button carries these, so the store's checkout (GoKwik saves a visit's utm_* on
+# the order, COD and prepaid alike) tells which orders came from it (sales.py reads them back). utm_campaign is the call
+# type (abandoned_cart, order_confirmation...), utm_term the campaign, utm_content the call. The link written in the
+# text stays clean: the owner wants nothing added to the link the customer reads.
+UTM_SOURCE, UTM_MEDIUM = "voice_agent", "ai_call"
+
+
+def tracked_link(contact: dict, call_id: int | None = None, link: str = "") -> str:
+    """link_for (or link) with our UTMs: "https://vedicshop.store/?utm_source=voice_agent&utm_medium=ai_call&utm_campaign=..."."""
+    from .call_types import call_type_for   # here: call_types reads this module
+    parts = urlsplit(link or link_for(contact))
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.startswith("utm_")]
+    query += [("utm_source", UTM_SOURCE), ("utm_medium", UTM_MEDIUM), ("utm_campaign", call_type_for(contact).key)]
+    if contact.get("campaign_id"):
+        query.append(("utm_term", f"campaign_{contact['campaign_id']}"))
+    if call_id:
+        query.append(("utm_content", f"call_{call_id}"))
+    return urlunsplit(parts._replace(path=parts.path or "/", query=urlencode(query)))
+
+
+def discount_link(code: str, url: str) -> str:
+    """The store's own link that puts the coupon in the cart, then opens the page (owner, 27 Oct 2026: the customer
+    never has to type the code): https://vedicshop.store/discount/DIWALIDILSE10?redirect=%2Fproducts%2F...%3Futm_source...
+    The page must be on the store; a link elsewhere opens the store's home page instead."""
+    parts = urlsplit(url)
+    on_store = parts.netloc == urlsplit(STORE_URL).netloc
+    page = (parts.path or "/") + (f"?{parts.query}" if parts.query else "") if on_store else "/"
+    # "/" left as it is (owner, 27 Oct 2026: the link should read cleanly): ...?redirect=/products/pyrite-bracelet
+    return f"{STORE_URL}/discount/{quote(code, safe='')}?redirect={quote(page, safe='/')}"
+
+
+def _utm_query(link: str) -> str:
+    """The link's utm_* part, "?utm_source=..." ("" when it has none)."""
+    utm = [(k, v) for k, v in parse_qsl(urlsplit(link).query, keep_blank_values=True) if k.startswith("utm_")]
+    return "?" + urlencode(utm) if utm else ""
+
+
 def _ascii_url(url: str) -> str:
     """The link with any non-English letters percent-encoded: WhatsApp refused a button link to
     products/libra-तुला-राशि-... ("URL parameter generates an invalid URL", 8 messages on 22 Oct 2026); browsers open
@@ -256,6 +293,53 @@ def _short_name(product: str, limit: int = 40) -> str:
     return cut or text[:limit]
 
 
+# Owner, 27 Oct 2026: one short benefit of the product in the cart message, by what it is made of or shows. The first
+# word found in the product's name wins, so the more particular ones come first; none found, no benefit line.
+BENEFITS = (
+    ("pyrite", "Dhan aur samriddhi ke liye"),
+    ("karungali", "Nazar dosh se raksha aur shanti"),
+    ("rudraksha", "Mann ki shanti aur positive energy"),
+    ("evil eye", "Buri nazar se suraksha"),
+    ("tiger", "Confidence aur himmat ke liye"),
+    ("rose quartz", "Pyaar aur rishton mein mithaas"),
+    ("amethyst", "Mann ko shant aur focused rakhe"),
+    ("citrine", "Success aur khushhaali ke liye"),
+    ("obsidian", "Negative energy se bachav"),
+    ("aventurine", "Good luck aur naye mauke"),
+    ("lapis", "Wisdom aur clarity ke liye"),
+    ("garnet", "Energy aur josh ke liye"),
+    ("jade", "Good luck aur sukh-shanti"),
+    ("chakra", "Chakra balance aur positive energy"),
+    ("lakshmi", "Ghar mein dhan aur samriddhi"),
+    ("laxmi", "Ghar mein dhan aur samriddhi"),
+    ("ganesh", "Har kaam mein shubh shuruaat"),
+    ("hanuman", "Shakti aur suraksha ka aashirwad"),
+    ("shiva", "Shiv ji ka aashirwad aur shanti"),
+    ("yantra", "Ghar mein positive energy"),
+    ("tulsi", "Pavitrata aur bhakti ka prateek"),
+    ("zodiac", "Aapki rashi ke anusaar"),
+    ("rashi", "Aapki rashi ke anusaar"),
+    ("copper", "Shuddh tamba, roz pehnne ke liye"),
+    ("silver", "Shuddh chandi, roz pehnne ke liye"),
+    ("mala", "Jaap aur dhyan ke liye"),
+)
+
+
+def benefit_for(contact: dict) -> str:
+    """The product's short benefit (BENEFITS), "" when its name says nothing we know."""
+    name = f"{contact.get('product') or ''} {_product(contact).get('title') or ''}".lower()
+    return next((words for key, words in BENEFITS if key in name), "")
+
+
+def _clean_name(product: str) -> str:
+    """The product's name as the cart message shows it: no "#" in front (the cart sheets have one) and no half-open
+    bracket left at the end ("#Copper Protection Bracelet(Copper" -> "Copper Protection Bracelet")."""
+    text = _short_name(str(product or "").lstrip("#").strip())
+    if text.count("(") > text.count(")"):
+        text = text[:text.rfind("(")].rstrip(" ,;:–-")
+    return text
+
+
 def _price(amount) -> str:
     """" ₹899" after the product, "" when the amount is not known."""
     n = coupons.parse_amount(amount)
@@ -284,8 +368,9 @@ def _values(contact: dict, coupon: dict, link: str) -> dict[str, str]:
         # Short (owner, 22 Oct 2026): a longer message folds behind "Read more" on the phone.
         # The owner's words for the order (22 Oct 2026), the same shape for the cart.
         "cart_line": f"{name}, aapka {_short_name(product)}{_price(amount)} cart mein wait kar raha hai 🛍️",
-        "offer_line": f"{'Prepaid payment par ' if prepaid else ''}*{discount} OFF* paayein"
-                      + (f" (₹{coupons.rupees(min_order)}+ order par)" if min_order > 0 else "") + f", use code: *{code}*",
+        # Owner's words, 27 Oct 2026 (the link applies the code itself).
+        "offer_line": f"*{discount} OFF* exclusively for you{' on prepaid' if prepaid else ''}"
+                      + (f" (₹{coupons.rupees(min_order)}+ order par)" if min_order > 0 else "") + " ✅",
         "pay_line": _pay_line("coupon", "Order here", link),
         "name": name,
         "product": product,
@@ -300,9 +385,14 @@ def _values(contact: dict, coupon: dict, link: str) -> dict[str, str]:
     }
 
 
-def values_for(contact: dict, coupon: dict) -> dict[str, str]:
+def values_for(contact: dict, coupon: dict, call_id: int | None = None) -> dict[str, str]:
     """What fills the message's {name}, {product}, {code}... for this customer and coupon."""
-    return _values(contact, coupon, link_for(contact))
+    code = str(coupon.get("code") or "").strip()
+    if not code:
+        return {**_values(contact, coupon, link_for(contact)), "tracked": tracked_link(contact, call_id)}
+    # Owner, 27 Oct 2026: the link puts the coupon in the cart itself (prepaid_values does the same).
+    return {**_values(contact, coupon, discount_link(code, link_for(contact))),
+            "tracked": discount_link(code, tracked_link(contact, call_id))}
 
 
 def sample_values(coupon: dict) -> dict[str, str]:
@@ -316,18 +406,18 @@ def sms_text(values: dict) -> str:
 
 
 def queue_coupon(*, contact: dict, coupon: dict, call_id: int | None, to: str = "", channel: str = "plivo") -> int | None:
-    """Write the coupon message for a customer who said yes to it on a call. Returns its id (or the id of the one
-    this customer already has for this code), or None when nothing was written (no coupon, or a number that
-    asked not to be called). to: the number the phone call went to."""
+    """Write the coupon message for a customer who said yes to it on a call. Returns its id, or None when nothing was
+    written (no coupon, or a number that asked not to be called). to: the number the phone call went to."""
     if not coupon or not coupon.get("code"):
         return None
     coupon = coupons.get_by_code(coupon["code"]) or coupon   # its message as it reads now
-    values = _with_path({**values_for(contact, coupon), "image": image_for(contact)}, contact)
+    values = _with_path({**values_for(contact, coupon, call_id), "image": image_for(contact)}, contact)
     return _queue("coupon", contact=contact, code=coupon["code"], body=render(coupon.get("message") or DEFAULT_TEMPLATE, values),
                   values=values, call_id=call_id, to=to, channel=channel)
 
 
-def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None = None) -> dict[str, str]:
+def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None = None,
+                   call_id: int | None = None) -> dict[str, str]:
     """What fills the prepaid coupon message: the customer, their order, and the campaign's offer (call_types.offers_of)."""
     name = " ".join(str(contact.get("customer_name") or "").split())
     until = ""
@@ -337,10 +427,17 @@ def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None
         except ValueError:
             until = ""
     discount = " ".join(str(offer.get("max_discount") or "").split()) or _short(offer.get("title"), 60) or "special"
+    name = name.rstrip(" .,")   # "Jyotika ." on a sheet: "Jyotika ji", not "Jyotika . ji"
     name = name if name.lower().endswith(" ji") else f"{name} ji" if name else "ji"
     product = _short(contact.get("product")) or "aapka product"
     code = str(offer.get("code") or "").strip().upper()
-    link = link or link_for(contact)
+    tracked = link or tracked_link(contact, call_id)
+    if code:
+        # Owner, 27 Oct 2026: the link puts the coupon in the cart itself. The one written in the text reads cleanly (no
+        # UTMs); the button's carries them.
+        link, tracked = discount_link(code, link or link_for(contact)), discount_link(code, tracked)
+    else:
+        link = link or link_for(contact)
     return {
         # Whole sentences for a template whose {{1}}, {{2}}, {{3}} each take one (owner, 21 Oct 2026): a template value
         # cannot hold a line break, so each is one line. The name and the order; the offer and its code; the link.
@@ -348,7 +445,8 @@ def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None
         # The owner's words (22 Oct 2026): "Hi Jyoti ji, aapka <product> ₹899 order ready hai ✅ /
         # Prepaid payment par 10% OFF paayein, use code: DIWALIDILSE10 / Pay here: <link>".
         "order_line": f"{name}, aapka {_short_name(product)}{_price(contact.get('amount'))} order ready hai ✅",
-        "offer_line": f"Prepaid payment par *{discount} OFF* paayein, use code: *{code}*",
+        # Owner's words, 27 Oct 2026 (the link applies the code itself).
+        "offer_line": f"*{discount} OFF* exclusively for you on prepaid ✅",
         "pay_line": _pay_line("prepaid_coupon", "Pay here", link),
         "name": name,
         "product": product,
@@ -359,57 +457,104 @@ def prepaid_values(contact: dict, offer: dict, link: str = "", image: str | None
         "link": link,
         "store": STORE_NAME,
         "until": until,
+        "tracked": tracked,   # the link with our UTMs, for the button only (_with_path)
         "link_path": "",   # filled below: the link without the store's address, for a button's dynamic link
         "image": image if image is not None else image_for(contact),   # the template's image, not a line of the text
     }
 
 
-def cart_values(contact: dict, offer: dict | None) -> dict[str, str]:
+def cart_values(contact: dict, offer: dict | None, call_id: int | None = None) -> dict[str, str]:
     """The abandoned-cart message (owner, 22 Oct 2026): the cart's own first line, the campaign's WhatsApp offer when it
     has one, and "Order here" with the cart's link."""
-    v = prepaid_values(contact, offer or {})
-    if not (offer or {}).get("code"):
-        v.update(offer_line="Aapka cart save hai, jab chahein order complete karein ✅", code="", discount="", offer="")
-    v["cart_line"] = f"{v['name']}, aapka {_short_name(v['product'])}{_price(contact.get('amount'))} cart mein wait kar raha hai 🛍️"
-    v["pay_line"] = _pay_line("cart_coupon", "Order here", v["link"])
+    v = prepaid_values(contact, offer or {}, call_id=call_id)
+    # Owner's layout, 27 Oct 2026, in the template's three lines (a template value cannot hold a line break):
+    # "Namaste Jyotika ji, aapka *Pyrite Bracelet – ₹899* cart mein wait kar raha hai" / the product's benefit and the
+    # offer with its code / "Order here: <the coupon link>". Owner, 27 Oct 2026 evening: "click the Details button" got
+    # almost no taps (3 orders from 2,000+ messages), so the link is back in the text; the button still has the UTMs.
+    if (offer or {}).get("code"):
+        offer_words = f"Sirf aapke liye *Exclusive {v['discount']} OFF on prepaid* 🎁 Use Code: *{v['code']}*"
+    else:
+        v.update(code="", discount="", offer="")
+        offer_words = "Aapka cart save hai, jab chahein order complete karein ✅"
+    benefit = benefit_for(contact)
+    price = _price(contact.get("amount")).strip()
+    item = _clean_name(v["product"]) + (f" – {price}" if price else "")
+    v["benefit"] = benefit
+    v["cart_line"] = f"Namaste {v['name']}, aapka *{item}* cart mein wait kar raha hai"
+    v["offer_line"] = f"{benefit} ✨ {offer_words}" if benefit else offer_words
+    v["pay_line"] = v["pay_line_text"] = _pay_line("cart_coupon", "Order here", v["link"])
     return v
 
 
-def queue_cart_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo",
-                      again: bool = False) -> int | None:
+def queue_cart_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo") -> int | None:
     """Write the cart message (its link, and the coupon when there is one) for a customer told on the call it goes on
-    WhatsApp. offer: the campaign's WhatsApp coupon, or None. again: the customer said the first one never came, so
-    the same code goes once more (live_bridge allows it once)."""
-    values = _with_path(cart_values(contact, offer), contact)
-    body = "Hi " + "\n\n".join(values[k] for k in ("cart_line", "offer_line", "pay_line"))
+    WhatsApp. offer: the campaign's WhatsApp coupon, or None."""
+    values = _with_path(cart_values(contact, offer, call_id), contact)
+    # The saved text, as sent where there is no template button (Open in WhatsApp, SMS): the link, not "click Details".
+    body = "\n\n".join(values[k] for k in ("cart_line", "offer_line", "pay_line_text"))
     return _queue("cart_coupon", contact=contact, code=values["code"], body=body, values=values, call_id=call_id, to=to,
-                  channel=channel, again=again)
+                  channel=channel)
+
+
+def campaign_values(contact: dict, msg: dict, offer: dict | None = None, call_id: int | None = None) -> dict[str, str]:
+    """The campaign's own WhatsApp message (call_types.campaign_message), as the dashboard set it: its three lines with
+    {name}, {link}, {code} and {discount} filled in, its image and button link. Owner, 28 Oct 2026: it goes on the store's
+    one template (PINNACLE_CART_TEMPLATE, as the order and cart messages), only the wording is the campaign's."""
+    offer = offer or {}
+    name = " ".join(str(contact.get("customer_name") or "").split()).rstrip(" .,")
+    name = name if name.lower().endswith(" ji") else f"{name} ji" if name else "ji"
+    link = _ascii_url(msg.get("link") or "") if msg.get("link") else ""
+    keys = ("line1", "line2", "line3")
+    raw = {k: msg.get(k) or "" for k in keys}
+    if link and not link.startswith(STORE_URL + "/") and not any("{link}" in v for v in raw.values()):
+        # The template's button opens only the store's pages: a link elsewhere (vedicvaibhav.com) goes in the text.
+        raw["line3"] = f"{raw['line3']} {{link}}".strip()
+    fill = {"name": name, "link": link, "code": str(offer.get("code") or "").upper(),
+            "discount": " ".join(str(offer.get("max_discount") or "").split())}
+    lines = {k: _KEY.sub(lambda m: fill.get(m.group(1), m.group(0)), raw[k]) for k in keys}
+    tracked = tracked_link(contact, call_id, link) if link else ""
+    # link_path: the button's https://<store>/{{1}}; the store's products page when the link is elsewhere.
+    return _with_path({
+        **lines, **fill,
+        "tracked": tracked,
+        "image": whatsapp_image(msg.get("image")) or whatsapp_image(PINNACLE_DEFAULT_IMAGE_URL),
+    }, contact)
+
+
+def queue_campaign_message(*, contact: dict, msg: dict, offer: dict | None, call_id: int | None, to: str = "",
+                           channel: str = "plivo") -> int | None:
+    """Write the campaign's own WhatsApp message for a customer just called."""
+    values = campaign_values(contact, msg, offer, call_id)
+    body = "\n\n".join(values[k] for k in ("line1", "line2", "line3") if values[k])
+    return _queue("campaign_message", contact=contact, code=values["code"], body=body, values=values, call_id=call_id, to=to,
+                  channel=channel)
 
 
 def _with_path(values: dict, contact: dict | None = None) -> dict:
-    """link_path: the link after the store's address, for a button whose link is https://vedicshop.store/{{1}}. A link
-    elsewhere (a cart on another checkout address) gives the product's page; a button value cannot be empty, so with
-    no product either it opens all the store's products."""
-    link = values.get("link") or ""
+    """link_path: the link with our UTMs after the store's address, for a button whose link is
+    https://vedicshop.store/{{1}} (a button does not show its link). A link elsewhere (a cart on another checkout
+    address) gives the product's page, with the UTMs; a button value cannot be empty, so with no product either it
+    opens all the store's products."""
+    link = values.get("tracked") or values.get("link") or ""
     if link.startswith(STORE_URL + "/"):
         return {**values, "link_path": link[len(STORE_URL) + 1:]}
     handle = _product(contact).get("handle") if contact else ""
-    return {**values, "link_path": f"products/{handle}" if handle else "collections/all"}
+    return {**values, "link_path": (f"products/{handle}" if handle else "collections/all") + _utm_query(link)}
 
 
 def queue_prepaid_coupon(*, contact: dict, offer: dict, call_id: int | None, to: str = "", channel: str = "plivo") -> int | None:
     """Write the prepaid coupon message for a cash-on-delivery customer who said yes on the call to getting the code on
-    WhatsApp. Returns its id (or the one they already have for this code), or None when nothing was written."""
+    WhatsApp. Returns its id, or None when nothing was written."""
     if not offer or not str(offer.get("code") or "").strip():
         return None
-    values = _with_path(prepaid_values(contact, offer), contact)
+    values = _with_path(prepaid_values(contact, offer, call_id=call_id), contact)
     return _queue("prepaid_coupon", contact=contact, code=values["code"], body=render(DEFAULT_PREPAID_TEMPLATE, values),
                   values=values, call_id=call_id, to=to, channel=channel)
 
 
 def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call_id: int | None, to: str,
-           channel: str, again: bool = False) -> int | None:
-    """The message written for the number the call rang (the owner's own in test mode), once per number and code."""
+           channel: str) -> int | None:
+    """The message written for the number the call rang (the owner's own in test mode)."""
     test = channel != "plivo" or DIAL_ONLY_MY_NUMBER
     status, error = "queued", None
     if channel == "plivo":
@@ -430,16 +575,7 @@ def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call
     if recipient and recipient in db.do_not_call_phones():
         log.info("coupon %s for contact %s not queued: %s asked not to be called", code, contact.get("id"), recipient)
         return None
-    if not test and code and is_valid_phone(recipient) and not again:   # a link with no coupon may go again
-        with db.connect() as conn:
-            row = conn.execute(
-                f"SELECT id FROM messages WHERE test=0 AND to_phone=? AND coupon_code=? COLLATE NOCASE "
-                f"AND status IN ({','.join('?' for _ in HAS_IT)}) ORDER BY id LIMIT 1",
-                (recipient, code, *HAS_IT)).fetchone()
-        if row:
-            log.info("coupon %s for contact %s not queued again: %s already has it (message %s)",
-                     code, contact.get("id"), recipient, row["id"])
-            return row["id"]
+    # Owner, 27 Oct 2026: the coupon goes on every call, even to a customer who has it already.
     with db.connect() as conn:
         message_id = conn.execute(
             "INSERT INTO messages (kind, contact_id, call_id, to_phone, customer_name, coupon_code, body, params, status, "
@@ -453,7 +589,7 @@ def _queue(kind: str, *, contact: dict, code: str, body: str, values: dict, call
 
 def cart_message_for(contact: dict) -> int | None:
     """The cart message this customer has already (a real one, waiting, going or gone), so a later call of the same
-    campaign does not send it again (owner, 24 Oct 2026: once per customer). Test messages do not count."""
+    campaign reminds them of it. Test messages do not count."""
     if not contact.get("id"):
         return None
     with db.connect() as conn:
@@ -466,38 +602,14 @@ def cart_message_for(contact: dict) -> int | None:
 
 
 def sent_cart_message(contact: dict) -> dict | None:
-    """The cart message this customer already has, as {"id", "code"} ("" when it carried no coupon), or None. Owner, 26
-    Oct 2026: every cart customer gets it once, after their first call; a later call reminds them instead of sending."""
+    """The cart message this customer already has, as {"id", "code"} ("" when it carried no coupon), or None. A later
+    call reminds them of it, and (owner, 27 Oct 2026) it goes again after every call."""
     message_id = cart_message_for(contact)
     if not message_id:
         return None
     with db.connect() as conn:
         row = conn.execute("SELECT coupon_code FROM messages WHERE id=?", (message_id,)).fetchone()
     return {"id": message_id, "code": str((row["coupon_code"] if row else "") or "").upper()}
-
-
-def cart_messages_sent(contact: dict) -> int:
-    """How many real cart messages this customer has had (the first one, and a resend if it never came)."""
-    if not contact.get("id"):
-        return 0
-    with db.connect() as conn:
-        return conn.execute(f"SELECT COUNT(*) FROM messages WHERE kind='cart_coupon' AND test=0 AND contact_id=? "
-                            f"AND status IN ({','.join('?' for _ in HAS_IT)})", (contact["id"], *HAS_IT)).fetchone()[0]
-
-
-def already_sent(phone: str, code: str) -> bool:
-    """This customer has this code already: a real (not test) message to them that is waiting, going or gone."""
-    to = normalise_phone(phone)
-    if not to or not code:
-        return False
-    if PHONE_NUMBER and to == normalise_phone(PHONE_NUMBER):
-        return False   # the owner's own test number gets the offer on every test call (22 Oct 2026)
-    with db.connect() as conn:
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone():
-            return False
-        return bool(conn.execute(
-            f"SELECT 1 FROM messages WHERE test=0 AND to_phone=? AND coupon_code=? COLLATE NOCASE "
-            f"AND status IN ({','.join('?' for _ in HAS_IT)}) LIMIT 1", (to, code, *HAS_IT)).fetchone())
 
 
 # --- reading and changing messages ---------------------------------------------------------------------
@@ -683,7 +795,14 @@ PINNACLE_BUTTONS = {"prepaid_coupon": PINNACLE_PREPAID_BUTTON, "cart_coupon": PI
 def template_missing(m: dict, provider: str | None = None) -> str:
     """Why this message cannot go by the service in .env yet ("" = it can): Pinnacle sends only approved templates,
     each with exactly the values its text has."""
-    if (provider or MESSAGE_PROVIDER) != "pinnacle":
+    provider = provider or MESSAGE_PROVIDER
+    if m.get("kind") == "campaign_message":
+        if provider in ("whatsapp", "plivo_sms"):
+            return "a campaign's own WhatsApp message goes only by Pinnacle; send it by hand meanwhile"
+        if provider == "pinnacle" and not PINNACLE_CART_TEMPLATE:
+            return "no approved WhatsApp template named in .env (PINNACLE_CART_TEMPLATE); send it by hand meanwhile"
+        return ""
+    if provider != "pinnacle":
         return ""
     if m.get("kind") == "prepaid_coupon":
         if not PINNACLE_PREPAID_TEMPLATE:
@@ -700,8 +819,15 @@ async def _send_pinnacle(m: dict) -> str:
     """A template message by Pinnacle (Pinbot), as the owner's other projects send it: the template by name, the product
     photo as its image, the values for its {{1}}, {{2}}..., and the button's dynamic link when it has one. Pinbot answers
     200 even when it refuses, with "status": "FAILED" or a "WA0..." code."""
-    name, keys = PINNACLE_TEMPLATES[m["kind"]]
-    image_from, button = PINNACLE_IMAGES.get(m["kind"], ""), PINNACLE_BUTTONS.get(m["kind"], "")
+    language = PINNACLE_TEMPLATE_LANGUAGE
+    if m["kind"] == "campaign_message":
+        # The campaign's wording on the store's one template (owner, 28 Oct 2026): its lines, image and button link.
+        # A message written before then (with its own "button" value) keeps it.
+        name, keys = PINNACLE_CART_TEMPLATE, ["line1", "line2", "line3"]
+        image_from, button = "campaign", "link_path" if m["params"].get("link_path") else "button"
+    else:
+        name, keys = PINNACLE_TEMPLATES[m["kind"]]
+        image_from, button = PINNACLE_IMAGES.get(m["kind"], ""), PINNACLE_BUTTONS.get(m["kind"], "")
     components: list[dict] = []
     if image_from:
         # A template with an image at the top needs one on every message.
@@ -715,7 +841,7 @@ async def _send_pinnacle(m: dict) -> str:
         components.append({"type": "button", "sub_type": "url", "index": "0",
                            "parameters": [{"type": "text", "text": _param(m["params"].get(button))}]})
     body = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": re.sub(r"\D", "", m["to_phone"]),
-            "type": "template", "template": {"name": name, "language": {"code": PINNACLE_TEMPLATE_LANGUAGE}, "components": components}}
+            "type": "template", "template": {"name": name, "language": {"code": language}, "components": components}}
     try:
         j = await _post(f"{PINNACLE_BASE_URL}/v3/{PINBOT_PHONE_NUMBER_ID}/messages", body, headers={"apikey": PINNACLE_API_KEY})
     except SendError as exc:
@@ -824,11 +950,12 @@ def _hold(message_id: int, error: str) -> bool:
 
 
 async def send_due() -> int:
-    """One round of the worker: the queued messages whose time has come, oldest first. Returns how many went out."""
+    """One round of the worker: the queued messages whose time has come, oldest first, the owner's test messages before
+    all others (28 Oct 2026: four test messages waited behind 2,129 cart messages). Returns how many went out."""
     with db.connect() as conn:
         rows = [_public(r) for r in conn.execute(
             "SELECT * FROM messages WHERE status='queued' AND (next_try_at IS NULL OR next_try_at='' OR next_try_at<=?) "
-            "ORDER BY created_at, id LIMIT ?", (db.now_iso(), BATCH))]
+            "ORDER BY test DESC, created_at, id LIMIT ?", (db.now_iso(), BATCH))]
     sent = 0
     for m in rows:
         if _too_old(m):
@@ -913,12 +1040,28 @@ async def prepaid_preview(body: dict) -> dict:
                if PINNACLE_PREPAID_BUTTON else [])}
 
 
+@router.post("/api/messages/campaign-preview")
+async def campaign_preview(body: dict) -> dict:
+    """The campaign's own WhatsApp message ({"message": {...}, "offers": "[...]"} as on the dashboard) for a sample
+    customer: the text, and what goes into the template, value by value."""
+    from .call_types import campaign_message, message_offer   # here: call_types reads this module
+    facts = {"whatsapp_message": json.dumps({**(body.get("message") or {}), "on": True}), "offers": body.get("offers") or "[]"}
+    msg = campaign_message(facts) or {}
+    values = campaign_values({"customer_name": "Ramesh"}, msg, message_offer(facts))
+    service = provider_status()
+    return {"body": "\n\n".join(values[k] for k in ("line1", "line2", "line3") if values[k]), "image": values["image"],
+            "service": service, "waiting": template_missing({"kind": "campaign_message", "params": values}, service["provider"]),
+            "template_name": PINNACLE_CART_TEMPLATE,
+            "sends": [{"slot": f"{{{{{i + 1}}}}}", "value": _param(values[k]), "from": f"line {i + 1}"} for i, k in enumerate(("line1", "line2", "line3"))]
+            + [{"slot": "button link", "value": f"{STORE_URL}/{values['link_path']}", "from": "the Details button"}]}
+
+
 @router.post("/api/calls/{call_id}/send-coupon")
 async def send_coupon_for_call(call_id: int) -> dict:
     """Send WhatsApp coupon on the Calls page (owner, 22 Oct 2026): the coupon message this call's customer gets after a
     yes on the call, sent now with no call, to test the message without paying for a call. The offer as it is now: the
     campaign's WhatsApp coupon for an order, the coupon marked for calls for a cart. Never changes the order's payment."""
-    from .call_types import call_type_for, whatsapp_offer   # here: call_types reads this module
+    from .call_types import call_type_for, campaign_message, message_offer, whatsapp_offer   # here: call_types reads this module
     call = db.get_call(call_id)
     contact = db.get_contact(call["contact_id"]) if call and call.get("contact_id") else None
     if not contact:
@@ -936,8 +1079,10 @@ async def send_coupon_for_call(call_id: int) -> dict:
         campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
         offer = whatsapp_offer((campaign or {}).get("facts") or {})   # None: the link alone
         message_id = queue_cart_coupon(contact=contact, offer=offer, call_id=call_id, channel="by_hand")
+    elif (msg := campaign_message(facts := ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {})):
+        message_id = queue_campaign_message(contact=contact, msg=msg, offer=message_offer(facts), call_id=call_id, channel="by_hand")
     else:
-        raise HTTPException(400, "Only order-confirmation and abandoned-cart calls have a WhatsApp coupon.")
+        raise HTTPException(400, "This call's campaign sends no WhatsApp message (switch it on in Facts & offers).")
     if not message_id:
         raise HTTPException(400, "Not sent: this number asked not to be called.")
     log.info("message %s: coupon for call %s sent by hand from the Calls page, no call", message_id, call_id)

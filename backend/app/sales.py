@@ -1,4 +1,5 @@
-"""What the calls really sold: store orders matched back to the calls before them (owner, 26 Oct 2026).
+"""What the calls really sold: store orders matched back to the calls before them (owner, 26 Oct 2026), and (27 Oct
+2026) orders placed from the WhatsApp link we sent, found by its UTMs (link_orders, below).
 
 A campaign's "Converted" only says the customer said yes on the call. Here every store order (VV-Ecom.shopifyorders,
 the copy filled within seconds) is checked against the calls to the same phone number in the SALE_WINDOW_DAYS before
@@ -56,6 +57,22 @@ CREATE TABLE IF NOT EXISTS call_sales (
 );
 CREATE INDEX IF NOT EXISTS call_sales_campaign ON call_sales(campaign_id);
 CREATE INDEX IF NOT EXISTS call_sales_call ON call_sales(call_id);
+CREATE TABLE IF NOT EXISTS link_orders (
+    order_name TEXT PRIMARY KEY,   -- an order placed from our WhatsApp link: utm_source=voice_agent on it
+    phone TEXT,
+    placed_at TEXT NOT NULL,       -- UTC ISO
+    amount REAL,
+    payment TEXT,                  -- COD, Prepaid, Part-paid COD
+    product TEXT,
+    utm_campaign TEXT,             -- the call type: abandoned_cart, order_confirmation...
+    utm_term TEXT,                 -- campaign_<id>
+    utm_content TEXT,              -- call_<id>
+    call_id INTEGER,
+    contact_id INTEGER,
+    campaign_id INTEGER,
+    matched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS link_orders_campaign ON link_orders(campaign_id);
 CREATE TABLE IF NOT EXISTS order_status (
     order_name TEXT PRIMARY KEY,
     bucket TEXT,                   -- dashStatus.bucket, else shopifyGroupedStatus
@@ -160,12 +177,110 @@ async def check_once() -> int:
     return matched
 
 
+# --- orders from our link (owner, 27 Oct 2026) ------------------------------------------------------------------------
+# Every link we send carries utm_source=voice_agent (messaging.tracked_link). GoKwik, the store's checkout for COD and
+# prepaid alike, saves the visit's utm_* on the Shopify order as its custom attributes. The MongoDB copies do not keep
+# those, so they are read from Shopify itself. Unlike the phone match this is certain, and finds an order placed from
+# another number; it misses a customer who came back some other way (an ad, the address typed in).
+_LINK_MARK = "link_sales"
+LINK_ORDERS = """query linkOrders($q: String!, $after: String) {
+  orders(first: 100, after: $after, sortKey: CREATED_AT, query: $q) {
+    pageInfo { hasNextPage endCursor }
+    nodes { name createdAt phone displayFinancialStatus totalPriceSet { shopMoney { amount } }
+            shippingAddress { phone } customer { phone } customAttributes { key value }
+            lineItems(first: 3) { nodes { title } } } } }"""
+STATE_LINK: dict = {"last_check": "", "error": "", "matched": 0}
+
+
+def link_payment(status: str) -> str:
+    """Shopify's financial status as the pages name payments: COD stays pending, a part-paid COD (GoKwik PPCOD) is
+    partially paid, the rest was paid online (as store_orders.payment_kind)."""
+    status = str(status or "").upper()
+    return "Part-paid COD" if status == "PARTIALLY_PAID" else "COD" if status in ("PENDING", "AUTHORIZED", "") else "Prepaid"
+
+
+def _id_in(value: str, prefix: str) -> int | None:
+    """call_123 -> 123 (utm_content), campaign_43 -> 43 (utm_term)."""
+    value = str(value or "").strip().lower()
+    return int(value[len(prefix):]) if value.startswith(prefix) and value[len(prefix):].isdigit() else None
+
+
+def link_order_row(node: dict) -> dict | None:
+    """A Shopify order as a link_orders row, or None when it did not come from our link. The call comes from
+    utm_content, else the campaign from utm_term, else the last call to the order's phone in the window."""
+    attrs = {str(a.get("key") or "").lower(): str(a.get("value") or "") for a in node.get("customAttributes") or []}
+    if attrs.get("utm_source", "").strip().lower() != "voice_agent":
+        return None
+    phone = normalise_phone(node.get("phone") or (node.get("shippingAddress") or {}).get("phone")
+                            or (node.get("customer") or {}).get("phone") or "")
+    placed = _utc(node["createdAt"])
+    call_id, campaign_id = _id_in(attrs.get("utm_content"), "call_"), _id_in(attrs.get("utm_term"), "campaign_")
+    contact_id = None
+    with db.connect() as conn:
+        found = conn.execute("SELECT c.id, c.contact_id, k.campaign_id FROM calls c LEFT JOIN contacts k ON k.id = c.contact_id "
+                             "WHERE c.id = ?", (call_id,)).fetchone() if call_id else None
+        if not found and not campaign_id and phone:
+            since = (placed - timedelta(days=SALE_WINDOW_DAYS)).isoformat()
+            for c in conn.execute("SELECT c.id, c.contact_id, k.campaign_id, k.phone FROM calls c JOIN contacts k "
+                                  "ON k.id = c.contact_id WHERE c.channel = 'plivo' AND COALESCE(c.test_mode, 0) = 0 "
+                                  "AND c.started_at >= ? AND c.started_at < ? ORDER BY c.started_at DESC",
+                                  (since, placed.isoformat())):
+                if normalise_phone(c["phone"]) == phone:
+                    found = c
+                    break
+    if found:
+        call_id, contact_id, campaign_id = found["id"], found["contact_id"], found["campaign_id"] or campaign_id
+    else:
+        call_id = None
+    items = [li.get("title") for li in ((node.get("lineItems") or {}).get("nodes") or []) if li.get("title")]
+    return {"order_name": str(node.get("name") or ""), "phone": phone, "placed_at": placed.isoformat(),
+            "amount": _amount(((node.get("totalPriceSet") or {}).get("shopMoney") or {}).get("amount")),
+            "payment": link_payment(node.get("displayFinancialStatus")), "product": ", ".join(items)[:300],
+            "utm_campaign": attrs.get("utm_campaign", ""), "utm_term": attrs.get("utm_term", ""),
+            "utm_content": attrs.get("utm_content", ""), "call_id": call_id, "contact_id": contact_id,
+            "campaign_id": campaign_id, "matched_at": db.now_iso()}
+
+
+async def check_links_once() -> int:
+    """Read the Shopify orders placed since the last look and keep the ones from our link. Returns how many."""
+    from . import shopify   # here: only this check needs the Admin API
+    if not shopify.admin_ready():
+        return 0
+    mark = db.get_setting(_LINK_MARK, {}) or {}
+    # The first look goes back one window, so orders from links sent before this check started are found too.
+    since = mark.get("since") or (datetime.now(timezone.utc) - timedelta(days=SALE_WINDOW_DAYS)).isoformat()
+    newest, after, found = since, None, 0
+    while True:
+        data = await shopify.graphql(LINK_ORDERS, {"q": f"created_at:>='{since}'", "after": after})
+        page = data.get("orders") or {}
+        for node in page.get("nodes") or []:
+            newest = max(newest, _utc(node["createdAt"]).isoformat())
+            row = link_order_row(node)
+            if not row or not row["order_name"]:
+                continue
+            with db.connect() as conn:
+                conn.execute(f"INSERT OR REPLACE INTO link_orders ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
+                             tuple(row.values()))
+            found += 1
+            log.info("order %s came from our link (%s, %s, call %s, campaign %s)", row["order_name"], row["payment"],
+                     row["utm_campaign"] or "no utm_campaign", row["call_id"], row["campaign_id"])
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        after = info.get("endCursor")
+        await asyncio.sleep(0.5)   # Shopify's query budget refills at its own pace
+    # An order placed in the same second as the newest one seen comes again next time: kept once (order_name).
+    db.set_setting(_LINK_MARK, {"since": newest})
+    return found
+
+
 async def refresh_status() -> int:
     """The outcome of each matched order and each order an order confirmation call was about, from the richer copy."""
     since = (datetime.now(timezone.utc) - timedelta(days=STATUS_DAYS)).isoformat()
     final = ",".join("?" for _ in FINAL)
     with db.connect() as conn:
         names = {r[0] for r in conn.execute("SELECT order_name FROM call_sales WHERE placed_at >= ?", (since,))}
+        names |= {r[0] for r in conn.execute("SELECT order_name FROM link_orders WHERE placed_at >= ?", (since,))}
         names |= {r[0] for r in conn.execute(
             "SELECT DISTINCT k.order_id FROM contacts k JOIN campaigns m ON m.id = k.campaign_id "
             "WHERE m.call_type = 'order_confirmation' AND k.order_id != '' AND k.created_at >= ?", (since,))}
@@ -188,11 +303,18 @@ async def refresh_status() -> int:
 
 
 async def worker() -> None:
-    if not store_orders.enabled():
-        return
     last_status = 0.0
     loop = asyncio.get_running_loop()
     while True:
+        try:
+            STATE_LINK["matched"] += await check_links_once()
+            STATE_LINK["last_check"], STATE_LINK["error"] = db.now_iso(), ""
+        except Exception as exc:  # noqa: BLE001
+            STATE_LINK["error"] = f"{type(exc).__name__}: {exc}"[:300]
+            log.warning("orders from our link not read: %s", STATE_LINK["error"])
+        if not store_orders.enabled():   # the phone match and the outcomes read the store's MongoDB copies
+            await asyncio.sleep(CHECK_SECONDS)
+            continue
         try:
             STATE["matched"] += await check_once()
             if loop.time() - last_status >= STATUS_EVERY_SECONDS:
@@ -239,6 +361,8 @@ def campaign_sales(campaign_id: int, cost_rs: float) -> dict:
         "window_days": SALE_WINDOW_DAYS,
         "orders": len(orders), "sales_rs": round(sum(r["amount"] or 0 for r in orders), 2),
         "talked_orders": len(talked_orders), "talked_sales_rs": round(sum(r["amount"] or 0 for r in talked_orders), 2),
+        "talked_cod": _money([r for r in talked_orders if r["payment"] != "Prepaid"]),
+        "talked_prepaid": _money([r for r in talked_orders if r["payment"] == "Prepaid"]),
         "cod": sum(1 for r in orders if r["payment"] != "Prepaid"),
         "cost_per_order_rs": round(cost_rs / len(talked_orders), 2) if talked_orders else None,
         "talked": {"customers": len(talked_people), "bought": len(bought_talked & talked_people)},
@@ -246,6 +370,45 @@ def campaign_sales(campaign_id: int, cost_rs: float) -> dict:
         **_outcomes(talked_orders),
         "last_check": STATE["last_check"], "error": STATE["error"],
     }
+
+
+def link_sales(campaign_id: int, cost_rs: float) -> dict:
+    """A campaign's orders placed from our WhatsApp button (utm_source=voice_agent), COD and prepaid apart."""
+    with db.connect() as conn:
+        orders = conn.execute(
+            "SELECT s.*, o.bucket FROM link_orders s LEFT JOIN order_status o ON o.order_name = s.order_name "
+            "WHERE s.campaign_id = ?", (campaign_id,)).fetchall()
+    return {
+        **_by_payment(orders),
+        "part_paid": _money([r for r in orders if r["payment"] == "Part-paid COD"]),   # counted in cod too
+        "cost_per_order_rs": round(cost_rs / len(orders), 2) if orders else None,
+        **_outcomes(orders),
+        "last_check": STATE_LINK["last_check"], "error": STATE_LINK["error"],
+    }
+
+
+def reach(campaign_id: int | None = None, days: int | None = None) -> dict:
+    """Owner, 27 Oct 2026: the customers we reached (called, or sent a WhatsApp message, at least once), how many got
+    both, how many of them then ordered (by phone within the window of a call, or from the button's UTMs), and how many
+    have not bought yet. One campaign, or every campaign over the last `days`. Test calls and messages never count."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else ""
+    where = " AND k.campaign_id = ?" if campaign_id is not None else ""
+    args = (since, *(() if campaign_id is None else (campaign_id,)))
+    with db.connect() as conn:
+        called = {r[0] for r in conn.execute(
+            "SELECT DISTINCT c.contact_id FROM calls c JOIN contacts k ON k.id = c.contact_id WHERE c.channel = 'plivo' "
+            f"AND COALESCE(c.test_mode, 0) = 0 AND c.started_at >= ?{where}", args)}
+        messaged = {r[0] for r in conn.execute(
+            "SELECT DISTINCT m.contact_id FROM messages m JOIN contacts k ON k.id = m.contact_id WHERE m.test = 0 "
+            f"AND m.status = 'sent' AND m.created_at >= ?{where}", args)}
+        ordered = {r[0] for r in conn.execute(
+            f"SELECT s.contact_id FROM call_sales s JOIN contacts k ON k.id = s.contact_id WHERE s.placed_at >= ?{where} "
+            f"UNION SELECT s.contact_id FROM link_orders s JOIN contacts k ON k.id = s.contact_id WHERE s.placed_at >= ?{where}",
+            args + args)}
+    reached = called | messaged
+    bought = ordered & reached
+    return {"reached": len(reached), "called": len(called), "messaged": len(messaged), "both": len(called & messaged),
+            "ordered": len(bought), "not_bought": len(reached - bought), "days": days}
 
 
 # What the customer said on the order confirmation call, in the groups the outcomes are compared by.
@@ -292,14 +455,25 @@ def week_sales() -> dict:
     """Overview: orders after a talk with the agent in the last 7 days, and their value."""
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     with db.connect() as conn:
-        r = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS rs FROM call_sales "
-                         "WHERE talked = 1 AND placed_at >= ?", (since,)).fetchone()
-    return {"orders": r["n"], "sales_rs": round(r["rs"], 2), "window_days": SALE_WINDOW_DAYS}
+        talked = conn.execute("SELECT amount, payment FROM call_sales WHERE talked = 1 AND placed_at >= ?", (since,)).fetchall()
+        link = conn.execute("SELECT amount, payment FROM link_orders WHERE placed_at >= ?", (since,)).fetchall()
+    return {**_by_payment(talked), "window_days": SALE_WINDOW_DAYS, "link": _by_payment(link)}
+
+
+def _money(rows) -> dict:
+    return {"orders": len(rows), "sales_rs": round(sum(r["amount"] or 0 for r in rows), 2)}
+
+
+def _by_payment(rows) -> dict:
+    """Orders and their value, in all and split: COD (part-paid COD with it: the rest is paid at the door) and prepaid."""
+    rows = list(rows)
+    return {**_money(rows), "cod": _money([r for r in rows if r["payment"] != "Prepaid"]),
+            "prepaid": _money([r for r in rows if r["payment"] == "Prepaid"])}
 
 
 @router.get("/api/sales")
 async def sales_status() -> dict:
-    return {**STATE, "window_days": SALE_WINDOW_DAYS, **week_sales()}
+    return {**STATE, "window_days": SALE_WINDOW_DAYS, **week_sales(), "link_check": STATE_LINK}
 
 
 @router.get("/api/sales/confirmations")

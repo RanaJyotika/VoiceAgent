@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PhoneOff } from "lucide-react";
+import { TryBadge } from "@/components/calls/try-badge";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { usePoll } from "@/hooks/use-poll";
@@ -90,7 +91,10 @@ export function LiveCallsTable({ campaigns, campaignId }: { campaigns: Campaign[
                     className={cn("cursor-pointer outline-none hover:bg-muted/50 focus-visible:bg-muted", open === c.call_id && "bg-muted")}
                   >
                     <td className="px-4 py-2.5">
-                      <div className="font-medium">{c.customer_name || "Unknown"}</div>
+                      <div className="flex items-center gap-2 font-medium">
+                        {c.customer_name || "Unknown"}
+                        <TryBadge n={c.try} max={c.max_tries} />
+                      </div>
                       <div className="font-mono text-[12.5px] text-muted-foreground">{fmtPhone(c.to)}</div>
                     </td>
                     <td className="px-4 py-2.5">{campaignLabel(c)}</td>

@@ -3,10 +3,13 @@
 The owner presses Start on the dashboard. From then on, while the campaign is running:
 - contacts that were never called are dialled in sheet order;
 - no-answer and busy contacts are dialled again after RETRY_MINUTES, up to MAX_ATTEMPTS times;
-- at most MAX_CONCURRENT calls run at once (default 1: one agent, one customer at a time);
+- at most MAX_CONCURRENT of its calls run at once (default 1: one agent, one customer at a time);
 - calls are only placed inside the calling hours (Indian time);
 - the campaign pauses itself when a call fails for a reason on our side (Gemini billing, Plivo
   refusing the number, the tunnel gone), so a bad key cannot burn through the whole list.
+
+Several campaigns can call at once (owner, 27 Oct 2026: an abandoned cart list and a puja awareness list side by
+side). Each run keeps to its own lines at once; all of them together keep to MAX_CONCURRENT_CALLS.
 
 Every call goes through the same place_call as the Call button, so the records (transcript,
 outcome, notes, recording, cost) are exactly the same. What the customer said is written by the
@@ -18,10 +21,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from . import db, usage
-from .config import (DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
+from .config import (DIAL_GAP_SECONDS, DIAL_ONLY_MY_NUMBER, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, PHONE_NUMBER,
                      STALE_PAGE, VOICES, plivo_missing)
 from .call_types import missing_facts
 from .db import IST
@@ -31,18 +34,24 @@ from .prompts import LANGUAGES
 log = logging.getLogger("campaign")
 router = APIRouter()
 
-GAP_SECONDS = 4          # breathing space between one call ending and the next being placed
+GAP_SECONDS = DIAL_GAP_SECONDS   # between placing one call and the next (config.py)
 STOP_ON_ERRORS = 2       # consecutive system failures that pause the campaign
 
 # Contacts being dialled right now, before Plivo has taken the call (place_call adds a call to
-# PENDING only once Plivo answers). Two dialers run side by side, this one and automatic calling
-# (autodial.py): picking a contact and adding it here happen with no await in between, so the
-# other dialer never rings the same contact, and lines in use counts calls still being placed.
+# PENDING only once Plivo answers). Several dialers run side by side, the campaign runs and automatic
+# calling (autodial.py): picking a contact and adding it here happen with no await in between, so
+# another dialer never rings the same contact, and lines in use counts calls still being placed.
 DIALING: set[int] = set()
 
 
 def lines_in_use() -> int:
     return len(PENDING) + len(DIALING)
+
+
+def lines_full(c: "Campaign") -> bool:
+    """This dialer has all its own lines busy, or every line we have is busy. A dialer counts only its own calls:
+    with the total, a run set to 9 lines next to one set to 40 would never get a line."""
+    return len(c.watchers) >= c.settings.max_concurrent or lines_in_use() >= MAX_CONCURRENT_CALLS
 
 
 async def dial(contact: dict, s: "Settings"):
@@ -56,7 +65,7 @@ async def dial(contact: dict, s: "Settings"):
 
 @dataclass
 class Settings:
-    campaign_id: int = 0           # the campaign being called (one runs at a time)
+    campaign_id: int = 0           # the campaign being called
     voice: str = GEMINI_VOICE
     model: str = ""                # the agent every call of this run starts on ("" = the first offered)
     language: str = "hinglish"     # for rows whose sheet has no language column
@@ -79,33 +88,42 @@ class Campaign:
     calls_made: int = 0
     errors_in_a_row: int = 0
     task: asyncio.Task | None = None
-    watchers: set = field(default_factory=set)
-
-    def snapshot(self, campaign_id: int | None = None) -> dict:
-        """How the running campaign stands, or (when another one is asked for) how that one's list
-        stands; its saved settings are returned so the form shows what it last ran with."""
-        s = self.settings
-        cid = s.campaign_id if self.running or not campaign_id else campaign_id
-        viewed = campaign_id or cid
-        camp = db.get_campaign(viewed) if viewed else None
-        saved = Settings(**{**asdict(Settings()), **((camp or {}).get("settings") or {}), "campaign_id": viewed or 0})             if camp and not (self.running and viewed == s.campaign_id) else s
-        counts = db.contact_counts(saved.max_attempts, viewed) if viewed else db.contact_counts(saved.max_attempts, -1)
-        return {
-            "running": self.running, "running_campaign_id": s.campaign_id if self.running else None,
-            "campaign_id": viewed, "last_call_date": (camp or {}).get("last_call_date") or "",
-            "past_last_date": past_last_date(camp),
-            "reason": self.reason if (self.running or viewed == s.campaign_id) else "",
-            "started_at": self.started_at,
-            "calls_made": self.calls_made, "settings": asdict(saved), "in_progress": len(PENDING),
-            "within_hours": within_hours(saved), "now_ist": datetime.now(IST).strftime("%H:%M"),
-            "waiting": "" if within_hours(saved) else waiting_text(saved),
-            "dial_only_my_number": DIAL_ONLY_MY_NUMBER, "my_number": PHONE_NUMBER if DIAL_ONLY_MY_NUMBER else "",
-            "max_concurrent_allowed": MAX_CONCURRENT_CALLS,
-            **counts,
-        }
+    watchers: set = field(default_factory=set)   # its calls in progress
 
 
-CAMPAIGN = Campaign()
+# Campaign id -> its latest run. A run that ended stays, so its page can say why it ended.
+RUNS: dict[int, Campaign] = {}
+
+
+def is_running(campaign_id: int | None) -> bool:
+    run = RUNS.get(campaign_id or 0)
+    return bool(run and run.running)
+
+
+def running_ids() -> list[int]:
+    return [cid for cid, run in RUNS.items() if run.running]
+
+
+def snapshot(campaign_id: int | None) -> dict:
+    """How one campaign's calling stands: its run while it calls, else its saved settings (so the form shows what it
+    last ran with) and why its last run ended."""
+    run = RUNS.get(campaign_id or 0) or Campaign()
+    camp = db.get_campaign(campaign_id) if campaign_id else None
+    s = run.settings if run.running else Settings(**{**asdict(Settings()), **((camp or {}).get("settings") or {}), "campaign_id": campaign_id or 0})
+    counts = db.contact_counts(s.max_attempts, campaign_id) if campaign_id else db.contact_counts(s.max_attempts, -1)
+    return {
+        "running": run.running, "running_campaign_id": campaign_id if run.running else None,
+        "running_campaign_ids": running_ids(),
+        "campaign_id": campaign_id, "last_call_date": (camp or {}).get("last_call_date") or "",
+        "past_last_date": past_last_date(camp),
+        "reason": run.reason, "started_at": run.started_at,
+        "calls_made": run.calls_made, "settings": asdict(s), "in_progress": len(run.watchers),
+        "within_hours": within_hours(s), "now_ist": datetime.now(IST).strftime("%H:%M"),
+        "waiting": "" if within_hours(s) else waiting_text(s),
+        "dial_only_my_number": DIAL_ONLY_MY_NUMBER, "my_number": PHONE_NUMBER if DIAL_ONLY_MY_NUMBER else "",
+        "max_concurrent_allowed": MAX_CONCURRENT_CALLS,
+        **counts,
+    }
 
 
 def past_last_date(camp: dict | None) -> bool:
@@ -154,10 +172,9 @@ def waiting_text(s: Settings) -> str:
             f"It is {datetime.now(IST):%a %H:%M} now, so the next call goes {when}.")
 
 
-async def _run() -> None:
-    c = CAMPAIGN
+async def _run(c: Campaign) -> None:
     s = c.settings
-    log.info("campaign started: %s", asdict(s))
+    log.info("campaign %s started: %s", s.campaign_id, asdict(s))
     try:
         waiting_logged = False
         while c.running:
@@ -182,14 +199,14 @@ async def _run() -> None:
                 # Shown on the campaign page (owner, 21 Oct 2026: a run "started immediately" waited silently for Monday).
                 c.reason = waiting_text(s)
                 if not waiting_logged:
-                    log.info("campaign waiting: calls only %s, %02d:00 to %02d:00 IST", days_text(s.days), s.start_hour, s.end_hour)
+                    log.info("campaign %s waiting: calls only %s, %02d:00 to %02d:00 IST", s.campaign_id, days_text(s.days), s.start_hour, s.end_hour)
                     waiting_logged = True
                 await asyncio.sleep(30)
                 continue
             if waiting_logged:
                 c.reason = ""
             waiting_logged = False
-            if lines_in_use() >= s.max_concurrent:
+            if lines_full(c):
                 await asyncio.sleep(1)
                 continue
             contact = db.next_to_call(s.max_attempts, s.campaign_id)
@@ -197,7 +214,7 @@ async def _run() -> None:
                 await asyncio.sleep(1)     # automatic calling is placing this very call
                 continue
             if contact is None:
-                if PENDING or c.watchers:
+                if c.watchers:
                     await asyncio.sleep(2)     # last calls still running; their retries may come
                     continue
                 counts = db.contact_counts(s.max_attempts, s.campaign_id)
@@ -221,7 +238,7 @@ async def _run() -> None:
                 c.reason = f"paused: {type(exc).__name__}: {exc}"
                 break
             c.calls_made += 1
-            w = asyncio.create_task(_after_call(pc, contact))
+            w = asyncio.create_task(_after_call(pc, contact, c))
             c.watchers.add(w)
             w.add_done_callback(c.watchers.discard)
             await asyncio.sleep(GAP_SECONDS)
@@ -230,12 +247,12 @@ async def _run() -> None:
     finally:
         c.running = False
         c.task = None
-        log.info("campaign ended: %s (%s calls this run)", c.reason, c.calls_made)
+        log.info("campaign %s ended: %s (%s calls this run)", s.campaign_id, c.reason, c.calls_made)
 
 
-async def _after_call(pc, contact: dict, c: Campaign = CAMPAIGN) -> None:
+async def _after_call(pc, contact: dict, c: Campaign) -> None:
     """Once a campaign call is over, decide whether that contact gets another try. c is the
-    dialer that placed it: this campaign, or automatic calling."""
+    dialer that placed it: a campaign run, or automatic calling."""
     s = c.settings
     try:
         await pc.task
@@ -286,7 +303,7 @@ def clean_settings(body: dict, campaign_id: int = 0) -> Settings:
 
 @router.get("/api/campaign")
 async def campaign_status(campaign_id: int | None = None) -> dict:
-    return CAMPAIGN.snapshot(campaign_id)
+    return snapshot(campaign_id)
 
 
 @router.post("/api/campaign/start")
@@ -297,16 +314,15 @@ async def campaign_start(body: dict) -> dict:
     camp = db.get_campaign(int(body.get("campaign_id") or 0))
     if not camp:
         raise HTTPException(400, "Pick a campaign to start.")
-    if not plivo_missing() and not CAMPAIGN.running and (why := await line_problem()):
+    if not plivo_missing() and not running_ids() and (why := await line_problem()):
         raise HTTPException(400, why)   # owner, 22 Oct 2026: a dead tunnel paused every start with Plivo's own error
     return begin(camp, clean_settings(body, camp["id"]))
 
 
 def begin(camp: dict, s: Settings) -> dict:
     """Start calling a campaign, by the Start button or at its scheduled time: every check, then the run."""
-    c = CAMPAIGN
-    if c.running:
-        raise HTTPException(400, "A campaign is already running. Stop it first; one campaign calls at a time.")
+    if is_running(camp["id"]):
+        raise HTTPException(400, "This campaign is already calling.")
     if past_last_date(camp):
         raise HTTPException(400, "This campaign's last calling day has passed. Change it on the campaign to call again.")
     if missing_facts(camp):
@@ -319,13 +335,11 @@ def begin(camp: dict, s: Settings) -> dict:
     counts = db.contact_counts(s.max_attempts, s.campaign_id)
     if not counts["to_call"]:
         raise HTTPException(400, "Nobody to call: every contact is done. Re-queue some contacts or upload a new sheet.")
-    c.settings = s
     db.update_campaign(s.campaign_id, settings={k: v for k, v in asdict(s).items() if k != "campaign_id"})
-    c.running, c.reason, c.calls_made, c.errors_in_a_row = True, "", 0, 0
-    c.started_at = db.now_iso()
-    c.task = asyncio.create_task(_run())
+    c = RUNS[s.campaign_id] = Campaign(settings=s, running=True, started_at=db.now_iso())
+    c.task = asyncio.create_task(_run(c))
     db.update_campaign(s.campaign_id, start_at=None)   # a scheduled start is used up by any start
-    return c.snapshot()
+    return snapshot(s.campaign_id)
 
 
 # --- scheduled starts (owner, 21 Oct 2026: "Start: Immediately or Schedule") -------------------------------------
@@ -338,8 +352,8 @@ def _when(iso: str) -> str:
 
 
 def run_due_schedules() -> None:
-    """Start every campaign whose scheduled time has come, with the settings saved on it. One campaign calls at a time:
-    a start that finds another one calling waits (up to SCHEDULE_GRACE). Never a start long after the time set."""
+    """Start every campaign whose scheduled time has come, with the settings saved on it. Never a start long after the
+    time set (SCHEDULE_GRACE)."""
     now = datetime.now(IST)
     for camp in db.list_campaigns():
         at = camp.get("start_at")
@@ -350,11 +364,9 @@ def run_due_schedules() -> None:
             continue
         if (now - due).total_seconds() > SCHEDULE_GRACE:
             db.update_campaign(camp["id"], start_at=None,
-                               start_note=f"missed: it was due {_when(at)}, but the server was off or another campaign was calling")
+                               start_note=f"missed: it was due {_when(at)}, but the server was off")
             log.warning("scheduled start of campaign %s missed (due %s)", camp["id"], at)
             continue
-        if CAMPAIGN.running:
-            continue   # one campaign calls at a time: try again on the next tick
         saved = {**asdict(Settings()), **(camp.get("settings") or {})}
         try:
             begin(camp, clean_settings(saved, camp["id"]))
@@ -401,21 +413,24 @@ async def schedule_campaign(campaign_id: int, body: dict) -> dict:
 
 
 @router.post("/api/campaign/stop")
-async def campaign_stop() -> dict:
-    """Stop placing new calls. A call already in progress is left to finish."""
-    c = CAMPAIGN
-    if c.task and not c.task.done():
-        c.reason = "stopped by you"
-        c.running = False
-        c.task.cancel()
-    return c.snapshot()
+async def campaign_stop(body: dict | None = Body(None)) -> dict:
+    """Stop placing new calls for {"campaign_id": n}; with no campaign_id (an older page), every campaign. A call
+    already in progress is left to finish."""
+    cid = int((body or {}).get("campaign_id") or 0)
+    for run in ([RUNS[cid]] if cid in RUNS else []) if cid else list(RUNS.values()):
+        if run.task and not run.task.done():
+            run.reason = "stopped by you"
+            run.running = False
+            run.task.cancel()
+    return snapshot(cid or None)
 
 
 def _ringer(campaign_id: int | None, auto_ids: set[int]) -> tuple[str, int, str]:
     """Who rings this campaign's call-backs now: ("campaign" | "auto" | "", its tries per contact, why it is idle)."""
     from . import autodial   # autodial imports this module
-    if CAMPAIGN.running and campaign_id == CAMPAIGN.settings.campaign_id:
-        return "campaign", CAMPAIGN.settings.max_attempts, CAMPAIGN.reason
+    if is_running(campaign_id):
+        run = RUNS[campaign_id]
+        return "campaign", run.settings.max_attempts, run.reason
     if autodial.AUTO.running and campaign_id in auto_ids:
         return "auto", autodial.AUTO.settings.max_attempts, autodial.AUTO.reason
     saved = (db.get_campaign(campaign_id) or {}).get("settings") if campaign_id else None
@@ -457,7 +472,7 @@ async def list_callbacks(campaign_id: int = 0) -> dict:
     now = db.now_iso()
     for c in [*waiting, *moved]:
         _callback_state(c, now, ringers)
-    return {"rows": waiting, "moved_on": moved, "max_attempts": CAMPAIGN.settings.max_attempts, "running": CAMPAIGN.running}
+    return {"rows": waiting, "moved_on": moved, "max_attempts": Settings.max_attempts, "running": bool(running_ids())}
 
 
 @router.post("/api/contacts/{contact_id}/schedule")

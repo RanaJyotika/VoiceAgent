@@ -48,9 +48,8 @@ export function CallingCard({ camp, state: s, cfg, form, setForm, onChanged }: P
   const [busy, setBusy] = useState(false);
   const [more, setMore] = useState(false);
 
-  // "running" means THIS campaign is the one calling; another one may be running instead.
-  const running = !!s?.running && s.running_campaign_id === s.campaign_id;
-  const otherRunning = !!s?.running && !running;
+  // Several campaigns can call at once; "running" is this one's run.
+  const running = !!s?.running;
   const calling = s?.by_status.calling || 0;
   const done = s ? Math.max(0, s.total - s.to_call - calling) : 0;
   const retryable = s ? (s.by_status.no_answer || 0) + (s.by_status.busy || 0) + (s.by_status.dropped || 0) : 0;
@@ -62,7 +61,6 @@ export function CallingCard({ camp, state: s, cfg, form, setForm, onChanged }: P
     else if (running && !s.within_hours)
       headline = s.waiting || `Waiting for calling hours (${s.settings.start_hour}:00 to ${s.settings.end_hour}:00, now ${s.now_ist})`;
     else if (running) headline = "Running · picking the next contact";
-    else if (otherRunning) headline = "Another campaign is calling right now · one campaign calls at a time";
     else if (s.past_last_date) headline = `Finished · the last calling day (${s.last_call_date}) has passed`;
     else if (!s.total) headline = "No contacts yet · upload the sheet in step 1";
     else if (s.to_call) headline = `Ready · ${s.to_call} to call`;
@@ -111,7 +109,7 @@ export function CallingCard({ camp, state: s, cfg, form, setForm, onChanged }: P
   const stop = async () => {
     setBusy(true);
     try {
-      await send("/api/campaign/stop", "POST");
+      await send("/api/campaign/stop", "POST", { campaign_id: camp.id });
       toast("Stopping after the current call.");
     } catch (e) {
       toast((e as Error).message, true);
@@ -316,7 +314,7 @@ export function CallingCard({ camp, state: s, cfg, form, setForm, onChanged }: P
           <Button
             variant="primary"
             onClick={start}
-            disabled={busy || !s?.to_call || otherRunning || !!s?.past_last_date || !form || !cfg}
+            disabled={busy || !s?.to_call || !!s?.past_last_date || !form || !cfg}
             title="Places real, paid phone calls"
           >
             <Play />

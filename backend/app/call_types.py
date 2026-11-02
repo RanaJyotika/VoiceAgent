@@ -222,6 +222,45 @@ def whatsapp_offer(facts: dict | None) -> dict | None:
     return None
 
 
+# --- the campaign's own WhatsApp message (owner, 27 Oct 2026) ---------------------------------------
+# A campaign invite (e.g. a Vedic Vaibhav puja) can send its own approved Pinnacle template after each call:
+# facts["whatsapp_message"] is a JSON object filled in on the dashboard: {on, template, language, line1, line2, line3, link,
+# image, button}. The three lines fill the template's {{1}}, {{2}}, {{3}}; button: the template's link button is
+# https://<site>/{{1}}, and gets the link's part after the site (messaging.queue_campaign_message).
+MESSAGE_KEYS = ("template", "language", "line1", "line2", "line3", "link", "image")
+
+
+def campaign_message(facts: dict | None) -> dict | None:
+    """The campaign's WhatsApp message while it is switched on; None when off."""
+    try:
+        raw = json.loads((facts or {}).get("whatsapp_message") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not raw.get("on"):
+        return None
+    return {**{k: str(raw.get(k) or "").strip() for k in MESSAGE_KEYS}, "button": raw.get("button", True) is not False}
+
+
+def message_missing(facts: dict | None) -> list[str]:
+    """What the switched-on message still lacks: a template takes exactly its three values, never an empty one."""
+    msg = campaign_message(facts)
+    if not msg:
+        return []
+    # Owner, 28 Oct 2026: always the store's one template (messaging.campaign_values), so no template name is asked for.
+    need = [("line1", "WhatsApp line 1"), ("line2", "WhatsApp line 2"), ("line3", "WhatsApp line 3"), ("link", "WhatsApp link")]
+    return [label for key, label in need if not msg[key]]
+
+
+def message_offer(facts: dict | None) -> dict:
+    """The offer whose code and discount fill {code} and {discount} in the message: the first still valid one with a
+    code ({} when there is none)."""
+    for o in offers_of(facts or {}):
+        until = _parse_date(o["valid_until"]) if o["valid_until"] else None
+        if o["code"] and not (until and until < date.today()):
+            return {**o, "code": o["code"].upper()}
+    return {}
+
+
 def paid_online(contact: dict | None) -> bool:
     """The order's data says it is paid (prepaid / online); an empty or cash-on-delivery payment is not."""
     pay = re.sub(r"[\s_-]+", " ", str((contact or {}).get("payment_mode") or "")).strip().lower()
@@ -230,19 +269,15 @@ def paid_online(contact: dict | None) -> bool:
 
 def prepaid_coupon_for(contact: dict | None, facts: dict | None = None) -> dict | None:
     """The coupon this call may offer on WhatsApp: an order not paid yet (cash on delivery, or no payment in the data:
-    call 509, the customer is asked), a campaign that shares one, and a customer who does not have this code already.
-    facts: the campaign's (looked up when not given). Never raises."""
+    call 509, the customer is asked) and a campaign that shares one. facts: the campaign's (looked up when not given). Never raises."""
     try:
         if not contact or paid_online(contact):
             return None
         if facts is None:
             from . import db  # here: db is not needed by the rest of this module
             facts = ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {}
-        offer = whatsapp_offer(facts)
-        if not offer:
-            return None
-        from . import messaging  # here: messaging reads this module
-        return None if messaging.already_sent(contact.get("phone") or "", offer["code"]) else offer
+        # Owner, 27 Oct 2026: offered on every call, even to a customer who has the code already.
+        return whatsapp_offer(facts)
     except Exception:
         log.exception("WhatsApp coupon lookup failed for contact %s; no offer on this call", (contact or {}).get("id"))
         return None
@@ -629,7 +664,7 @@ def _invite_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
 CUSTOMER DETAILS
 - Customer name: {contact.get('customer_name') or 'MISSING (greet with "hello ji")'}
 - Notes: {contact.get('notes') or 'none'}
-{other}"""
+{other}""" + _offers_block(facts)
 
     replies_first = [
         '- Interested ("haan", "achha hai", "batao", "book karna hai"): see INTERESTED.',
@@ -641,13 +676,28 @@ CUSTOMER DETAILS
     ]
     replies_last = ['- A bare "nahi" to "kya aap isme interested hain?" means not interested: see NOT INTERESTED. Anywhere else: "achha ji, kya?"']
 
+    # Owner, 28 Oct 2026 (call 32118): the campaign's own opening, word for word, when written ("usi puja mein abhimantrit
+    # hue the... kya aap ye yantra kharidne mein interested hain?"); the agent's fifteen-word summary otherwise.
+    if opening := fx("opening"):
+        ask = re.split(r"(?<=[.!।])\s+", opening)[-1] if opening.endswith("?") else "kya aap isme interested hain?"
+        first = (f'1. Your first turn is the whole offer, word for word, then STOP and wait: "namaste <name> ji, main {agent_name}, '
+                 f'{BUSINESS_NAME} se. {opening}" Never shorten it, add to it, or ask whether they have a minute.')
+    else:
+        ask = "kya aap isme interested hain?"
+        first = f"""1. Your first turn is the whole offer: greet, say who you are, give the campaign in one short sentence and ask, then STOP and wait: "namaste <name> ji, main {agent_name}, {BUSINESS_NAME} se. <the campaign>. kya aap isme interested hain?" Never ask whether they have a minute or how they are. The campaign sentence is about fifteen words, in your own words, from CAMPAIGN DETAILS: what it is, where, the date, and the price if one is given. For example: "<date> ko <place> mein <campaign> hai, <price> rupaye se." Never read "What it is" out and never list the details."""
+
     flow = f"""THE USUAL ORDER (short turns; add nothing)
-1. Your first turn is the whole offer: greet, say who you are, give the campaign in one short sentence and ask, then STOP and wait: "namaste <name> ji, main {agent_name}, {BUSINESS_NAME} se. <the campaign>. kya aap isme interested hain?" Never ask whether they have a minute or how they are. The campaign sentence is about fifteen words, in your own words, from CAMPAIGN DETAILS: what it is, where, the date, and the price if one is given. For example: "<date> ko <place> mein <campaign> hai, <price> rupaye se." Never read "What it is" out and never list the details.
-2. Their answer decides the rest: INTERESTED, NOT INTERESTED, already booked, or a question (QUESTIONS). If they did not catch it or ask who is calling, say it again, shorter, and ask again.
+{first}
+2. Their answer decides the rest: INTERESTED, NOT INTERESTED, already booked, or a question (QUESTIONS). If they did not catch it or ask who is calling, say it again, shorter, and ask again: "{ask}"
 {GOODBYE}
 Never end_call with a question unanswered."""
 
-    interested = f"""INTERESTED
+    if campaign_message(facts):
+        # Owner's wording, 28 Oct 2026: the link goes on WhatsApp after the call (live_bridge.invite_link_close).
+        interested = f"""INTERESTED
+Say only this: "ji, main aapko WhatsApp par link bhej {forms(voice)["rahi"]} hoon, aap wahan se order kar sakte hain. dhanyavaad ji." Then mark_outcome "interested", end_call."""
+    else:
+        interested = f"""INTERESTED
 One short turn: "bahut achha ji. aap {how} par book kar sakte hain", adding "<date> se pehle" only if a date is given. Then goodbye, mark_outcome "interested", end_call. You cannot book for them, take payment or send anything yourself."""
 
     # Calls 73 and 74: "mere paas time nahi hai" was accepted and the call closed, though the chadhava
@@ -658,19 +708,26 @@ Never push and never argue. First ask the reason, ONCE and gently: "koi khaas wa
 - Any other reason (does not want it, money, does not believe in it, already booked elsewhere), or a no after you cleared it up: accept it: "achha ji, samajh {forms(voice)["gayi"]}. dhanyavaad ji, aapka din shubh ho." mark_outcome "not_interested" with not_interested_reason in their words ("not given" if they would not say), then end_call.
 Clear up at most one misunderstanding in a call. No offer, no discount, no pressure."""
 
-    questions = """QUESTIONS
-Answer only from CAMPAIGN DETAILS, in one short sentence, then ask again "kya aap isme interested hain?" If the answer is not there: "iski poori jaankari website ya app par mil jayegi", and put the question in the question field of mark_outcome. Never guess a price, date, place, benefit or offer."""
+    # Owner, 28 Oct 2026 (Baglamukhi yantra test call): "iska benefit kya hoga?" got "main kuch nahi bata sakti".
+    questions = f"""QUESTIONS
+Answer only from CAMPAIGN DETAILS, in one short sentence, then ask again "{ask}" A benefit asked about ("fayda kya hoga?"): one benefit written in CAMPAIGN DETAILS, as belief: "maana jaata hai ki ...". If the answer is not there: "iski poori jaankari website ya app par mil jayegi", and put the question in the question field of mark_outcome. Never guess a price, date, place, benefit or offer."""
 
     sections = [interested, not_interested, questions, """CAMPAIGN RULES (these always hold)
-- Never promise what a puja, chadhava or product will bring: no "manokamna poori hogi", no "guaranteed", no health, money or family claims.
+- Never promise what a puja, chadhava or product will bring: no "manokamna poori hogi", no "guaranteed", no health, money or family claims. Only a benefit written in CAMPAIGN DETAILS, said as belief ("maana jaata hai ki ...").
 - No pressure and no false urgency: no "sirf aaj", "last chance", "jaldi kijiye".
-- No discount, offer, gift or free item unless it is written in CAMPAIGN DETAILS.
+- No discount, offer, gift or free item unless it is written in CAMPAIGN DETAILS or OFFERS.
 - If the date has already passed, do not invite them to it: apologise, say goodbye, mark_outcome "unclear" with notes "campaign date passed"."""]
     if fx("never_say"):
         sections.append("NEVER SAY (set by the person who created this campaign)\n" + fx("never_say"))
 
     rules = [('- You cannot book, take payment, send links or change anything yourself: "maine note kar liya hai" is the most you say. '
               'Unknowns go in the question field.')]
+    if campaign_message(facts):
+        # Owner, 27 Oct 2026: the campaign's WhatsApp message (with its link) goes after the call, by code.
+        # Owner's wording, 28 Oct 2026 (the code's close says the same: live_bridge.invite_link_close).
+        rules = [('- You cannot book, take payment or change anything yourself. A WhatsApp message with the link goes to them '
+                  f'after this call: when they are interested, or ask how to book or for the link, say "ji, main aapko WhatsApp '
+                  f'par link bhej {forms(voice)["rahi"]} hoon, aap wahan se order kar sakte hain". Unknowns go in the question field.')]
 
     return compose(contact=contact, voice=voice, intro=intro, details=details,
                    details_title="CAMPAIGN DETAILS or CUSTOMER DETAILS", details_noun="campaign and customer details",
@@ -692,7 +749,8 @@ CAMPAIGN_INVITE = CallType(
     },
     build_prompt=_invite_prompt,
     confirm_question="kya aap isme interested hain?",
-    main_question=r"(interested|इंटरेस्टेड)\s*(hain|hai|हैं|है)",
+    # Owner, 28 Oct 2026: a campaign's own opening may ask "kya aap ye yantra mangwana chahenge?".
+    main_question=r"(interested|इंटरेस्टेड)\s*(hain|hai|हैं|है)|\bchahenge\b|चाहेंगे",
     summary_keys=("not_interested_reason", "question", "notes", "callback_time"),
     description="Tell past customers about a campaign, ask if they are interested, and note the reason if not.",
     columns=(
@@ -704,17 +762,25 @@ CAMPAIGN_INVITE = CallType(
         Fact("title", "Campaign name, as the agent will say it", True, hint="Navratri Kamakhya Chadhava"),
         Fact("about", "What it is, in one or two lines", True, long=True,
              hint="Navratri par Kamakhya Mandir mein aapke naam se chadhava; prasad ghar par aayega."),
+        # Owner, 28 Oct 2026: said word for word after "namaste <name> ji, main <agent>, <business> se." (_invite_prompt).
+        Fact("opening", "What the agent says after its hello, word for word; end with \"... interested hain?\" or \"... chahenge?\" (optional)",
+             long=True, hint="Jis puja mein aapka sankalp liya gaya tha, usi puja mein Maa Baglamukhi Yantra aur Vyapar Vridhi "
+                             "Yantra abhimantrit hue the. Kya aap ye yantra kharidne mein interested hain?"),
         Fact("place", "Temple or place", hint="Kamakhya Mandir, Guwahati"),
         Fact("price", "Price", hint="551 rupaye"),
         # Stored as start_date since the first campaign, but it is the day the agent names and after which it
         # stops inviting. Labelled "Campaign start date", it was read as the day calling starts (25 Sep, for
         # a 3 Oct puja), which would have ended every call from the next day on as "date passed".
-        Fact("start_date", "Date of the puja or event", True, date=True),
+        # Optional (owner, 27 Oct 2026): with none, the agent names no date (_date_line).
+        Fact("start_date", "Date of the puja or event (optional)", date=True),
         Fact("how_to_book", "How to book", True, hint="Vedic Vaibhav ki website ya app"),
         Fact("more_info", "How it works, and answers to likely questions (optional)", long=True,
              hint="Aapko aana nahi hai: pandit ji aapke naam aur gotra se puja karenge. Puja ka video WhatsApp par aayega. "
                   "Prasad 10 din mein ghar pahunchega."),
         Fact("never_say", "Never say (optional)", long=True, hint="Discount ki baat mat karna."),
+        # Owner, 27 Oct 2026: coupons and discounts the agent may mention (_offers_block), as for the other campaigns.
+        Fact("offers", "Offers (optional)", long=True, hint='[{"title": "10% off", "code": "PUJA10", "details": "..."}]'),
+        Fact("whatsapp_message", "WhatsApp message after the call (optional)", long=True),
     ),
 )
 
@@ -765,9 +831,9 @@ def cart_link_line(voice: str, sent: dict | None = None) -> str:
 
 
 def cart_sent_close(sent: dict | None, cod: bool = False) -> str:
-    """Owner, 26 Oct 2026: every cart customer gets the message once, after their first call. From the second call on
-    they are reminded of it in these words, never told it goes now. "WhatsApp par bhej" keeps live_bridge's
-    promised_on_whatsapp seeing the WhatsApp line (nothing new is sent: the customer has it)."""
+    """Owner, 26 Oct 2026: from the second call on, the customer is reminded of the message they have in these words.
+    "WhatsApp par bhej" keeps live_bridge's promised_on_whatsapp seeing the WhatsApp line. (27 Oct 2026: it also goes
+    again after every call.)"""
     what = "link aur coupon" if (sent or {}).get("code") else "link"
     tail = "wahan se order kar lijiye, COD choose kar lijiyega" if cod else "wahan se order kar lijiye"
     return f"ji, maine {what} aapke WhatsApp par bhej diya hai, {tail}. dhanyavaad ji."
@@ -1097,7 +1163,9 @@ def missing_facts(camp: dict | None) -> list[str]:
     wizard asks for them after the campaign exists), but it is never called until they are filled in."""
     ct = CALL_TYPES.get(str((camp or {}).get("call_type") or ""))
     facts = (camp or {}).get("facts") or {}
-    return [f.label for f in ct.facts if f.required and not str(facts.get(f.key) or "").strip()] if ct else []
+    if not ct:
+        return []
+    return [f.label for f in ct.facts if f.required and not str(facts.get(f.key) or "").strip()] + message_missing(facts)
 
 
 def call_type_for(contact: dict | None) -> CallType:
@@ -1106,9 +1174,20 @@ def call_type_for(contact: dict | None) -> CallType:
     return ALL_TYPES.get(key, DEFAULT)
 
 
+# Owner, 28 Oct 2026: the campaign's goal, written in the new dashboard's Details step (any call type). Empty: the
+# type's own goal alone.
+GOAL_KEY = "goal"
+
+
+def goal_block(facts: dict) -> str:
+    goal = str(facts.get(GOAL_KEY) or "").strip()
+    return f"\n\nCAMPAIGN GOAL (the owner's words for this campaign; steer the call toward it, within the rules above)\n{goal}" if goal else ""
+
+
 def get_prompt(contact: dict, voice: str) -> str:
     """The system prompt for one call: the contact's call type, with its campaign's facts."""
     from . import db  # here, not at the top: db is not needed to define the types
     from .catalog import product_block
     campaign = db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None
-    return call_type_for(contact).build_prompt(contact, voice, (campaign or {}).get("facts") or {}) + product_block(contact, voice)
+    facts = (campaign or {}).get("facts") or {}
+    return call_type_for(contact).build_prompt(contact, voice, facts) + goal_block(facts) + product_block(contact, voice)

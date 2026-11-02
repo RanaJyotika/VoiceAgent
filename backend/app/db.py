@@ -327,6 +327,27 @@ def get_call(call_id: int) -> dict | None:
     return d
 
 
+def call_tries(call_ids) -> dict[int, dict]:
+    """Owner, 27 Oct 2026: which try each call was for its customer in the campaign (1 = first time dialled), and the
+    tries the campaign allows (None for a single call), as {call_id: {"try": n, "max_tries": m}}."""
+    ids = [int(i) for i in call_ids if i]
+    if not ids:
+        return {}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT c.id, (SELECT COUNT(*) FROM calls x WHERE x.contact_id = c.contact_id AND x.id <= c.id) AS n, "
+            "g.settings FROM calls c JOIN contacts k ON k.id = c.contact_id LEFT JOIN campaigns g ON g.id = k.campaign_id "
+            f"WHERE c.id IN ({','.join('?' for _ in ids)})", ids).fetchall()
+    out = {}
+    for r in rows:
+        try:
+            most = (json.loads(r["settings"]) or {}).get("max_attempts") if r["settings"] else None
+        except (TypeError, json.JSONDecodeError):
+            most = None
+        out[r["id"]] = {"try": r["n"], "max_tries": int(most) if most else None}
+    return out
+
+
 def get_contact(contact_id: int) -> dict | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
@@ -603,7 +624,8 @@ def list_calls(limit: int = 100, campaign_id: int | None = None,
             d["cost_rs"] = round(call_cost(d.get("channel") or "", d.get("duration_sec") or 0, d.get("usage")), 2)
             d["cost_estimated"] = not _has_cost(d.get("usage"))
             out.append(d)
-        return out
+    tries = call_tries(d["id"] for d in out)
+    return [{**d, **tries.get(d["id"], {"try": None, "max_tries": None})} for d in out]
 
 
 IST = timezone(timedelta(hours=5, minutes=30))

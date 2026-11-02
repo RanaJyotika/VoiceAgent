@@ -228,11 +228,7 @@ def offer_for(contact: dict | None) -> dict | None:
         # marked for calls on the Coupons page, with every customer who picked up, "not interested" too. A campaign
         # that has offers but its WhatsApp switch off stays off.
         coupon = _as_offer(call_coupon())
-    if not coupon:
-        return None
-    from . import messaging   # here: messaging reads this module
-    if messaging.already_sent(contact.get("phone") or "", coupon["code"]):
-        return None
+    # Owner, 27 Oct 2026: offered on every call, even to a customer who has the code already.
     return coupon
 
 

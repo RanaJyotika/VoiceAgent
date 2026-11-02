@@ -164,6 +164,7 @@ async def overview_today() -> dict:
         "agent_rs": round(agent_rs, 2), "line_rs": round(line_rs, 2),
         "calls": sum(1 for r in rows if r["channel"] == "plivo"),   # phone calls placed today
         "week_sales": sales.week_sales(),   # store orders after a talk with the agent, last 7 days
+        "week_reach": sales.reach(days=7),   # customers called or messaged in the last 7 days, and who of them ordered
     }
 
 
@@ -206,8 +207,7 @@ async def campaign_stats(campaign_id: int) -> dict:
     s = c.get("settings") or {}
     counts = db.contact_counts(int(s.get("max_attempts") or 3), campaign_id)
     by, total = counts["by_status"], counts["total"]
-    run = campaign.CAMPAIGN
-    running = (run.running and run.settings.campaign_id == campaign_id) or (bool(c.get("auto")) and autodial.AUTO.running)
+    running = campaign.is_running(campaign_id) or (bool(c.get("auto")) and autodial.AUTO.running)
     # Contacts whose status a call has set (a call-back put back on the list is pending again); "called" itself counts
     # everyone rung at least once.
     settled, called = total - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES), counts["reached"]
@@ -271,6 +271,9 @@ async def campaign_stats(campaign_id: int) -> dict:
         # calls; an order confirmation campaign: what became of the orders it called about.
         "sales": sales.campaign_sales(campaign_id, agent_rs + line_rs) if c["call_type"] != "order_confirmation" else None,
         "order_outcomes": sales.confirmation_outcomes(campaign_id) if c["call_type"] == "order_confirmation" else None,
+        # Owner, 27 Oct 2026: orders placed from the WhatsApp link we sent (its UTMs), COD and prepaid apart.
+        "link_sales": sales.link_sales(campaign_id, agent_rs + line_rs),
+        "reach": sales.reach(campaign_id),   # called or messaged, both, ordered, not bought yet
     }
 
 
@@ -278,7 +281,6 @@ async def campaign_stats(campaign_id: int) -> dict:
 async def campaigns_board() -> dict:
     """The new dashboard's Campaigns page. The Store orders campaign has its own page and is left out, as before."""
     camps = [c for c in db.list_campaigns() if c.get("source") != "store"]
-    run = campaign.CAMPAIGN
     costs: dict[int, list[float]] = {}
     with db.connect() as conn:
         for r in conn.execute("SELECT k.campaign_id, c.channel, c.duration_sec, c.usage FROM calls c "
@@ -293,7 +295,7 @@ async def campaigns_board() -> dict:
         counts = (db.contact_counts(int(s.get("max_attempts") or 3), c["id"]) if c["total"]
                   else {"total": 0, "to_call": 0, "new_left": 0, "reached": 0})
         to_call = counts["to_call"]
-        running = (run.running and run.settings.campaign_id == c["id"]) or (bool(c.get("auto")) and autodial.AUTO.running)
+        running = campaign.is_running(c["id"]) or (bool(c.get("auto")) and autodial.AUTO.running)
         by = c["by_status"]
         settled, called = c["total"] - sum(by.get(k, 0) for k in NOT_CALLED_STATUSES), counts["reached"]
         not_connected = sum(by.get(k, 0) for k in NOT_CONNECTED_STATUSES)

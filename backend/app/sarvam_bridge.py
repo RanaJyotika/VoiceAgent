@@ -47,6 +47,15 @@ MAX_TOKENS = 300            # a reply is one or two sentences; this only stops a
 STT_FINAL_WAIT = 4.0        # seconds to wait for the customer's words after speech_end
 TTS_QUIET_SECONDS = 3.0     # no sound and no "final" for this long after the last text: the reply is taken as spoken
 KEEPALIVE_SECONDS = 20      # both sockets close after about a minute with nothing on them
+# Sarvam's plan caps speech-to-text streams at once and chat calls a minute, and may refuse a quick burst of new streams
+# below the cap. A refusal is tried again after these waits (seconds) before the call gives up on it.
+STT_OPEN_RETRIES = (0.5, 1.0)
+CHAT_BUSY_RETRIES = (1.0, 2.0)
+CHAT_BUSY = (429, 503)      # refusals that pass with a wait: over the rate limit, or Sarvam too busy just now
+
+
+class _ChatBusy(RuntimeError):
+    """Sarvam refused the chat call for now (rate limit or busy), before any of the reply was written."""
 
 # Lookups that wait on our server (and then on a second chat call) before the agent can answer. Owner, 12 Oct
 # 2026: while one runs the line must not go quiet, so a short "let me check" is spoken the moment the reply turns
@@ -133,7 +142,9 @@ _TOOL_TALK = re.compile(
 # spellings of WhatsApp are brought to the same one.
 _SAY_AS = [(re.compile(r"\bwhats\s*-?\s*app\b|व्हाट्सऐप|व्हाट्सएप|व्हाट्सअप|वाट्सऐप|वाट्सएप|वाट्सअप", re.IGNORECASE), "वॉट्सऐप"),
            (re.compile(r"\bcoupons?\b", re.IGNORECASE), "कूपन"),
-           (re.compile(r"\bcodes?\b", re.IGNORECASE), "कोड")]
+           (re.compile(r"\bcodes?\b", re.IGNORECASE), "कोड"),
+           # Owner, 28 Oct 2026 (call 32122): "main" was said as the English word in "ji, main aapko WhatsApp par link...".
+           (re.compile(r"\bmain\b", re.IGNORECASE), "मैं")]
 
 
 # The payment question as the owner wants it, whatever the model writes (owner, 22 Oct 2026, call 515: "...cash on
@@ -215,6 +226,7 @@ class SarvamSession:
         # Saaras
         self._stt = None
         self._stt_reader: asyncio.Task | None = None
+        self._stt_opening: asyncio.Task | None = None   # opens Saaras once the customer picks up (listen_when)
         self._stt_lock = asyncio.Lock()
         self._in_turn = False           # between ACTIVITY_START and ACTIVITY_END
         self._stt_started = False       # speech_start sent for this turn (at its first audio)
@@ -254,9 +266,44 @@ class SarvamSession:
 
     # ---- opening the sockets ----
 
-    async def open(self) -> None:
-        await self._open_stt()
+    async def open(self, listen: bool = True) -> None:
+        """Bulbul's socket, and Saaras's unless listen is False (a phone still ringing: listen_when opens it)."""
+        if listen:
+            await self._listen()
         await self._open_tts()
+
+    def listen_when(self, gate: asyncio.Event) -> None:
+        """Open Saaras when the customer picks up. Owner, 27 Oct 2026: most calls are never answered, and each open
+        stream counts against the plan's limit, so a ringing phone holds none."""
+        async def opening() -> None:
+            await gate.wait()
+            try:
+                await self._listen()
+            except Exception as exc:  # noqa: BLE001
+                # Deaf for the whole call otherwise: close the session, so live_bridge reconnects (or ends the call).
+                log.warning("%s: speech-to-text could not open after the pick-up: %s: %s", self.label, type(exc).__name__, exc)
+                self._closed = exc
+                await self._q.put(None)
+        self._stt_opening = asyncio.create_task(opening())
+
+    async def _listen(self) -> None:
+        """Saaras's socket, tried again after a short wait if Sarvam refuses it (its limit, or a burst of new streams)."""
+        for wait in (*STT_OPEN_RETRIES, None):
+            try:
+                await self._open_stt()
+                return
+            except Exception as exc:  # noqa: BLE001
+                if wait is None:
+                    raise
+                log.warning("%s: speech-to-text refused (%s: %s); trying again in %.1f s", self.label,
+                            type(exc).__name__, exc, wait)
+                await asyncio.sleep(wait)
+
+    async def _stt_ready(self) -> bool:
+        """Saaras is open: waits for it while it opens after the pick-up. False if it never opened."""
+        if self._stt is None and self._stt_opening is not None:
+            await asyncio.wait({self._stt_opening})   # never raises, and leaves the task alone
+        return self._stt is not None
 
     async def _open_stt(self) -> None:
         params = {"language_code": self.language, "model": SARVAM_STT_MODEL, "mode": SARVAM_STT_MODE,
@@ -392,7 +439,7 @@ class SarvamSession:
             return
         if audio is not None:
             pcm = getattr(audio, "data", audio)
-            if not pcm or self._stt is None:
+            if not pcm or not await self._stt_ready():
                 return
             async with self._stt_lock:
                 if self.manual_vad and not self._stt_started:
@@ -548,7 +595,7 @@ class SarvamSession:
                     await self._speak(sentence)
             else:
                 for attempt in range(2):
-                    calls, raw_calls = await self._chat(extra, started)
+                    calls, raw_calls = await self._chat_when_free(extra, started)
                     if self._said or calls:
                         break
                     log.warning("%s: the reply came back empty%s", self.label, "; asking again" if attempt == 0 else "")
@@ -574,6 +621,19 @@ class SarvamSession:
             if still is not None:
                 still.cancel()
 
+    async def _chat_when_free(self, extra: str, started: float) -> tuple[list[_FunctionCall], list[dict]]:
+        """_chat, asked again after a short wait when Sarvam refuses it for now (owner, 27 Oct 2026: in the busiest
+        minutes 20 lines go over the plan's 60 chat calls a minute). Nothing has been said yet, so it is safe."""
+        for wait in (*CHAT_BUSY_RETRIES, None):
+            try:
+                return await self._chat(extra, started)
+            except _ChatBusy as exc:
+                if wait is None:
+                    raise
+                log.warning("%s: %s; asking again in %.1f s", self.label, exc, wait)
+                await asyncio.sleep(wait)
+        raise AssertionError("unreachable")
+
     async def _chat(self, extra: str, started: float) -> tuple[list[_FunctionCall], list[dict]]:
         """One streamed chat call. Each sentence goes to Bulbul the moment it is complete."""
         payload = {"model": SARVAM_MODEL, "stream": True, "max_tokens": MAX_TOKENS,
@@ -598,7 +658,7 @@ class SarvamSession:
         async with self._http.stream("POST", CHAT_URL, json=payload, headers=self._headers) as r:
             if r.status_code != 200:
                 body = (await r.aread()).decode(errors="replace")[:300]
-                raise RuntimeError(f"Sarvam chat {r.status_code}: {body}")
+                raise (_ChatBusy if r.status_code in CHAT_BUSY else RuntimeError)(f"Sarvam chat {r.status_code}: {body}")
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -844,8 +904,8 @@ class SarvamSession:
                 return
 
     async def aclose(self) -> None:
-        tasks = [t for t in (self._reply, self._ending, self._keepalive, self._stt_reader, self._tts_reader, self._stt_switch,
-                             self._tts_opening) if t is not None]
+        tasks = [t for t in (self._reply, self._ending, self._keepalive, self._stt_opening, self._stt_reader, self._tts_reader,
+                             self._stt_switch, self._tts_opening) if t is not None]
         for t in tasks:
             t.cancel()
         for t in tasks:
@@ -861,9 +921,9 @@ class SarvamSession:
 
 @contextlib.asynccontextmanager
 async def connect(*, prompt: str, voice: str, label: str = "", manual_vad: bool = True,
-                  tools: list | None = None, greeting: str = ""):
-    """A live Sarvam session, entered the way live_bridge enters a Gemini one. Both sockets open here,
-    while the phone is still ringing."""
+                  tools: list | None = None, greeting: str = "", gate: asyncio.Event | None = None):
+    """A live Sarvam session, entered the way live_bridge enters a Gemini one. Bulbul's socket opens here, while the
+    phone is still ringing; Saaras's when gate opens (the customer picked up), or here if there is none or it is open."""
     if not SARVAM_API_KEY:
         raise RuntimeError("SARVAM_API is not set in .env")
     prompt = sarvam_prompt(prompt, voice)   # ABOUT US cut to the store's line (about_hint brings the rest), + how to write
@@ -871,10 +931,13 @@ async def connect(*, prompt: str, voice: str, label: str = "", manual_vad: bool 
     session = SarvamSession(prompt=prompt, voice=voice_for(voice), label=label,
                             manual_vad=manual_vad, tools=chat_tools(tools), greeting=greeting)
     try:
-        await session.open()
-        log.info("%s: connected to Sarvam (chat %s, words %s/%s, voice %s %s, turns marked %s)", label, SARVAM_MODEL,
-                 SARVAM_STT_MODEL, SARVAM_STT_MODE, session.tts_model, session.speaker,
-                 "by us" if manual_vad else "by Saaras")
+        ringing = gate is not None and not gate.is_set()
+        await session.open(listen=not ringing)
+        if ringing:
+            session.listen_when(gate)
+        log.info("%s: connected to Sarvam (chat %s, words %s/%s%s, voice %s %s, turns marked %s)", label, SARVAM_MODEL,
+                 SARVAM_STT_MODEL, SARVAM_STT_MODE, " from the pick-up" if ringing else "", session.tts_model,
+                 session.speaker, "by us" if manual_vad else "by Saaras")
         yield session
     finally:
         await session.aclose()
