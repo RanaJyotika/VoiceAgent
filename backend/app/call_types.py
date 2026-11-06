@@ -175,6 +175,234 @@ def _address_line(contact: dict) -> str:
 # Owner, 19 Oct 2026: once the order and the address are both confirmed, this and nothing more, then the call is cut.
 ORDER_CONFIRMED_CLOSE = "ji, aapka order confirm ho gaya hai. dhanyavaad ji."
 
+# Keypad options (owner, 2 Nov 2026, the owner's script): on a campaign that has them switched on (Sarvam phone calls
+# only) the call opens with them, said by the code (keypad_greeting); live_bridge acts on the keys.
+# Order calls: 1 confirms and closes (the address is asked only when MISSING); 2 asks again (1 cancels, 2 goes back).
+# Cart calls: 1 asks cash on delivery (1) or prepaid (2), then the link (and coupon) goes on WhatsApp; 2 closes.
+# Both: 3 hands the call to the agent for their question, 0 repeats; three misses (0, a wrong key, no key) end the call.
+# Owner, 3 Nov 2026 (call 38825): a spoken "haan" / "nahi" (and COD / prepaid) counts as the key (live_bridge
+# keypad_choice), each line is said once, a repeat is the question alone (keypad_short), and every close hangs up.
+# Numbers in words, so the voice says "ek", not "one".
+# Campaign invites (owner, 3 Nov 2026: awareness and product campaigns too): the campaign's own opening, then 1 for yes
+# (interested: the campaign's WhatsApp message goes), 2 for no, 3 for a question, 0 to hear the question again.
+KEYPAD_KEY = "keypad"
+KEYPAD_TYPES = ("order_confirmation", "abandoned_cart", "campaign_invite")
+# The menu a call type's opening gives (KEYPAD_HEARD).
+KEYPAD_MAIN_MENU = {"order_confirmation": "order", "abandoned_cart": "cart", "campaign_invite": "invite"}
+# Owner, 3 Nov 2026: "not clear", "looking AI generated": each option its own short sentence, "दबाइए" as a person says it,
+# a comma where a person takes a breath (Bulbul pauses there), and the customer told they may simply say it.
+KEYPAD_ORDER_KEYS = ("इसे कन्फर्म करने के लिए, एक दबाइए। कैंसिल करने के लिए, दो दबाइए। कोई सवाल हो, तो तीन दबाइए। "
+                     "और दोबारा सुनने के लिए, ज़ीरो दबाइए।")
+KEYPAD_CART_KEYS = ("ऑर्डर करना हो, तो एक दबाइए। नहीं चाहिए, तो दो दबाइए। कोई सवाल हो, तो तीन दबाइए। "
+                    "और दोबारा सुनने के लिए, ज़ीरो दबाइए।")
+KEYPAD_INVITE_KEYS = ("हाँ के लिए, एक दबाइए। नहीं चाहिए, तो दो दबाइए। कोई सवाल हो, तो तीन दबाइए। "
+                      "और दोबारा सुनने के लिए, ज़ीरो दबाइए।")
+KEYPAD_SAY_IT = "आप चाहें तो, बोलकर भी बता सकते हैं।"
+KEYPAD_ORDER_CONFIRMED = "धन्यवाद जी। आपका ऑर्डर कन्फर्म हो गया है।"
+# Never cancelled on the first key: this asks again. Said after "जी, " (also when said again). "पक्का कैंसिल" rather
+# than the script's "कन्फर्म करने के लिए एक": "confirm" here was the opposite of confirming the order.
+KEYPAD_CANCEL_ASK = "आप अपना ऑर्डर कैंसिल करना चाहते हैं? पक्का कैंसिल करना हो, तो एक दबाइए। ऑर्डर रखना हो, तो दो दबाइए।"
+KEYPAD_CANCEL_CLOSE = "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho."
+KEYPAD_ORDER_QUESTION = "जी बताइए, ऑर्डर के बारे में क्या जानना चाहेंगे?"
+# Said once, after "बहुत अच्छा जी। " (and the offer, keypad_payment_ask); a repeat is KEYPAD_PAYMENT_KEYS alone.
+# Owner, 3 Nov 2026: prepaid is 1 and cash on delivery 2 (prepaid first, after its discount).
+KEYPAD_CART_PAYMENT_ASK = ("आप प्रीपेड लेना चाहेंगे, या कैश ऑन डिलीवरी? प्रीपेड के लिए, एक दबाइए। "
+                           "कैश ऑन डिलीवरी के लिए, दो दबाइए।")
+KEYPAD_PAYMENT_KEYS = f"जी, प्रीपेड के लिए, एक दबाइए। कैश ऑन डिलीवरी के लिए, दो दबाइए। {KEYPAD_SAY_IT}"
+KEYPAD_CART_NO = "कोई बात नहीं जी। आपका समय देने के लिए धन्यवाद।"
+KEYPAD_CART_QUESTION = "जी बिल्कुल, बताइए आपको क्या जानना है?"
+# After the agent has answered a key-3 question, the code asks the call's question again (the agent asks nothing).
+KEYPAD_FOLLOW_UP = {"cart": "तो क्या आप इसे ऑर्डर करना चाहेंगे? ऑर्डर करना हो, तो एक दबाइए। नहीं चाहिए, तो दो दबाइए।",
+                    "order": "तो क्या आपका ऑर्डर कन्फर्म कर दूँ? कन्फर्म करना हो, तो एक दबाइए। कैंसिल करना हो, तो दो दबाइए।"}
+KEYPAD_WRONG_KEY = "माफ़ कीजिए, यह विकल्प नहीं है।"
+KEYPAD_GIVE_UP = "कोई बात नहीं जी। धन्यवाद, आपका दिन शुभ हो।"
+# What each key stands for in each menu, as the transcript (and the agent's history) shows it. "confirm" counts as the
+# customer's yes to the order (live_bridge.said_yes): only the order's 1 says it.
+KEYPAD_HEARD = {
+    "order": {"1": "[keypad 1: confirm]", "2": "[keypad 2: cancel? (asked once more)]", "3": "[keypad 3: question]",
+              "0": "[keypad 0: repeat]"},
+    "cart": {"1": "[keypad 1: wants to order]", "2": "[keypad 2: not interested]", "3": "[keypad 3: question]",
+             "0": "[keypad 0: repeat]"},
+    "invite": {"1": "[keypad 1: interested]", "2": "[keypad 2: not interested]", "3": "[keypad 3: question]",
+               "0": "[keypad 0: repeat]"},
+    "cancel": {"1": "[keypad 1: cancel it]", "2": "[keypad 2: keep the order]", "0": "[keypad 0: repeat]"},
+    "payment": {"1": "[keypad 1: prepaid]", "2": "[keypad 2: cash on delivery]", "0": "[keypad 0: repeat]"},
+    "address": {"1": "[keypad 1: address is right]", "2": "[keypad 2: change the address]", "0": "[keypad 0: repeat]"},
+}
+# Owner, 3 Nov 2026: a cart customer who chose cash on delivery is booked on the call (draft_orders), not sent the link:
+# the address on record is checked (KEYPAD_HEARD["address"]), or taken on the call when there is none or it is wrong.
+KEYPAD_ADDRESS_ASK = "जी, अपना पूरा डिलीवरी पता बता दीजिए।"
+KEYPAD_NEW_ADDRESS_ASK = "जी, नया पूरा डिलीवरी पता बता दीजिए।"
+# Each menu's question by voice, for the agent when no key comes.
+KEYPAD_VOICE_ASK = {"order": "kya aapka order confirm hai?", "cart": "aap yeh order karna chahenge?",
+                    "cancel": "kya aap order cancel karna chahte hain?", "payment": "aap prepaid chahenge ya cash on delivery?",
+                    "address": "kya order isi pate par bhej dein?", "invite": "kya aap isme interested hain?"}
+
+
+def _facts_of(contact: dict, facts: dict | None = None) -> dict:
+    """The contact's campaign facts (looked up when not given; {} on any trouble)."""
+    if facts is not None:
+        return facts
+    try:
+        from . import db  # here: db is not needed by the rest of this module
+        return ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {}
+    except Exception:
+        log.exception("campaign lookup failed for contact %s", contact.get("id"))
+        return {}
+
+
+def _invite_question(facts: dict) -> tuple[str, str]:
+    """A campaign invite's offer as the keypad opening says it, and its question alone (said again on 0, after a
+    question): the campaign's own opening word for word, else its title."""
+    opening = str(facts.get("opening") or "").strip()
+    title = str(facts.get("title") or "").strip()
+    default_ask = "क्या आप इसमें interested हैं?"
+    if opening:
+        if opening.endswith("?"):
+            return opening, re.split(r"(?<=[.!।])\s+", opening)[-1]
+        return f"{opening} {default_ask}", default_ask
+    return (f"हमारे यहाँ {title} है। {default_ask}" if title else default_ask), default_ask
+
+
+def keypad_invite_yes(contact: dict, voice: str, facts: dict | None = None) -> str:
+    """Their yes to a campaign invite: the campaign's WhatsApp message goes after the call when it has one (the owner's
+    line, as live_bridge.invite_link_close); else how to book."""
+    facts = _facts_of(contact, facts)
+    if campaign_message(facts):
+        return f"ji, main aapko WhatsApp par link bhej {forms(voice)['rahi']} hoon, aap wahan se order kar sakte hain. dhanyavaad ji."
+    how = str(facts.get("how_to_book") or "").strip() or f"{BUSINESS_NAME} ki website ya app"
+    return f"बहुत अच्छा जी। आप {how} पर book कर सकते हैं। धन्यवाद जी।"
+
+
+def keypad_follow_up(contact: dict, call_type_key: str, facts: dict | None = None) -> str:
+    """After the agent has answered a key-3 question: the call's question again, with its keys."""
+    if call_type_key == "campaign_invite":
+        _, ask = _invite_question(_facts_of(contact, facts))
+        return f"तो, {ask} हाँ के लिए, एक दबाइए। नहीं चाहिए, तो दो दबाइए।"
+    return KEYPAD_FOLLOW_UP["cart" if call_type_key == "abandoned_cart" else "order"]
+
+
+def keypad_address_check(contact: dict) -> str:
+    """The address on record, to check before the order is booked: said short (area and city), as order calls say it."""
+    address = str(contact.get("address") or "").strip()
+    said = address_to_say(address) or address
+    return (f"आपका ऑर्डर {said} वाले पते पर भेजा जाएगा। यही पता सही है, तो एक दबाइए। पता बदलना हो, तो दो दबाइए। "
+            "आप चाहें तो, बोलकर भी बता सकते हैं।")
+
+
+def _rupees_said(amount) -> str:
+    """"799" / "₹1,499.00" -> "सात सौ निन्यानवे रुपये"; "" when there is no amount."""
+    m = re.search(r"\d[\d,]*(\.\d+)?", str(amount or ""))
+    if not m:
+        return ""
+    try:
+        return f"{hindi_number(round(float(m.group(0).replace(',', ''))))} रुपये"
+    except ValueError:
+        return ""
+
+
+def keypad_booked(contact: dict) -> str:
+    """The close once the address is confirmed: the order is booked (a draft for the team, draft_orders), the call ends."""
+    amount = _rupees_said(contact.get("amount"))
+    return f"आपका {amount + ' का ' if amount else ''}ऑर्डर कैश ऑन डिलीवरी पर बुक हो गया है। धन्यवाद जी।"
+
+
+def _product_said(contact: dict) -> str:
+    """The product as the greetings say it, in Devanagari where PRONUNCIATION knows the word ("" when none)."""
+    product = spoken_product(str(contact.get("product") or ""))
+    for word, said in PRONUNCIATION.items():   # "Rudraksha" -> "रुद्राक्ष", as the agent's and the store's names
+        product = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", said, product, flags=re.IGNORECASE)
+    return product
+
+
+def keypad_body(contact: dict, call_type_key: str, facts: dict | None = None) -> str:
+    """The opening after its hello: the order, cart or campaign, and the options. Said again on 0 (order calls)."""
+    if call_type_key == "campaign_invite":
+        offer, _ = _invite_question(_facts_of(contact, facts))
+        return f"{offer} {KEYPAD_INVITE_KEYS}"
+    product = _product_said(contact)
+    if call_type_key == "abandoned_cart":
+        what = f"आपने हमारी वेबसाइट पर {product} कार्ट में रखा था।" if product else "आपने हमारी वेबसाइट पर कुछ कार्ट में रखा था।"
+        return f"{what} क्या आप इसे ऑर्डर करना चाहेंगे? {KEYPAD_CART_KEYS}"
+    what = f"आपने {product} का ऑर्डर किया है।" if product else "आपने हमारी वेबसाइट पर ऑर्डर किया है।"
+    return f"{what} {KEYPAD_ORDER_KEYS}"
+
+
+def keypad_greeting(contact: dict, voice: str, facts: dict | None = None) -> str:
+    """The call's first line when the options are on (owner's script, 2 Nov 2026). The hello is the same on every call,
+    so it is replayed from a saved clip (sarvam_bridge._Clips)."""
+    name, _ = persona(voice)
+    speaking = "बोल रही हूँ" if forms(voice)["rahi"] == "rahi" else "बोल रहा हूँ"
+    hello = f"नमस्ते जी, मैं {PRONUNCIATION.get(name, name)}, {PRONUNCIATION.get(BUSINESS_NAME, BUSINESS_NAME)} से {speaking}।"
+    return f"{hello} {keypad_body(contact, call_type_for(contact).key, facts)}"
+
+
+def keypad_repeat(call_type_key: str, voice: str) -> str:
+    """Before the order again, on 0 (owner's words). Cart calls repeat only the question (keypad_short)."""
+    female = forms(voice)["rahi"] == "rahi"
+    if call_type_key == "abandoned_cart":
+        return f"जी, दोबारा बता {'देती' if female else 'देता'} हूँ।"
+    return f"जी, मैं दोबारा बोल {'रही' if female else 'रहा'} हूँ।"
+
+
+def keypad_short(contact: dict, call_type_key: str, facts: dict | None = None) -> str:
+    """The opening's question and keys alone (owner, 3 Nov 2026): said again on 0 (cart and invite calls), a wrong key
+    or no key."""
+    if call_type_key == "campaign_invite":
+        _, ask = _invite_question(_facts_of(contact, facts))
+        return f"जी, {ask} हाँ के लिए, एक दबाइए। नहीं चाहिए, तो दो दबाइए। {KEYPAD_SAY_IT}"
+    product = _product_said(contact)
+    if call_type_key == "abandoned_cart":
+        return (f"जी, क्या आप {product + ' ' if product else ''}ऑर्डर करना चाहेंगे? "
+                f"ऑर्डर करना हो, तो एक दबाइए। नहीं चाहिए, तो दो दबाइए। {KEYPAD_SAY_IT}")
+    return (f"जी, क्या {product + ' का ' if product else 'आपका '}ऑर्डर कन्फर्म कर दूँ? "
+            f"कन्फर्म करना हो, तो एक दबाइए। कैंसिल करना हो, तो दो दबाइए। {KEYPAD_SAY_IT}")
+
+
+def keypad_payment_ask(coupon: dict | None) -> str:
+    """After their yes to the cart (owner, 3 Nov 2026): the campaign's prepaid discount, when it has one, then the question."""
+    off = f"प्रीपेड पर {_spoken_off(coupon)} की छूट है। " if coupon and coupon.get("max_discount") else ""
+    return f"बहुत अच्छा जी। {off}{KEYPAD_CART_PAYMENT_ASK}"
+
+
+def keypad_cart_close(voice: str, cod: bool, coupon: bool) -> str:
+    """The cart call's last line once they chose how to pay (owner, 3 Nov 2026); the call hangs up after it."""
+    rahi = "रही" if forms(voice)["rahi"] == "rahi" else "रहा"
+    if cod:
+        return f"ठीक है जी, ऑर्डर का link WhatsApp पर भेज {rahi} हूँ, वहाँ COD चुन लीजिएगा। धन्यवाद जी।"
+    return f"ठीक है जी, link {'और coupon ' if coupon else ''}WhatsApp पर भेज {rahi} हूँ। धन्यवाद जी।"
+
+
+def keypad_rule(call_type_key: str) -> str:
+    """The prompt's one rule about keys (only when the options are on)."""
+    if call_type_key == "campaign_invite":
+        after = ('After "[keypad 3: question]", answer it from CAMPAIGN DETAILS in one or two short sentences and ask '
+                 'nothing: the system asks the next question.')
+    elif call_type_key == "abandoned_cart":
+        after = ('After "[keypad 3: question]", answer it in one or two short sentences and ask nothing: the system asks '
+                 f'the next question. An unclear answer to the system\'s "{KEYPAD_CART_PAYMENT_ASK.split("? ")[0]}?" '
+                 'picks the close in ORDERING; make no offer.')
+    else:
+        after = ('After "[keypad 3: question]", answer it in one or two short sentences and ask nothing: the system asks '
+                 'the next question. A spoken yes to the system\'s cancel check is CANCELLATION b; a no keeps the order: '
+                 'ask "kya aapka order confirm hai?"')
+    return ('- "[keypad ...]" lines are the customer pressing phone keys; the lines after them are the system\'s, said '
+            f'for you. Never mention phone keys or pressing them yourself. {after}')
+
+
+def keypad_on(contact: dict | None, facts: dict | None = None) -> bool:
+    """The contact's campaign has the keypad options switched on. facts: the campaign's (looked up when not given)."""
+    try:
+        if not contact or call_type_for(contact).key not in KEYPAD_TYPES:
+            return False
+        if facts is None:
+            from . import db  # here: db is not needed by the rest of this module
+            facts = ((db.get_campaign(contact["campaign_id"]) if contact.get("campaign_id") else None) or {}).get("facts") or {}
+        return str(facts.get(KEYPAD_KEY) or "").strip().lower() in ("on", "yes", "true", "1")
+    except Exception:
+        log.exception("keypad setting lookup failed for contact %s; no keypad on this call", (contact or {}).get("id"))
+        return False
+
 
 def offers_of(facts: dict) -> list[dict]:
     """The campaign's offers: a JSON list in facts["offers"], each {title, code, max_discount, valid_until, details}."""
@@ -384,6 +612,7 @@ def _order_prompt(contact: dict, voice: str, facts: dict | None = None) -> str:
     replies_first = [
         '- Yes ("haan", "ji", "sahi hai"): next step.',
         '- Something in the order is different (product, quantity, amount, payment): MISMATCH. A wrong address is not a mismatch: take it again at step 3.',
+        '- They ask for another product instead of this one: PRODUCT CHANGE.',
         # Call 282: "teeno mila ke 1300, ek ko nahi?" about a combo of three bracelets was taken as a dispute of the amount.
         ('- A question about what the order holds or what the amount covers ("teeno milenge?", "combo mein kya hai?", "ek ka hai ya sab ka?"): '
          'not a mismatch. Answer from PRODUCT INFO in one sentence (a combo or set is one order, all of it for the amount above), then your question again.'),
@@ -416,8 +645,7 @@ Every other call ends with "dhanyavaad ji, aapka din shubh ho"; never with "nama
     cancellation = """CANCELLATION (they clearly want to cancel)
 Be a helpful person, not a form: never push, never argue, never ask the same thing twice.
 a. If they have not said why, ask once, naturally: "koi baat nahi ji. koi dikkat hai kya?" If they already said why, skip this.
-b. If it is something that can be looked into (price, payment, delivery time, wrong item or quantity): "achha ji, maine yeh note kar liya hai. toh kya aap order rakhna chahenge?" A yes to keeping it now: put their issue in mismatch or notes and carry on with step 3, then the mismatch close. "Baad mein", "phir kar denge" is not a yes: c.
-c. Otherwise, or if they still want to cancel: "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho." mark_outcome "cancelled" with cancel_reason in their words ("not given" if they would not say), then end_call.
+b. Their reason, whatever it is (owner, 3 Nov 2026: never ask whether they want to keep the order): "theek hai ji, maine aapki cancellation request note kar li hai. dhanyavaad ji, aapka din shubh ho." mark_outcome "cancelled" with cancel_reason in their words ("not given" if they would not say), then end_call.
 A "nahi" to cancelling, a worry, or a request (COD, a discount) is not a cancellation: deal with it and carry on. After a cancellation, never read the order again or ask for the address. Paid online and asking about the money: "ji, maine yeh note kar liya hai", no dates."""
 
     # Call 102: "quantity sahi hai, bas price 900 hai aur prepaid" needed one reply, not one turn per difference.
@@ -427,7 +655,20 @@ a. Say back, in one sentence, only what they said is different, in their words, 
 b. On their yes: "theek hai ji, maine yeh note kar liya hai." Then step 3 if the address is MISSING, then the mismatch close.
 Never argue about who is right, never agree to change anything, never quote a new price or a refund. In mark_outcome: outcome "unclear", mismatch = each difference as "customer says ...; record says ...", new_product if they named another product."""
 
-    rules = ['- You cannot cancel, refund or change anything yourself: you note it, "maine note kar liya hai", never "kar diya".']
+    # Owner, 2 Nov 2026: a customer who wants another product is told it is replaced; the order is only tagged for the
+    # team (shopify.AI_TAGS), nothing in it is changed.
+    product_change = """PRODUCT CHANGE (they ask for a different product instead of this one; never suggest one yourself)
+a. Check once, with its name from product_info: "achha, aapko <product> chahiye, sahi?" Never quote its price or a delivery date.
+b. On their yes (step 3 first if the address is MISSING): "theek hai ji, aapka product <product> se replace ho gaya hai. dhanyavaad ji, aapka din shubh ho." mark_outcome "changed" with new_product = the product (and quantity) they asked for, end_call."""
+
+    rules = [('- You cannot cancel, refund or change anything yourself: you note it, "maine note kar liya hai", never "kar '
+              'diya" (PRODUCT CHANGE\'s line aside).')]
+    if keypad_on(contact, facts or {}):
+        rules.append(keypad_rule("order_confirmation"))
+        # The opening is the code's (keypad_greeting): it names the product and gives the keys, so step 1 is said.
+        step1 = (f'1. The greeting has been said for you: "{keypad_greeting(contact, voice)}" A spoken yes to it is a yes '
+                 "to step 2's question: go on as after that yes.")
+        flow = re.sub(r"(?m)^1\. Greet, then wait: .*$", lambda _: step1, flow)
     coupon = _whatsapp_coupon_block(prepaid_coupon_for(contact, facts or {}), contact, voice)
     if coupon:
         # Owner, 24 Oct 2026: the order is cash on delivery, so the prepaid offer comes straight after their yes to the
@@ -442,7 +683,7 @@ Never argue about who is right, never agree to change anything, never quote a ne
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="ORDER DETAILS",
                    details_noun="order details", replies_first=replies_first, replies_last=replies_last, flow=flow,
-                   sections=[TAKING_AN_ADDRESS, *([coupon] if coupon else []), cancellation, mismatch], rules=rules,
+                   sections=[TAKING_AN_ADDRESS, *([coupon] if coupon else []), cancellation, mismatch, product_change], rules=rules,
                    not_mine='not the person named, or not their number',
                    topic="aapke order")
 
@@ -455,7 +696,7 @@ ORDER_CONFIRMATION = CallType(
     positive=("confirmed", "changed"),
     details={
         "mismatch": "What the customer claims versus what our record shows, raised for the team to verify. Example: 'customer says already paid online by UPI; record shows COD'.",
-        "new_product": "Product and quantity the customer says they ordered, if different from our record. A claim to verify, not a change.",
+        "new_product": "Product and quantity the customer asked for instead (PRODUCT CHANGE), or says they ordered if different from our record (MISMATCH). Noted for the team; nothing is changed.",
         "new_address": "New delivery address the customer confirmed after you read it back, as they gave it (a missing PIN is fine).",
         "new_delivery_date": "New delivery date if the customer changed it.",
         "cancel_reason": "Reason given if cancelled.",
@@ -491,6 +732,8 @@ ORDER_CONFIRMATION = CallType(
         # Owner, 21 Oct 2026: the code of the offer above that a cash-on-delivery customer may get on WhatsApp for paying
         # online (whatsapp_offer); empty = switched off.
         Fact("whatsapp_coupon", "Share a coupon on WhatsApp (optional)", hint="The code of one of the offers above"),
+        # Owner, 2 Nov 2026: "on" = the call opens with press 1 / 2 / 3 / 0 (keypad_greeting); empty = off.
+        Fact(KEYPAD_KEY, "Keypad options 1/2/0/3 (optional)", hint="on"),
     ),
 )
 
@@ -685,6 +928,12 @@ CUSTOMER DETAILS
     else:
         ask = "kya aap isme interested hain?"
         first = f"""1. Your first turn is the whole offer: greet, say who you are, give the campaign in one short sentence and ask, then STOP and wait: "namaste <name> ji, main {agent_name}, {BUSINESS_NAME} se. <the campaign>. kya aap isme interested hain?" Never ask whether they have a minute or how they are. The campaign sentence is about fifteen words, in your own words, from CAMPAIGN DETAILS: what it is, where, the date, and the price if one is given. For example: "<date> ko <place> mein <campaign> hai, <price> rupaye se." Never read "What it is" out and never list the details."""
+    keypad = keypad_on(contact, facts)
+    if keypad:
+        # Owner, 3 Nov 2026: the opening is the code's (keypad_greeting), with the phone-key options.
+        _, ask = _invite_question(facts)
+        first = (f'1. The greeting has been said for you: "{keypad_greeting(contact, voice, facts)}" A spoken answer to it '
+                 f'is their answer to "{ask}".')
 
     flow = f"""THE USUAL ORDER (short turns; add nothing)
 {first}
@@ -728,6 +977,8 @@ Answer only from CAMPAIGN DETAILS, in one short sentence, then ask again "{ask}"
         rules = [('- You cannot book, take payment or change anything yourself. A WhatsApp message with the link goes to them '
                   f'after this call: when they are interested, or ask how to book or for the link, say "ji, main aapko WhatsApp '
                   f'par link bhej {forms(voice)["rahi"]} hoon, aap wahan se order kar sakte hain". Unknowns go in the question field.')]
+    if keypad:
+        rules.append(keypad_rule("campaign_invite"))
 
     return compose(contact=contact, voice=voice, intro=intro, details=details,
                    details_title="CAMPAIGN DETAILS or CUSTOMER DETAILS", details_noun="campaign and customer details",
@@ -781,6 +1032,8 @@ CAMPAIGN_INVITE = CallType(
         # Owner, 27 Oct 2026: coupons and discounts the agent may mention (_offers_block), as for the other campaigns.
         Fact("offers", "Offers (optional)", long=True, hint='[{"title": "10% off", "code": "PUJA10", "details": "..."}]'),
         Fact("whatsapp_message", "WhatsApp message after the call (optional)", long=True),
+        # Owner, 3 Nov 2026: "on" = the call opens with press 1 / 2 / 3 / 0 (keypad_greeting); empty = off.
+        Fact(KEYPAD_KEY, "Keypad options 1/2/0/3 (optional)", hint="on"),
     ),
 )
 
@@ -1008,10 +1261,24 @@ c. Still COD, or a no to prepaid or to the coupon: "{cart_cod_close(voice, sent)
              if not sent else
              ('- You cannot place the order or take payment yourself: the link is on their WhatsApp already. Never say it '
               'goes now. Promise nothing else: "maine note kar liya hai" is the most you say about anything else.')]
+    if keypad_on(contact, facts or {}):
+        rules.append(keypad_rule("abandoned_cart"))
+        # The opening is the code's (keypad_greeting): it asks "क्या आप इसे ऑर्डर करना चाहेंगे?" and gives the keys.
+        step1 = (f'1. The greeting has been said for you: "{keypad_greeting(contact, voice)}" A spoken answer to it is their '
+                 f'answer to "{CART_WANT_QUESTION}": a "nahi" is a no.')
+        flow = re.sub(r"(?m)^1\. The greeting has been said for you: .*$", lambda _: step1, flow)
+        # Owner, 3 Nov 2026: a cash-on-delivery customer is booked on the call (draft_orders); the address is taken here
+        # when the system asks for it.
+        flow = flow.replace("Never take an order, an address or a payment on the call,",
+                            "Never take a payment on the call; an order and an address only as BOOKING says;")
+        extra = [TAKING_AN_ADDRESS, f"""BOOKING (the customer chose cash on delivery; the system books the order)
+When the system says it needs the delivery address: TAKING AN ADDRESS. After their yes to the read-back, say exactly "{keypad_booked(contact)}" then mark_outcome "wants_to_order" with notes "COD order booked, address taken on the call", end_call. Never say it is booked before that yes."""]
+    else:
+        extra = []
 
     return compose(contact=contact, voice=voice, intro=intro, details=details, details_title="CART DETAILS",
                    details_noun="cart details", replies_first=replies_first, replies_last=replies_last, flow=flow,
-                   sections=[ordering, price], rules=rules,
+                   sections=[ordering, price, *extra], rules=rules,
                    not_mine='not the person named, or "maine kuch cart mein nahi dala"', topic="aapke order")
 
 
@@ -1027,9 +1294,7 @@ def _cart_greeting(contact: dict, voice: str) -> str:
     named in the first turn). Without a product on record it names none."""
     # "Rajeshsah ." as the list had it: no stray dot or comma before "जी" (owner, 24 Oct 2026).
     name = re.sub(r"[\s.,;:_\-]+$", "", str(contact.get("customer_name") or "")).strip()
-    product = spoken_product(str(contact.get("product") or ""))
-    for word, said in PRONUNCIATION.items():   # "Rudraksha" -> "रुद्राक्ष", as the agent's and the store's names
-        product = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", said, product, flags=re.IGNORECASE)
+    product = _product_said(contact)
     what = f"आपने {product} देखा था, order complete नहीं हुआ था।" if product else "आपका order complete नहीं हुआ था।"
     # "जी।", not "जी,": the name is a sentence of its own, so the rest of the greeting is the same on every call and is
     # replayed from a saved clip instead of paid for again (owner, 24 Oct 2026: the greeting was 69% of the voice cost).
@@ -1076,6 +1341,8 @@ ABANDONED_CART = CallType(
         # Owner, 22 Oct 2026: the coupon as for order confirmations, set on the campaign; it goes in the WhatsApp message.
         Fact("offers", "Offers (optional)", long=True, hint='[{"title": "Free delivery on prepaid", "details": "..."}]'),
         Fact("whatsapp_coupon", "Share a coupon on WhatsApp (optional)", hint="The code of one of the offers above"),
+        # Owner, 2 Nov 2026: "on" = the call opens with press 1 / 2 / 3 / 0 (keypad_greeting); empty = off.
+        Fact(KEYPAD_KEY, "Keypad options 1/2/0/3 (optional)", hint="on"),
     ),
 )
 

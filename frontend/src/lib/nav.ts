@@ -1,4 +1,4 @@
-import { CalendarClock, History, LayoutGrid, Megaphone, ShoppingBag, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarClock, ClipboardCheck, History, LayoutGrid, Megaphone, ShoppingBag, Wallet, type LucideIcon } from "lucide-react";
 
 export type NavItem = {
   label: string;
@@ -29,6 +29,7 @@ export const NAV: NavGroup[] = [
       { label: "Campaigns", href: "/campaigns/", icon: Megaphone, keywords: "contacts upload excel new campaign" },
       { label: "Calls summary", href: "/calls/", icon: History, keywords: "calls history transcripts recordings" },
       { label: "Call back", href: "/callback/", icon: CalendarClock, keywords: "retry later no answer busy" },
+      { label: "Draft orders", href: "/drafts/", icon: ClipboardCheck, keywords: "cod booked cart orders to create address" },
     ],
   },
   {

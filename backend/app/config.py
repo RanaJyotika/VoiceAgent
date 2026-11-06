@@ -399,6 +399,7 @@ def gemini_voice(voice: str) -> str:
 
 # 0.5 to 2.0. At 1.0 Priya and Varun sounded slow, as if reading a script (owner, 13 Oct 2026, Bulbul v3); on v4 the
 # 1.15 that fixed it sounded rushed, as if pushing the customer to buy (owner, 26 Oct 2026), so back to Bulbul's own speed.
+# Owner, 3 Nov 2026 (keypad test calls): 1.1 (set in .env) was "too fast, not looking real", 0.9 "too slow": 1.0.
 SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 # Rupees, pay-as-you-go, from sarvam.ai/api-pricing (21 Oct 2026): Sarvam 105B per million tokens, Saaras
 # Rs 29.40 an hour of audio, Bulbul v4 Flash Rs 20 per 10,000 characters (v3, still used for Malayalam and

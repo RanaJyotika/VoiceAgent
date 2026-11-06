@@ -61,11 +61,12 @@ PRODUCT_INFO = types.FunctionDeclaration(
 )
 
 
-def tools_for(call_type: CallType) -> list[types.Tool]:
-    """The tools the agent has on a call of this type. record_address only where addresses are taken;
-    product_info only when the product catalogue is set up (MONGODB_URI)."""
+def tools_for(call_type: CallType, addresses: bool = False) -> list[types.Tool]:
+    """The tools the agent has on a call of this type. record_address only where addresses are taken (addresses: this
+    call takes one too, a keypad cart call booking a COD order); product_info only when the product catalogue is set
+    up (MONGODB_URI)."""
     declarations = [mark_outcome_for(call_type)]
-    if call_type.takes_address:
+    if call_type.takes_address or addresses:
         declarations.append(RECORD_ADDRESS)
     if catalog.enabled():
         declarations.append(PRODUCT_INFO)

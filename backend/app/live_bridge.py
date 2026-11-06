@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from . import catalog, db, messaging, openai_bridge, sarvam_bridge, shopify
+from . import catalog, db, draft_orders, messaging, openai_bridge, sarvam_bridge, shopify
 from .db import IST
 from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, GEMINI_LIVE_MODEL, GEMINI_PRICE_PER_M, GEMINI_THINKING_BUDGET,
                      GEMINI_VERTEX, GEMINI_VOICE, GOOGLE_API_KEY, OUTPUT_SAMPLE_RATE, RING_SECONDS,
@@ -27,7 +27,13 @@ from .config import (AFFECTIVE_DIALOG, AGENT_LABELS, BUSINESS_NAME, STORE_NAME, 
                      OPENAI_REALTIME_MODEL, PROVIDER_COOLDOWN_SECONDS, REPLY_WATCHDOG_SECONDS, SARVAM_PRICE_PER_M,
                      TRANSCRIPT_LANGUAGES, gemini_voice)
 from .call_types import (CART_LATER_QUESTION, CART_NOT_NOW, CART_WANT_QUESTION, DEFAULT as DEFAULT_CALL_TYPE,
-                         ORDER_CONFIRMED_CLOSE, CallType, call_coupon, call_type_for, campaign_message, cart_cod_close, cart_coupon_close,
+                         KEYPAD_CANCEL_ASK, KEYPAD_CANCEL_CLOSE, KEYPAD_CART_NO, KEYPAD_CART_QUESTION, KEYPAD_MAIN_MENU,
+                         keypad_follow_up, keypad_invite_yes,
+                         KEYPAD_GIVE_UP, KEYPAD_HEARD, KEYPAD_ORDER_CONFIRMED, KEYPAD_ORDER_QUESTION, KEYPAD_PAYMENT_KEYS,
+                         KEYPAD_VOICE_ASK, KEYPAD_WRONG_KEY, KEYPAD_ADDRESS_ASK, KEYPAD_NEW_ADDRESS_ASK,
+                         keypad_address_check, keypad_body, keypad_booked, keypad_cart_close, keypad_greeting,
+                         keypad_payment_ask, keypad_repeat, keypad_short, spoken_product,
+                         ORDER_CONFIRMED_CLOSE, CallType, keypad_on, call_coupon, call_type_for, campaign_message, cart_cod_close, cart_coupon_close,
                          cart_link_close, cart_price_close, cart_sent, PREPAID_NO_LINE,
                          message_offer, prepaid_coupon_for, prepaid_offer_line, prepaid_yes_line)
 from .prompts import COMPLAINT_CLOSE, REFUND_CLOSE, forms
@@ -617,10 +623,27 @@ _ORDER_CONFIRMED_END = re.compile(r"(confirm|कंफर्म|कन्फर�
                                   re.IGNORECASE)
 
 
+# Owner, 3 Nov 2026 (call 38825): "koi baat nahi, dhanyavaad ji." was said, but the agent wrote its tool steps as words,
+# so no result was recorded, the call stayed open and the silence check asked "hello ji, meri awaaz aa rahi hai?". These
+# closes (no, the link on WhatsApp, a cancellation) end the call with or without a result.
+_CLOSING_LINE = re.compile(r"(koi baat nahi|कोई बात नहीं|whats\s*app\s*(par|पर)\s*(bhej|send|भेज)|cancellation request|"
+                           r"समय देने के लिए|बुक हो गया|book ho gaya).{0,120}(" + _THANKS_ANY + r")\s*(ji|जी)?[\s.!।]*$",
+                           re.IGNORECASE)
+
+
+def is_keypad_close(text: str, state: "CallState") -> bool:
+    """This turn is the keypad's closing line (state.keypad_close), not a line said before it that finished later (a
+    repeat still playing when they answered): only the close itself hangs up."""
+    def tail(s: str) -> str:
+        return re.sub(r"\W+", "", s)[-12:]
+    return bool(state.keypad_close) and bool(text) and tail(state.keypad_close) in re.sub(r"\W+", "", text)
+
+
 def turn_ends_call(text: str, state: "CallState") -> bool:
-    """The agent's turn ended in its goodbye: "shubh ho", the confirmed order's close, or "dhanyavaad ji" with the
-    result already recorded."""
+    """The agent's turn ended in its goodbye: "shubh ho", the confirmed order's close, one of the closes above, or
+    "dhanyavaad ji" with the result already recorded."""
     return (_FINAL_GOODBYE.search(text) is not None or _ORDER_CONFIRMED_END.search(text) is not None
+            or _CLOSING_LINE.search(text) is not None
             or (bool(state.outcome) and _FINAL_THANKS.search(text) is not None))
 # Call 135: the agent said the closing line but never called end_call; 3 s later the silence check had it ask
 # "hello ji, meri awaaz aa rahi hai?" and say the goodbye again. Owner: after the closing line, hang up.
@@ -654,10 +677,12 @@ def never_got_through(transcript: list[dict[str, str]]) -> bool:
     return all(_ONLY_HELLO.match(t["text"]) for t in transcript if t["role"] == "customer")
 
 
-# The call results after which the cart or campaign WhatsApp message goes (owner, 28 Oct 2026): a yes, or a call that
-# went on without a no (call back later, needs help, unclear). Not interested, already ordered or booked: no message.
-# Owner, 28 Oct 2026 (later): a customer who picked up and hung up without answering ("dropped") gets it too.
-MESSAGE_RESULTS = ("wants_to_order", "wants_coupon", "interested", "needs_help", "call_later", "unclear", "dropped")
+# The call results after which the cart or campaign WhatsApp message goes. Owner, 3 Nov 2026: ONLY when the customer
+# agreed on the call: wants to order (a yes, and COD or prepaid chosen, or a yes to "link bhej doon?"), asked for the
+# coupon or offer, or is interested in the campaign. Never after a call they hung up in between ("dropped", "unclear"),
+# a no, a call back later, or a call not picked up. (28 Oct 2026 it also went after needs_help, call_later, unclear and
+# dropped.)
+MESSAGE_RESULTS = ("wants_to_order", "wants_coupon", "interested")
 
 
 def invite_link_close(voice: str) -> str:
@@ -687,6 +712,8 @@ def closing_line(state: "CallState", outcome: str | None) -> str:
         if state.language == "en-IN" and outcome == "wants_coupon":
             return "Okay, I will send you the coupon code and the product details by message. Thank you, have a nice day."
         return LANGUAGES[state.language][2]
+    if state.call_type.key == "abandoned_cart" and outcome == "wants_to_order" and state.keypad_booking:
+        return keypad_booked((ACTIVE.get(state.call_id) or {}).get("contact") or {})   # a COD order booked on the call
     if state.call_type.key == "abandoned_cart" and outcome in ("wants_to_order", "wants_coupon"):
         # Owner, 22 Oct 2026: the link (and any offer) goes on WhatsApp; these lines end the call. 23 Oct: the close
         # follows what they chose: the coupon, cash on delivery, or just the link.
@@ -815,6 +842,77 @@ GOODBYE_NOTE = Nudge("[Note from the system: you have said goodbye and the custo
                      "Call mark_outcome with the result of this call now, then end_call.]")
 
 
+class Keypress(str):
+    """A key the customer pressed on the phone ("1"), from the phone line (plivo_bridge.key_pressed)."""
+
+
+# Keypad options (owner, 2 Nov 2026): how long after the options finish playing a key press is waited for, with the
+# phone line's silence checks held off. The first wait ends in the options once more, the second in a voice question.
+# Owner: "after repeated failures, end politely": the third miss (0, a wrong key, or a wait with no key) ends the call.
+KEYPAD_WAIT_SECONDS = 6.0
+KEYPAD_MAX_MISSES = 3
+# Owner, 3 Nov 2026 (call 38836): pressing 0 made a short sound the line took for speech, the transcriber wrote it as
+# "जी जी जी", and that was taken as a yes: the order was confirmed. Plivo's own message of the key came 0.45 s after
+# (the tone itself is mostly stripped from the audio, so dtmf.py could not catch it). A spoken choice waits this long
+# for a key first; a key, or more words, in that time decide instead.
+SPOKEN_KEY_GRACE_SECONDS = 1.2
+_PREPAID = re.compile(r"pre\s*paid|प्री\s*पेड|online|ऑनलाइन|upi|यूपीआई", re.IGNORECASE)
+# Words that make an answer a question for the agent ("haan, kitne ka hai?"), not a choice.
+_ASKING = re.compile(r"\?|kitn|kya|kaise|kab|kaun|kyun|kyon|price|कितन|क्या|कैसे|कब|कौन|क्यों|दाम|प्राइस", re.IGNORECASE)
+# Owner, 3 Nov 2026 (call 38828): the agent copied the keypad's lines ("एक दबाइए, नहीं चाहिए तो दो दबाइए") into its own
+# replies, again and again. Its sentences about keys are not said (sarvam_bridge.skip_sentence); after a key-3 question
+# neither is its own "order karna chahenge?" ("interested hain?" on an invite), which the code asks next
+# (call_types.keypad_follow_up).
+_KEY_TALK = re.compile(r"दबा(इए|इये|एँ|एं|ये|ओ|ना|एगा)|\bdab(a|aa)(iye|ye|en|o|na)\b|\bpress\b|बटन|\bbutton\b", re.IGNORECASE)
+_ITS_QUESTION = re.compile(r"((ऑर्डर|order)\s*(करना|karna)\s*(चाहेंगे|chahenge)|prepaid|प्रीपेड|interested|इंटरेस्टेड|"
+                           r"(कन्फर्म|confirm)\s*(कर|kar|है|hai)).*\?", re.IGNORECASE)
+# While the address of a COD order booked on the call is being taken (call_types BOOKING), each reply is told so.
+ADDRESS_BOOKING_NOTE = ("\n\nNOTE FROM THE CODE: the customer chose cash on delivery and is giving the delivery address for "
+                        "the order (BOOKING). Take it as TAKING AN ADDRESS says: record_address with what they said, then "
+                        "read it back once. After their yes, say exactly the BOOKING line, mark_outcome 'wants_to_order', "
+                        "end_call. Never mention phone keys.")
+# The address on record is wrong, in their words ("nahi, badalna hai", "galat hai").
+_CHANGE_ADDRESS = re.compile(r"badal|change|galat|naya|nayi|dusr|doosr|बदल|गलत|नया|नई|दूसर|चेंज", re.IGNORECASE)
+# The reply to their key-3 question (call 38828: "student ke baare mein..." was the transcriber's version of a question
+# about the product, and the agent called it off topic).
+KEYPAD_QUESTION_NOTE = ("\n\nNOTE FROM THE CODE: the customer pressed 3 to ask a question about {product}. The transcript of "
+                        "it may be garbled: take it as a question about this product, never as off topic. Answer it in one "
+                        "or two short sentences from PRODUCT INFO or product_info (what it is, what it is for, the price, "
+                        "delivery). Then stop: ask nothing and never mention phone keys; the system asks the next question.")
+
+
+def keypad_choice(menu: str, words: str) -> str:
+    """The key a spoken answer stands for in this keypad menu (owner, 3 Nov 2026: "haan" is 1, "nahi" is 2), or "" when
+    it is not a clear choice: a question, a reason, anything else goes to the agent."""
+    t = (words or "").strip()
+    if not t or heard_nothing(t) or _ASKING.search(t):
+        return ""
+    short = len(t.split()) <= 5
+    if menu == "payment":   # 1 prepaid, 2 cash on delivery (owner, 3 Nov 2026)
+        return "2" if _CHOSE_COD.search(t) else "1" if _PREPAID.search(t) and not _NO.search(t) else ""
+    if menu in ("cart", "invite"):
+        if _WANTS_ORDER.search(t) and not _NOT_BUYING.search(t) or short and said_yes(t):
+            return "1"
+        return "2" if _NOT_BUYING.search(t) or _CANCEL.search(t) or bare_no(t) else ""
+    if menu == "order":
+        if short and said_yes(t):
+            return "1"
+        return "2" if _CANCEL.search(t) and not _YES.search(t) else ""   # a bare "nahi" is asked about by the agent
+    if menu == "cancel":
+        if _CANCEL.search(t) or short and said_yes(t):
+            return "1"
+        return "2" if bare_no(t) or _KEEPS.search(t) else ""
+    if menu == "address":
+        if _CHANGE_ADDRESS.search(t) or bare_no(t):
+            return "2"
+        return "1" if short and said_yes(t) else ""
+    return ""
+KEYPAD_NO_KEY_NOTE = ("[Note from the system: the customer has pressed no key and said nothing since the keypad "
+                      "options. Ask once, briefly, by voice: 'ji, {ask}']")
+ADDRESS_AFTER_KEY_NOTE = ("[Note from the system: the customer pressed 1 on the keypad, a clear yes to the order. The "
+                          "delivery address is MISSING: ask for it now (TAKING AN ADDRESS), then close as the prompt says.]")
+
+
 def is_billing_error(exc: BaseException) -> bool:
     """Out of credits, billing off, quota gone: retrying cannot help, so fail fast and say why."""
     text = str(exc).lower()
@@ -924,6 +1022,22 @@ class CallState:
     coupon_yes_refusals: int = 0        # "wants_coupon" sent back: no clear yes to the offer
     offer_wait_refused: bool = False    # a result sent back once: it came in the same breath as the coupon offer
     later_cancel_refused: bool = False  # "confirmed" sent back once: asked to cancel, then "baad mein" to keeping it
+    keypad: bool = False                # this call opens with the keypad options (call_types.keypad_greeting)
+    keypad_offered: bool = False        # ...and has said them: keys count from now on
+    keypad_menu: str = ""               # the options keys stand for now: order, cart, cancel or payment (KEYPAD_HEARD)
+    keypad_menu_said: bool = False      # the options are being said; their wait starts when the turn is complete
+    keypad_close: str = ""              # a closing line of the keys' being said; the call ends when it has played
+    keypad_misses: int = 0              # 0, wrong keys and waits with no key (KEYPAD_MAX_MISSES)
+    keypad_code_turn: bool = False      # the turn being said is the code's own line, not the agent's
+    keypad_asked: bool = False          # the last thing said was a keypad question: a spoken answer may be its key
+    keypad_yes: bool = False            # they said yes to the cart (1 or "haan"): a yes on record for mark_outcome
+    keypad_resays: int = 0              # keypad questions said again after a few words that were not a choice
+    keypad_booking: bool = False        # a cart customer chose cash on delivery: the order is booked on the call
+    keypad_taking_address: bool = False # ...and the agent is taking the delivery address (none on record, or wrong)
+    keypad_address_ok: bool = False     # ...or they confirmed the address on record
+    keypad_follow_up: bool = False      # 3 was pressed: once the agent has answered, the code asks the question again
+    keypad_mark: int = 0                # moves on at every key, customer turn and new wait: a pending wait is then void
+    keypad_waits: int = 0               # waits that ended with no key
     hold_since: float | None = None     # the network's "your call is on hold" message is playing (machine_message)
     language: str = "hi-IN"             # the language the customer asked to be spoken to in (LANGUAGES)
     reconnects: int = 0                 # reconnects to the current provider (reset when the call changes provider)
@@ -1075,6 +1189,9 @@ async def run_call(
         state.cart_sent = cart_sent(contact)  # the message they have already, as the prompt was built with it
     if contact and state.call_type.key == "order_confirmation":
         state.prepaid_offer = prepaid_coupon_for(contact)   # the prompt's WHATSAPP COUPON, if it has one
+    # Order and cart calls (call_types.KEYPAD_TYPES). Phone calls on Sarvam only: its session says the code's own lines
+    # (sarvam_bridge.say).
+    state.keypad = channel == "plivo" and sarvam_bridge.is_sarvam_model(model) and keypad_on(contact)
     if openai_bridge.is_openai_model(model):
         state.provider, state.prices = "openai", OPENAI_PRICE_PER_M
     elif sarvam_bridge.is_sarvam_model(model):
@@ -1209,8 +1326,10 @@ async def run_call(
                 # Sarvam's three services wearing the same session interface (app/sarvam_bridge.py).
                 session = await stack.enter_async_context(sarvam_bridge.connect(
                     prompt=prompt, voice=voice, label=f"call {call_id}", manual_vad=manual_vad,
-                    tools=tools_for(state.call_type),
-                    greeting=state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else "",
+                    # A keypad cart call may book a COD order and take its address (call_types BOOKING).
+                    tools=tools_for(state.call_type, addresses=state.keypad and state.call_type.key == "abandoned_cart"),
+                    greeting=(keypad_greeting(contact or {}, voice) if state.keypad else
+                              state.call_type.greeting(contact or {}, voice) if state.call_type.greeting else ""),
                     gate=start_gate))
                 attempts = []
             for n, (fast, hints) in enumerate(attempts):
@@ -1254,6 +1373,240 @@ async def run_call(
                     await session.send_realtime_input(activity_end=types.ActivityEnd())
             log.info("call %s: opening sent, voice=%s model=%s", call_id, voice, model)
 
+            # ---- keypad options (owner, 2 Nov 2026; call_types.keypad_greeting) ----
+            cart = state.call_type.key == "abandoned_cart"
+            main_menu = KEYPAD_MAIN_MENU.get(state.call_type.key, "order")   # order, cart or invite
+            if state.keypad and first:
+                # The opening said the options (the main menu): keys count from now on, and the wait for one starts
+                # once it has played.
+                state.keypad_offered, state.keypad_menu = True, main_menu
+                state.keypad_menu_said = state.keypad_asked = state.keypad_code_turn = True
+
+            def menu_text(menu: str) -> str:
+                """A menu's question and keys alone, said again (owner, 3 Nov 2026: nothing else repeated)."""
+                return (f"जी, {KEYPAD_CANCEL_ASK}" if menu == "cancel" else KEYPAD_PAYMENT_KEYS if menu == "payment" else
+                        keypad_address_check(contact or {}) if menu == "address" else
+                        keypad_short(contact or {}, state.call_type.key))
+
+            def has_address() -> bool:
+                return bool(str((contact or {}).get("address") or "").strip())
+
+            async def spoken_choice(words: str) -> bool:
+                """They answered one of the keypad's own questions in words: a clear choice ("haan", "nahi", "COD") is
+                taken as its key, with the same line and result. Anything else goes to the agent (False)."""
+                if state.ended or state.outcome or state.goodbye_at is not None or state.language != "hi-IN":
+                    return False
+                if state.keypad_taking_address:
+                    # The delivery address for the COD order being booked: the agent takes it (call_types BOOKING).
+                    session.next_hint = (getattr(session, "next_hint", "") or "") + ADDRESS_BOOKING_NOTE
+                    return False
+                if state.keypad_follow_up:
+                    # Their question after pressing 3: the agent answers it, told what it is about.
+                    if main_menu == "invite":   # the campaign's title
+                        cid = (contact or {}).get("campaign_id")
+                        product = str((((db.get_campaign(cid) if cid else None) or {}).get("facts") or {}).get("title") or "")
+                    else:
+                        product = spoken_product(str((contact or {}).get("product") or ""))
+                    product = product or "the product or campaign in this call"
+                    session.next_hint = (getattr(session, "next_hint", "") or "") + KEYPAD_QUESTION_NOTE.format(product=product)
+                    return False
+                if not state.keypad_asked:
+                    return False
+                menu = state.keypad_menu
+                digit = keypad_choice(menu, words)
+                if menu == "address" and not digit and len(words.split()) > 3:
+                    # They said an address instead of "haan" or "badalna hai": the agent takes it as the new one.
+                    state.keypad_taking_address, state.keypad_asked = True, False
+                    session.next_hint = (getattr(session, "next_hint", "") or "") + ADDRESS_BOOKING_NOTE
+                    return False
+                if (not digit and len(words.split()) <= 3 and not _ASKING.search(words) and not _NO.search(words)
+                        and not _LATER.search(words) and state.keypad_resays < 2):
+                    # Owner, 3 Nov 2026 (call 38828): "Salam Alaikum", "hello", "Madam" over the question cut it off and
+                    # went to the agent, which made up its own lines. A few words that are no choice: the question again.
+                    state.keypad_resays += 1
+                    log.info("call %s: spoken %r is no choice in the %s menu; asking again", call_id, words[:60], menu)
+                    await keypad_say(menu_text(menu), words, menu=True, spoken=True)
+                    return True
+                if menu == "order" and digit == "1" and not has_address():
+                    # A yes with no address on record: the agent's reply takes it, as after pressing 1.
+                    session.next_hint = (getattr(session, "next_hint", "") or "") + "\n\n" + ADDRESS_AFTER_KEY_NOTE.replace(
+                        "pressed 1 on the keypad", "said yes")
+                    return False
+                if not digit:
+                    return False
+                mark = state.keypad_mark
+                await asyncio.sleep(SPOKEN_KEY_GRACE_SECONDS)   # a key's own sound may have been these "words"
+                if state.keypad_mark != mark or state.outcome or state.ended or state.goodbye_at is not None:
+                    log.info("call %s: a key or more words came within %.1fs of %r; those decide, not the words",
+                             call_id, SPOKEN_KEY_GRACE_SECONDS, words[:60])
+                    return True
+                log.info("call %s: spoken %r taken as key %s (%s menu)", call_id, words[:80], digit, menu)
+                await on_key(digit, spoken=words)
+                return True
+
+            def keypad_skip(sentence: str) -> bool:
+                """A sentence of the agent's that the code says itself: keys, or the question after a key-3 answer."""
+                return bool(_KEY_TALK.search(sentence)) or (state.keypad_follow_up and bool(_ITS_QUESTION.search(sentence)))
+
+            if state.keypad and hasattr(session, "code_reply"):
+                session.code_reply = spoken_choice   # their words, before any chat call (sarvam_bridge)
+                session.skip_sentence = keypad_skip
+
+            async def keypad_cut(heard: str) -> None:
+                """A key was pressed: stop whatever the phone is still playing, and write the key down."""
+                if state.speaking or time.monotonic() < state.speech_until:
+                    await send_event({"type": "interrupted"})
+                state.flush_turn()
+                state.speaking, state.speech_until = False, 0.0
+                state.held, state.answering = None, "note"
+                state.transcript.append({"role": "customer", "text": heard})
+
+            async def keypad_say(line: str, heard: str = "", menu: bool = False, close: bool = False,
+                                 spoken: bool = False) -> None:
+                """A line of the code's own, word for word (saved clips make the fixed ones free after two calls).
+                menu: it gives keys, so a wait for one follows; close: the call ends once it has played. spoken: heard
+                is the customer's words, already in the transcript (the phone line wrote them), not a key."""
+                if heard and not spoken:
+                    await keypad_cut(heard)
+                state.held, state.answering = None, "note"
+                state.keypad_menu_said, state.keypad_close, state.keypad_code_turn = menu, line if close else "", True
+                state.keypad_asked = menu
+                await session.say(line, heard)
+
+            async def keypad_end(outcome: str, details: dict, line: str, heard: str = "", spoken: bool = False) -> None:
+                """A result from the keys, and its closing line; the call hangs up after it."""
+                state.outcome, state.outcome_details = outcome, {"outcome": outcome, **details}
+                if state.language != "hi-IN":
+                    line = closing_line(state, outcome)   # they asked for another language: the goodbye in it
+                await keypad_say(line, heard, close=True, spoken=spoken)
+
+            async def keypad_miss(heard: str = "") -> bool:
+                """A 0, a wrong key or a wait with no key. The third ends the call politely; True when it did."""
+                state.keypad_misses += 1
+                if state.keypad_misses < KEYPAD_MAX_MISSES:
+                    return False
+                log.info("call %s: %s keypad misses; ending the call", call_id, state.keypad_misses)
+                await keypad_end("unclear", {"notes": f"no choice made on the phone keypad after {state.keypad_misses} "
+                                                      "tries"}, KEYPAD_GIVE_UP, heard)
+                return True
+
+            def keypad_wait_starts() -> None:
+                """The options have played: hold the line's silence checks off while they find the key, then follow up."""
+                state.keypad_mark += 1
+                until = max(state.speech_until, time.monotonic()) + KEYPAD_WAIT_SECONDS
+                if meta is not None:
+                    meta["keypad_until"] = until
+                asyncio.create_task(keypad_no_key(state.keypad_mark, until))
+
+            async def keypad_no_key(mark: int, until: float) -> None:
+                await asyncio.sleep(max(0.0, until - time.monotonic()))
+                if state.keypad_mark != mark or state.ended or state.outcome or state.goodbye_at is not None:
+                    return   # a key, or the customer talking, came first
+                state.keypad_waits += 1
+                try:
+                    if await keypad_miss():
+                        return
+                    if state.keypad_waits == 1:
+                        log.info("call %s: no key %.0fs after the keypad options; saying them once more", call_id,
+                                 KEYPAD_WAIT_SECONDS)
+                        await keypad_say(menu_text(state.keypad_menu), menu=True)
+                    else:
+                        log.info("call %s: still no key after the options twice; the agent asks by voice", call_id)
+                        if meta is not None:
+                            meta["keypad_until"] = 0.0
+                        incoming_audio.put_nowait(Nudge(KEYPAD_NO_KEY_NOTE.format(ask=KEYPAD_VOICE_ASK[state.keypad_menu])))
+                except Exception:  # noqa: BLE001
+                    log.exception("call %s: the keypad follow-up failed", call_id)   # e.g. the session reconnected meanwhile
+
+            async def take_address(ask: str, heard: str, spoken: bool = False) -> None:
+                """The code asks for the delivery address; the agent takes their answer (call_types BOOKING) and books."""
+                state.keypad_taking_address, state.keypad_menu = True, "address"
+                log.info("call %s: COD order to book; taking the delivery address on the call", call_id)
+                await keypad_say(ask, heard, spoken=spoken)
+
+            async def on_key(digit: str, spoken: str = "") -> None:
+                """A key, or their words taken as one (spoken_choice: the same line and result)."""
+                if (not state.keypad_offered or state.ended or state.outcome or state.goodbye_at is not None
+                        or state.keypad_taking_address):
+                    log.info("call %s: key %s ignored (%s)", call_id, digit,
+                             "the keypad options were not said yet" if not state.keypad_offered else
+                             "the address is being taken" if state.keypad_taking_address else "the call is closing")
+                    return
+                state.keypad_mark += 1   # any wait for a key is over
+                if meta is not None:
+                    meta["keypad_until"] = 0.0
+                menu = state.keypad_menu
+                heard = spoken or KEYPAD_HEARD[menu].get(digit, f"[keypad {digit}]")
+                how = f"said {spoken[:80]!r}" if spoken else f"pressed {digit} on the phone keypad"
+                if not spoken:
+                    log.info("call %s: keypad %s (%s menu)", call_id, heard, menu)
+                s = {"spoken": bool(spoken)}
+                if digit not in KEYPAD_HEARD[menu] or digit == "0":
+                    if await keypad_miss(heard):
+                        return
+                    if digit == "0":
+                        # Owner's order script repeats the order; everything else repeats only the question.
+                        line = (f"{keypad_repeat(state.call_type.key, voice)} {keypad_body(contact or {}, state.call_type.key)}"
+                                if menu == "order" else menu_text(menu))
+                        await keypad_say(line, heard, menu=True)
+                    else:
+                        await keypad_say(f"{KEYPAD_WRONG_KEY} {menu_text(menu)}", heard, menu=True)
+                elif digit == "3":
+                    # The agent answers what they ask next, then the code asks the question again (KEYPAD_FOLLOW_UP).
+                    state.keypad_menu, state.keypad_follow_up = main_menu, True
+                    await keypad_say(KEYPAD_ORDER_QUESTION if main_menu == "order" else KEYPAD_CART_QUESTION, heard, **s)
+                elif menu == "invite" and digit == "1":
+                    # Interested: the campaign's WhatsApp message goes after the call (MESSAGE_RESULTS) when it has one.
+                    await keypad_end("interested", {"notes": f"interested ({how})"},
+                                     keypad_invite_yes(contact or {}, voice), heard, **s)
+                elif menu == "invite":   # 2
+                    await keypad_end("not_interested", {"not_interested_reason": f"{how} (no reason asked)"},
+                                     KEYPAD_CART_NO, heard, **s)
+                elif menu == "cart" and digit == "1":
+                    state.keypad_menu, state.keypad_yes = "payment", True   # owner: interest is not an order; how they pay next
+                    await keypad_say(keypad_payment_ask(state.coupon), heard, menu=True, **s)
+                elif menu == "cart":   # 2
+                    await keypad_end("not_interested", {"not_interested_reason": f"{how} (no reason asked)"},
+                                     KEYPAD_CART_NO, heard, **s)
+                elif menu == "payment" and digit == "2":
+                    # Owner, 3 Nov 2026: cash on delivery (2; prepaid is 1) is booked on the call (draft_orders), not sent
+                    # as a link: the address on record is checked, or taken now when there is none.
+                    state.keypad_booking = True
+                    if has_address():
+                        state.keypad_menu = "address"
+                        await keypad_say(keypad_address_check(contact or {}), heard, menu=True, **s)
+                    else:
+                        await take_address(KEYPAD_ADDRESS_ASK, heard, **s)
+                elif menu == "payment":
+                    # Prepaid: the cart's link and the campaign's coupon go on WhatsApp after the call (MESSAGE_RESULTS).
+                    coupon = bool(state.coupon or (state.cart_sent or {}).get("code"))
+                    await keypad_end("wants_to_order", {"notes": f"chose prepaid ({how})"},
+                                     keypad_cart_close(voice, False, coupon), heard, **s)
+                elif menu == "address" and digit == "1":
+                    state.keypad_address_ok = True
+                    await keypad_end("wants_to_order", {"notes": f"COD order booked; address on record confirmed ({how})",
+                                                        "payment_preference": "COD"},
+                                     keypad_booked(contact or {}), heard, **s)
+                elif menu == "address":   # 2: a new address
+                    await take_address(KEYPAD_NEW_ADDRESS_ASK, heard, **s)
+                elif menu == "order" and digit == "1" and not has_address():
+                    # A yes, but there is no address to deliver to: the agent takes it, then closes as usual.
+                    await keypad_cut(heard)
+                    await session.send_realtime_input(activity_start=types.ActivityStart())
+                    await session.send_realtime_input(text=ADDRESS_AFTER_KEY_NOTE)
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                elif menu == "order" and digit == "1":
+                    await keypad_end("confirmed", {"notes": f"confirmed: {how}"}, KEYPAD_ORDER_CONFIRMED, heard, **s)
+                elif menu == "order":   # 2: never cancelled on the first key; asked once more
+                    state.keypad_menu = "cancel"
+                    await keypad_say(f"जी, {KEYPAD_CANCEL_ASK}", heard, menu=True, **s)
+                elif digit == "1":   # cancel menu
+                    await keypad_end("cancelled", {"cancel_reason": f"cancel confirmed: {how} (no reason asked)"},
+                                     KEYPAD_CANCEL_CLOSE, heard, **s)
+                else:   # cancel menu, 2: back to the order
+                    state.keypad_menu = "order"
+                    await keypad_say(menu_text("order"), heard, menu=True, **s)
+
             async def pump_in() -> None:
                 in_activity = False   # manual_vad: between ACTIVITY_START and ACTIVITY_END
                 while True:
@@ -1276,6 +1629,12 @@ async def run_call(
                         in_activity = True
                         state.answering, state.noise_told, state.not_caller = "speech", False, False
                         state.ask_bye_at = None   # they are answering the question asked with the goodbye
+                        if state.keypad_offered:
+                            # They answer by voice: no wait for a key now (keys still count), no wait after cut-off options.
+                            state.keypad_mark += 1
+                            state.keypad_menu_said = False
+                            if meta is not None:
+                                meta["keypad_until"] = 0.0
                         log.info("call %s: customer started talking at %.1fs", call_id, time.monotonic() - state.started)
                         await session.send_realtime_input(activity_start=types.ActivityStart())
                         if state.unheard:
@@ -1292,6 +1651,12 @@ async def run_call(
                         continue
                     if chunk is NOT_CALLER:
                         state.not_caller = True
+                        continue
+                    if isinstance(chunk, Keypress):   # before the str checks below: a Keypress is a str
+                        if state.keypad and hasattr(session, "say"):
+                            await on_key(str(chunk))
+                        else:
+                            log.info("call %s: key %s pressed; this call has no keypad options", call_id, chunk)
                         continue
                     if chunk is ACTIVITY_END:
                         if in_activity:   # a marker left over from before a reconnect has no start
@@ -1465,7 +1830,8 @@ async def run_call(
                                     elif (not state.ended
                                           # A sent-back result: let it fix that, until the customer has answered since.
                                           and (not state.record_pending or pending_answered(state))
-                                          and turn_ends_call(clean_agent_text(state._out_buf), state)
+                                          and (is_keypad_close(clean_agent_text(state._out_buf), state)
+                                               or turn_ends_call(clean_agent_text(state._out_buf), state))
                                           # Call 176: "koi dikkat aayi? ... dhanyavaad ji, aapka din shubh ho" in one turn;
                                           # the customer's answer to that question must still be heard.
                                           and "?" not in clean_agent_text(state._out_buf)):
@@ -1486,8 +1852,21 @@ async def run_call(
                                 # The pause that closes the customer's next turn follows the last question
                                 # they actually heard (a held-back reply leaves nothing of its own).
                                 long_answer = expects_long_answer(state._out_buf or last_question(state.transcript))
+                                said = clean_agent_text(state._out_buf)
                                 state.flush_turn()
                                 await send_event({"type": "turn_complete", "long_answer": long_answer})
+                                code_turn, state.keypad_code_turn = state.keypad_code_turn, False
+                                if state.keypad_offered and not code_turn and said:
+                                    state.keypad_asked = False   # the agent spoke last: their answer is the agent's
+                                if state.keypad_menu_said:
+                                    state.keypad_menu_said = False
+                                    keypad_wait_starts()
+                                elif (state.keypad_follow_up and not code_turn and said and not said.rstrip().endswith("?")
+                                      and not state.ended and not state.outcome and state.goodbye_at is None
+                                      and state.ask_bye_at is None and state.language == "hi-IN"):
+                                    # The agent has answered their key-3 question: the code asks the call's question again.
+                                    state.keypad_follow_up = False
+                                    await keypad_say(keypad_follow_up(contact or {}, state.call_type.key), menu=True)
                         if msg.tool_call is not None:
                             reply_begins()
                             state.last_tool_at = time.monotonic()
@@ -1628,6 +2007,16 @@ async def run_call(
                 result = f"not called: {state.error}"     # our failure; the customer was never rung
             else:
                 state.outcome, result = classify_unanswered(cause)
+        elif not state.outcome and state.keypad_menu in ("payment", "address"):
+            # They said yes to the cart (1 or "haan"), then the line went before they chose cash on delivery or prepaid,
+            # or before the COD order's address was confirmed. Owner, 3 Nov 2026: a call hung up in between gets no
+            # WhatsApp message and no draft order, so this is not a wants_to_order.
+            where = "the address was confirmed" if state.keypad_menu == "address" else "they chose COD or prepaid"
+            state.outcome = "unclear"
+            state.outcome_details = {**(state.outcome_details or {}), "outcome": "unclear",
+                                     "notes": f"said yes to the cart, then the call ended before {where}; no order booked, "
+                                              "no WhatsApp message sent"}
+            log.info("call %s: yes to the cart, then the call ended before %s; saved as unclear", call_id, where)
         elif not state.outcome and (yes := yes_to_main_question(state.transcript, state.call_type.main_question)
                                     or _yes_before_coupon(state)):
             # The customer said yes to the call's main question and the call ended before the result was
@@ -1729,10 +2118,27 @@ async def run_call(
                     log.info("call %s: prepaid coupon offered, not sent (%s)", call_id, "no clear yes" if offer else "no offer to send")
             except Exception:  # noqa: BLE001
                 log.exception("call %s: could not queue the prepaid coupon message", call_id)
-        # Owner, 28 Oct 2026 (5,723 cart messages in a day, 90% to people the agent never spoke to): a WhatsApp message
-        # only after a call the customer picked up and did not turn down: no no-answer or busy call, no "not interested",
-        # "already ordered" or "already booked". A call that failed on our side (state.error) never.
+        # Owner, 28 Oct 2026 (5,723 cart messages in a day, 90% to people the agent never spoke to), and 3 Nov 2026: a
+        # WhatsApp message only after a call the customer picked up and agreed on (MESSAGE_RESULTS). A call that failed
+        # on our side (state.error) never.
         wants_message = picked_up and not state.error and state.outcome in MESSAGE_RESULTS
+        if picked_up and not wants_message and state.call_type.key == "abandoned_cart":
+            log.info("call %s: no WhatsApp message: the customer did not agree on the call (%s)", call_id, state.outcome)
+        if (state.call_type.key == "abandoned_cart" and contact and state.keypad_booking
+                and state.outcome == "wants_to_order" and not state.error):
+            # Owner, 3 Nov 2026: cash on delivery is booked on the call as a draft order for the team (Draft orders page),
+            # with the address they confirmed or gave; no WhatsApp link is sent for it.
+            address = (address_text(state.address) if state.address else
+                       str(contact.get("address") or "").strip() if state.keypad_address_ok else "")
+            source = "taken_on_call" if state.address else "on_record" if address else "missing"
+            draft_id = draft_orders.create(contact=contact, call_id=call_id, address=address, address_source=source,
+                                           notes=str((state.outcome_details or {}).get("notes") or ""))
+            if draft_id:
+                state.outcome_details = {**(state.outcome_details or {}), "draft_order_id": draft_id,
+                                         "payment_preference": "COD", **({"new_address": address} if state.address else {})}
+                wants_message = False
+                log.info("call %s: COD order booked as draft order %s (address %s); no WhatsApp link", call_id, draft_id,
+                         source)
         # Never a WhatsApp message to a do-not-call, a wrong number, a complaint or abuse (blocks and reports would put the
         # WhatsApp number at risk).
         skip = ("customer asked not to be called" if state.outcome == "do_not_call" else
@@ -1740,11 +2146,9 @@ async def run_call(
                 "a complaint" if state.outcome == "complaint" else
                 "abusive language" if was_abusive(state.transcript) else "")
         if state.call_type.key == "abandoned_cart" and contact and wants_message:
-            # Owner, 26 Oct 2026: every customer called gets the cart message (the cart's link, with the WhatsApp coupon
-            # when there is one) after their call, picked up or not: a no-answer or a busy too, never a number that does
-            # not exist or a call that failed on our side. Owner, 27 Oct 2026: after every call, not only the first; a
-            # later call still reminds them of the one they have (call_types.cart_sent_close), with its coupon.
-            # Never stops the call being saved. (24 Oct 2026: every customer who picked up.)
+            # The cart message (the cart's link, with the WhatsApp coupon when there is one), after a call they agreed on
+            # (owner, 3 Nov 2026; MESSAGE_RESULTS). A later call reminds them of a message they already have
+            # (call_types.cart_sent_close), with its coupon. Never stops the call being saved.
             try:
                 offer = state.coupon
                 if (state.cart_sent or {}).get("code"):   # the coupon the call reminded them of, as the prompt has it
@@ -1960,7 +2364,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             # The address the checks accepted, not the model's own wording of it: on call 88 the free text
             # carried a town and a sector the customer never said.
             args["new_address"] = address_text(state.address)
-        elif state.call_type.takes_address and str(args.get("new_address") or "").strip():
+        elif (state.call_type.takes_address or state.keypad_booking) and str(args.get("new_address") or "").strip():
             # Call 88 skipped record_address and put an invented address straight in here, where the
             # spoken-digit check never ran.
             state.loose_address_refusals += 1
@@ -1986,7 +2390,7 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
                                                        and not _CANCEL.search(t))
                               for t in state.recent_customer_turns(2)))
         if (outcome in state.call_type.positive and not any(said_yes(t) for t in state.recent_customer_turns(2))
-                and not cod_chosen
+                and not cod_chosen and not state.keypad_yes   # a yes to the keypad's question (call 38828)
                 and not yes_to_main_question(state.transcript, state.call_type.main_question) and not _yes_before_coupon(state)):
             # No clear yes on record: the model is confirming on silence or noise (call 53 did exactly this).
             state.confirm_refusals += 1
@@ -2198,7 +2602,8 @@ async def handle_tool(name: str, args: dict[str, Any], state: CallState, send_ev
             return {"status": "not recorded", "reason": f"The customer said they want to order ('{wish[:80]}'). A 'nahi' "
                     "before it only said they were not just looking; it is not a no. Do not end the call and do not say "
                     "goodbye: go on with ORDERING, as the prompt says, then call mark_outcome."}
-        if (outcome in state.call_type.probe_first and not state.probe_refused and not said_ordered
+        # The keypad opening asks "क्या आप इसे ऑर्डर करना चाहेंगे?" itself (call_types.keypad_greeting): a "nahi" to it is a no.
+        if (outcome in state.call_type.probe_first and not state.probe_refused and not said_ordered and not state.keypad
                 and not (outcome == "not_interested" and (real_no or len(heard) != 1))):
             # Calls 133 and 134 (abandoned cart): "Vedic Vaibhav se order kiya tha" and "kisi aur site se kiya tha"
             # were closed on the spot. Owner: handle the customer until a clear yes or no.

@@ -458,6 +458,23 @@ def _tag(status: str) -> str:
     return "voice-" + status.replace("_", "-")
 
 
+# Owner, 2 Nov 2026: tags of the call's result besides voice-<status>. A product the customer asked for instead is only
+# tagged (and named in the note): nothing in the order is changed. A changed order never gets ai-confirmed, so nothing
+# keyed on it ships the old product.
+AI_TAGS = {"confirmed": "ai-confirmed", "not_interested": "ai-not-interested"}
+PRODUCT_CHANGE_TAG = "ai-product-change"
+
+
+def _ai_tags(contact_id: int, status: str) -> list[str]:
+    tags = [AI_TAGS[status]] if status in AI_TAGS else []
+    if status == "changed":
+        call = db.latest_call_for_contact(contact_id) or {}
+        details = call.get("outcome_details") if isinstance(call.get("outcome_details"), dict) else {}
+        if str(details.get("new_product") or "").strip():
+            tags.append(PRODUCT_CHANGE_TAG)
+    return tags
+
+
 def _result_line(contact_id: int, status: str, last_result: str) -> str:
     call = db.latest_call_for_contact(contact_id) or {}
     details = call.get("outcome_details") if isinstance(call.get("outcome_details"), dict) else {}
@@ -470,9 +487,12 @@ def _result_line(contact_id: int, status: str, last_result: str) -> str:
 
 
 async def _push_result(gid: str, contact_id: int, status: str, previous: str | None, last_result: str) -> None:
-    _user_errors(await graphql(TAGS_ADD, {"id": gid, "tags": ["voice-call", _tag(status)]}), "tagsAdd")
+    tags = ["voice-call", _tag(status), *_ai_tags(contact_id, status)]
+    _user_errors(await graphql(TAGS_ADD, {"id": gid, "tags": tags}), "tagsAdd")
     if previous and previous != status:
-        _user_errors(await graphql(TAGS_REMOVE, {"id": gid, "tags": [_tag(previous)]}), "tagsRemove")
+        old = [t for t in (_tag(previous), AI_TAGS.get(previous), PRODUCT_CHANGE_TAG if previous == "changed" else None)
+               if t and t not in tags]
+        _user_errors(await graphql(TAGS_REMOVE, {"id": gid, "tags": old}), "tagsRemove")
     note = ((await graphql(ORDER_NOTE, {"id": gid})).get("order") or {}).get("note") or ""
     line = _result_line(contact_id, status, last_result)
     _user_errors(await graphql(ORDER_UPDATE, {"input": {"id": gid, "note": f"{note}\n{line}".strip()}}), "orderUpdate")

@@ -21,7 +21,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
-from . import catalog, coupons, db, fillers, line_audio, vad, voiceprint
+from . import catalog, coupons, db, dtmf, fillers, line_audio, vad, voiceprint
 from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, FILLER_DELAY_MS, FILLER_LATE_MS,
                      FILLER_MAX_PER_CALL, FILLER_MIN_VOICE_MS, FILLER_SLOW_MS, NOISE_SUPPRESSION, VOICEPRINT,
                      VOICEPRINT_CALLER, VOICEPRINT_OTHER, GEMINI_LIVE_MODEL, GEMINI_VOICE, NOISE_GATE, MAX_CALL_SECONDS,
@@ -31,7 +31,7 @@ from .config import (AUDIO_CLEANUP, DIAL_ONLY_MY_NUMBER, ECHO_CANCEL, FILLERS, F
                      PHONE_SHORT_END_MS, PHONE_SHORT_TURN_MS, PHONE_VAD, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_FROM_NUMBER,
                      public_base_url, RECORDINGS_DIR, RING_SECONDS, VOICES, gemini_voice, plivo_missing)
 from .contacts import is_valid_phone, normalise_phone
-from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, SILENT_HANGUP, Nudge, run_call
+from .live_bridge import ACTIVE, ACTIVITY_END, ACTIVITY_START, NOT_CALLER, SILENT_HANGUP, Keypress, Nudge, run_call
 from .openai_bridge import is_openai_model, voice_for
 from .sarvam_bridge import is_sarvam_model
 from .call_types import get_prompt, with_reason
@@ -209,6 +209,8 @@ class PendingCall:
         self.filler_skip = False              # the last reply had a filler: the next one goes without
         self.fillers_played = 0
         self.reply_delays: list[float] = []   # seconds from the end of each customer turn to the agent's first audio
+        self.keys = dtmf.KeyListener()        # phone key tones in the customer's audio
+        self.last_key = ("", 0.0, "")         # the last key press passed on: digit, when, from where (key_pressed)
         self.incoming: asyncio.Queue = asyncio.Queue()
         self.answered = asyncio.Event()
         self.ws: WebSocket | None = None
@@ -409,11 +411,27 @@ class PendingCall:
         # After a stuck line (the caller may have moved away or gone on speakerphone) nothing is dropped outright.
         return "mid" if ratio >= CALLER_GATE_LOW or self.lenient else "background"
 
+    def key_pressed(self, digit: str, source: str) -> list:
+        """A phone key, from Plivo's "dtmf" message or read from its tone in the audio. One press can come both ways:
+        it is passed on once, whichever comes first."""
+        now = time.monotonic()
+        last, at, came = self.last_key
+        if digit == last and source != came and now - at < 1.5:
+            return []
+        self.last_key = (digit, now, source)
+        log.info("customer pressed %s on the keypad (%s)", digit, "Plivo's message" if source == "plivo" else "heard in the audio")
+        return [Keypress(digit)]
+
     def waiting_check(self, now: float) -> list:
         """While the agent waits for an answer: is the line stuck (loud but nothing recognised)
         or dead quiet? Either way the agent hears nothing and would wait forever, so tell it."""
         if self.agent_talking(now) or self.reply_pending:
             self.wait_since, self.unclear = 0.0, False
+            return []
+        if now < self.meta.get("keypad_until", 0.0):
+            # The keypad options were just said (live_bridge): no "hello ji?" while they find the key. live_bridge
+            # repeats the options, then asks by voice; the silence checks count from when this wait ends.
+            self.wait_since = 0.0
             return []
         if not self.wait_since:
             self.wait_since, self.loud_wait, self.nudged, self.noise_wait = now, 0, False, 0
@@ -545,6 +563,10 @@ class PendingCall:
             return [self.clean(heard)]
         now = time.monotonic()
         voiced = self.is_speech(raw, pcm)
+        if self.keys.is_tone:
+            # A key tone (the reader fed it to self.keys) is not the customer talking: it must not cut the agent off,
+            # start a turn, or reach speech-to-text as a beep.
+            voiced, heard = False, b"\x00" * len(heard)
         if not self.greeted:
             # People say "hello" as they pick up. Passing that on cut the greeting off before it
             # began, and the agent then hung up thinking nobody was there. So the customer is only
@@ -1109,10 +1131,24 @@ async def plivo_stream(ws: WebSocket, token: str) -> None:
                     pcm = to_gemini_pcm(base64.b64decode(media.get("payload", "")), media, pc.fmt)
                     if pcm:
                         pc.record(pcm)
+                        key = pc.keys.feed(pcm)   # before listen(), which keeps a key tone out of the speech checks
                         for item in pc.listen(pcm):
                             await pc.incoming.put(item)
+                        for item in pc.key_pressed(key, "tone") if key else []:
+                            await pc.incoming.put(item)
+                elif event == "dtmf":
+                    # A phone key (owner, 2 Nov 2026: keypad options). Plivo sends {"dtmf": {"digit": "1", ...}}.
+                    digit = str((msg.get("dtmf") or {}).get("digit") or msg.get("digit") or "").strip()
+                    for item in pc.key_pressed(digit, "plivo") if digit else []:
+                        await pc.incoming.put(item)
                 elif event == "stop":
                     break
+                elif event not in ("playedStream", "clearedAudio"):
+                    # Logged once per kind, so the first keypad test shows what Plivo really sends.
+                    seen = pc.fmt.setdefault("other_events", set())
+                    if event not in seen:
+                        seen.add(event)
+                        log.info("plivo sent an event this code does not use: %s", json.dumps(msg)[:300])
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:

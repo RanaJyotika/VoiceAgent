@@ -10,7 +10,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import catalog, coupons, db, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, sales, shopify, store_orders
+from . import (catalog, coupons, db, draft_orders, drive_sync, messaging, mongo_sync, orders_view, readable, recordings, sales,
+               shopify, store_orders)
 from .autodial import resume_after_restart, router as autodial_router
 from .campaign import clean_settings, is_running, running_ids, router as campaign_router, schedule_worker as campaign_schedules
 from .config import (AGENT_LABELS, DATA_DIR, GEMINI_LIVE_MODEL, GEMINI_VOICE, MAX_CONCURRENT_CALLS, OFFERED_MODELS, PAGE_BUILD, RECORDINGS_DIR,
@@ -77,6 +78,7 @@ app.include_router(orders_view.router)
 app.include_router(overview_router)
 app.include_router(store_import_router)
 app.include_router(usage_router)
+app.include_router(draft_orders.router)   # COD orders booked on keypad cart calls (owner, 3 Nov 2026)
 
 
 async def stall_monitor() -> None:

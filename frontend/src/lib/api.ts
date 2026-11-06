@@ -518,3 +518,30 @@ export type BatchReport = {
   batches: OrderBatch[];
   current: { id: number | null; started_at: string; picked: number; limit: number; room: number | null };
 };
+
+// ---------------- Draft orders (backend: draft_orders.py) ----------------
+
+/** A cash-on-delivery order booked on a keypad cart call (owner, 3 Nov 2026); the team creates it in the store. */
+export type DraftOrder = {
+  id: number;
+  contact_id: number | null;
+  call_id: number | null;
+  campaign_id: number | null;
+  campaign_name: string | null;
+  customer_name: string;
+  phone: string;
+  product: string;
+  product_ids: string;
+  quantity: string;
+  amount: string;
+  payment: string;
+  address: string;
+  address_source: "on_record" | "taken_on_call" | "missing" | string;
+  cart_url: string;
+  notes: string;
+  created_at: string;
+  order_created: number; // 1 once the team has made the order in the store
+  order_ref: string | null;
+  order_created_at: string | null;
+};
+export type DraftOrders = { rows: DraftOrder[]; total: number; pending: number };

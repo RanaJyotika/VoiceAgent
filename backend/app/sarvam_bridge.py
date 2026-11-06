@@ -46,6 +46,7 @@ TTS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 MAX_TOKENS = 300            # a reply is one or two sentences; this only stops a runaway
 STT_FINAL_WAIT = 4.0        # seconds to wait for the customer's words after speech_end
 TTS_QUIET_SECONDS = 3.0     # no sound and no "final" for this long after the last text: the reply is taken as spoken
+FIXED_LINE_PAUSE_SECONDS = 0.25   # between the sentences of the code's own lines (the keypad options, the greeting)
 KEEPALIVE_SECONDS = 20      # both sockets close after about a minute with nothing on them
 # Sarvam's plan caps speech-to-text streams at once and chat calls a minute, and may refuse a quick burst of new streams
 # below the cap. A refusal is tried again after these waits (seconds) before the call gives up on it.
@@ -215,6 +216,12 @@ class SarvamSession:
         self.tools = tools
         self.greeting = greeting
         self.next_hint = ""             # extra instructions for the reply to the next customer turn only (live_bridge)
+        # live_bridge's answer to the customer's words before any chat call (the keypad's spoken "haan" / "nahi"): an
+        # async function of the words, True when it has said its own line (say), so no reply is written.
+        self.code_reply = None
+        # live_bridge's test for a written sentence that is not to be said (the keypad's own lines, copied by the model):
+        # a function of the sentence, True to leave it out.
+        self.skip_sentence = None
         self.language = SARVAM_LANGUAGE   # what Saaras listens for and Bulbul speaks; the customer may ask for another
         self.tts_model, self.speaker = tts_voice(voice, self.language)
         self._stt_switch: asyncio.Task | None = None
@@ -491,6 +498,17 @@ class SarvamSession:
             return
         self._start_reply()
 
+    async def say(self, text: str, heard: str = "") -> None:
+        """A line the code says word for word (the keypad options and their closes), cutting short any reply being made.
+        heard: what the customer did, for the agent's history ("[keypad 3: question]")."""
+        if self._ending is not None and not self._ending.done():
+            self._ending.cancel()   # a key pressed as their words came back: the key answers; the words join the next turn
+        if self._responding:
+            await self._interrupt()
+        if heard:
+            self._user(heard)
+        self._start_reply(fixed=text)
+
     # ---- the customer's turn ----
 
     def _user(self, content: str) -> None:
@@ -536,6 +554,9 @@ class SarvamSession:
         elif not notes:
             return   # a start/end pair with nothing in it
         log.info("%s: customer's words back %.0f ms after they stopped", self.label, heard_ms)
+        if words and self.code_reply is not None and await self.code_reply(words):
+            self.next_hint = ""   # it was for a written reply; the code answered instead
+            return
         self._user("\n".join(notes + ([words] if words else [])))
         hint, self.next_hint = self.next_hint, ""
         if (about := about_hint(words)):
@@ -591,7 +612,11 @@ class SarvamSession:
                 # (_Clips). Owner, 24 Oct 2026: the cart greeting said whole was 69% of the voice cost; its name is the
                 # only part that changes on every call.
                 # "." too: the code's own lines are in English letters ("...confirm ho gaya hai. dhanyavaad ji, ...").
-                for sentence in re.split(r"(?<=[।?!.])\s+", fixed.strip()):
+                # Owner, 3 Nov 2026: said back to back the options sounded rushed and machine-made; a short breath
+                # between sentences, as a person reading them out would take.
+                for n, sentence in enumerate(re.split(r"(?<=[।?!.])\s+", fixed.strip())):
+                    if n and sentence.strip():
+                        await self._pause(FIXED_LINE_PAUSE_SECONDS)
                     await self._speak(sentence)
             else:
                 for attempt in range(2):
@@ -652,6 +677,9 @@ class SarvamSession:
                 muted = True
                 log.warning("%s: the reply wrote its tool steps as words; not said from: %s", self.label, piece[m.start():][:200])
                 piece = piece[:m.start()]
+            if piece.strip() and self.skip_sentence is not None and self.skip_sentence(piece):
+                log.info("%s: not said (the code says these lines itself): %s", self.label, piece.strip()[:150])
+                return
             if piece.strip():
                 await self._speak(piece)
 
@@ -749,6 +777,13 @@ class SarvamSession:
         self._said += text
         self._last_tts = time.monotonic()
         self._add("tts_chars", len(voice_text))
+
+    async def _pause(self, seconds: float) -> None:
+        """Silence in the reply's sound, after what is said so far."""
+        await self._spoken()
+        silence = b"\0\0" * int(OUTPUT_SAMPLE_RATE * seconds)   # 16-bit samples
+        await self._q.put(_Message(server_content=_ServerContent(model_turn=_ModelTurn(parts=[_Part(inline_data=_Blob(
+            data=silence))]))))
 
     async def _spoken(self) -> None:
         """Wait until Bulbul has sent all of this reply's sound."""

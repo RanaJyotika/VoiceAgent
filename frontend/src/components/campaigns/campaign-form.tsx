@@ -21,6 +21,7 @@ import { formFrom, type Form } from "./calling-card";
 import { ContactsCard } from "./contacts-card";
 import { OffersEditor, offersJson, parseOffers } from "./offers-editor";
 import { WhatsappCoupon } from "./whatsapp-coupon";
+import { KeypadOptions } from "./keypad-options";
 import { CampaignMessage, parseMessage } from "./campaign-message";
 import { FINAL, campaignHref, plural } from "./shared";
 import { StoreFetch } from "./store-fetch";
@@ -586,6 +587,14 @@ export function CampaignForm() {
                               onChange={(json) => setFacts({ ...facts, whatsapp_message: json })}
                             />
                           </div>
+                        ) : f.key === "keypad" ? (
+                          <div key={f.key} className="sm:col-span-2">
+                            <KeypadOptions
+                              value={facts.keypad}
+                              onChange={(v) => setFacts({ ...facts, keypad: v })}
+                              callType={type}
+                            />
+                          </div>
                         ) : f.key === "whatsapp_coupon" ? (
                           <div key={f.key} className="sm:col-span-2">
                             <WhatsappCoupon
@@ -772,13 +781,16 @@ export function CampaignForm() {
                             ? "None needed"
                             : [
                                 ...t.facts
-                                  .filter((f) => f.key !== "offers" && f.key !== "whatsapp_coupon" && f.key !== "whatsapp_message")
+                                  .filter((f) => !["offers", "whatsapp_coupon", "whatsapp_message", "keypad"].includes(f.key))
                                   .map((f) => `${f.label.replace(" (optional)", "")}: ${(facts[f.key] ?? "").trim() ? "written" : "none"}`),
                                 ...(t.facts.some((f) => f.key === "offers")
                                   ? [plural(parseOffers(facts.offers).filter((o) => o.title.trim() || o.details.trim()).length, "offer")]
                                   : []),
                                 ...(t.facts.some((f) => f.key === "whatsapp_coupon")
                                   ? [(facts.whatsapp_coupon ?? "").trim() ? `WhatsApp coupon ${facts.whatsapp_coupon}` : "WhatsApp coupon off"]
+                                  : []),
+                                ...(t.facts.some((f) => f.key === "keypad")
+                                  ? [(facts.keypad ?? "").trim().toLowerCase() === "on" ? "Keypad options on" : "Keypad options off"]
                                   : []),
                                 ...(t.facts.some((f) => f.key === "whatsapp_message")
                                   ? [parseMessage(facts.whatsapp_message).on ? "WhatsApp message on" : "WhatsApp message off"]
